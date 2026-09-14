@@ -12,6 +12,7 @@ README 의 "검증됨" 표가 이 스크립트의 결과다. 알고리즘을 고
 
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -212,11 +213,48 @@ def test_lap():
           f'평균 {ts.mean():.1f}ms, p95 {np.percentile(ts,95):.1f}ms')
 
 
+def test_packaging():
+    """ROS 패키지 구성 — 빌드는 되는데 런치가 실패하는 경우를 잡는다.
+
+    ★ setup.cfg 가 없으면 colcon build 는 성공하는데 실행파일이
+      lib/ 가 아니라 bin/ 에 깔려서, ros2 launch 가 이렇게 죽는다:
+          package 'mlcs_mpc' found at '...', but libexec directory
+          '.../install/mlcs_mpc/lib/mlcs_mpc' does not exist
+      빌드 로그에는 아무 경고도 안 나오므로 젯슨에서야 발견된다.
+      (2026-09-14 실제로 겪음)
+    """
+    print('\n■ 패키지 구성')
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', 'src', 'mlcs_mpc')
+
+    cfg = os.path.join(root, 'setup.cfg')
+    ok = os.path.isfile(cfg)
+    detail = ''
+    if ok:
+        txt = open(cfg).read()
+        ok = 'lib/mlcs_mpc' in txt and 'install_scripts' in txt
+        detail = 'install_scripts=$base/lib/mlcs_mpc'
+    check('setup.cfg (실행파일이 lib/ 로 가게 한다)', ok, detail)
+
+    # resource 마커 — 없으면 ros2 가 패키지를 아예 못 찾는다
+    check('resource/mlcs_mpc 마커',
+          os.path.isfile(os.path.join(root, 'resource', 'mlcs_mpc')))
+
+    # setup.py 의 entry_points 와 실제 모듈이 일치하는가
+    setup_txt = open(os.path.join(root, 'setup.py')).read()
+    eps = re.findall(r"(\w+)\s*=\s*mlcs_mpc\.(\w+):main", setup_txt)
+    missing = [m for _, m in eps
+               if not os.path.isfile(os.path.join(root, 'mlcs_mpc', m + '.py'))]
+    check(f'entry_points {len(eps)}개 ↔ 실제 모듈', not missing,
+          f'없는 모듈: {missing}' if missing else f'{len(eps)}개 전부 존재')
+
+
 def main():
     print('=' * 60)
     print('  mlcs_mpc 알고리즘 검증')
     print('=' * 60)
 
+    test_packaging()
     test_jacobian()
     test_angle()
     test_straight()
