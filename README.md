@@ -82,9 +82,33 @@ ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool "{data: false}"  # 정지
 
 로지텍 F710 — 뒷면 **Mode 버튼 OFF**, 앞면 스위치 **X**.
 
+`drive.sh` 가 브링업까지 한 번에 띄웁니다:
+
 ```bash
-# bringup 을 이미 띄웠다면 joy:=false (joy_node 중복 방지)
-ros2 launch mlcs_mpc joystick.launch.py joy:=false
+./drive.sh joy                 # 조이스틱 수동 조종
+./drive.sh bench               # 거치대 위 (속도 0 고정) — 첫 확인용
+MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
+```
+
+| 명령 | 하는 일 |
+|---|---|
+| `./drive.sh joy` | 브링업 + 조이스틱 수동 조종 |
+| `./drive.sh bench` | 거치대 모드 — 속도 0 고정, 조향만 |
+| `./drive.sh mpc <csv>` | MPC 자율주행 + 조이스틱 (LB 로 전환) |
+| `./drive.sh record <이름>` | 조이스틱으로 몰면서 웨이포인트 기록 |
+| `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
+| `./drive.sh topics` | 토픽 상태 점검 |
+| `./drive.sh stop` | 비상 정지 + 전부 종료 |
+
+> `drive.sh` 가 **bringup 의 `joy_teleop` 을 죽입니다.** f1tenth_stack 의
+> bringup 은 자기 `joy_teleop` 을 같이 띄우는데, 그게 **LB(버튼4)를 데드맨으로
+> 쓰고 scale 5.0** 이라 우리 모드 토글과 정면충돌합니다. 직접 launch 를 쓸
+> 때는 이 처리가 없으니 주의하세요.
+
+런치를 직접 쓰려면:
+
+```bash
+ros2 launch mlcs_mpc joystick.launch.py joy:=false   # joy_node 중복 방지
 ```
 
 | 조작 | 동작 |
