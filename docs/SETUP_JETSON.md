@@ -14,12 +14,16 @@
 
 Ubuntu 22.04 (Jammy) 의 ROS 2 기본 배포판은 **Humble** 이다.
 받아 둔 `f1tenth_system-foxy-devel` 은 **Foxy(20.04)용** 이라 그대로 쓰면 안 된다.
-아래 3단계에서 humble 브랜치를 새로 받는다.
+아래 3단계에서 `humble-devel` 브랜치를 새로 받는다.
 
 | | 이 저장소 | 받아둔 참고본 |
 |---|---|---|
-| f1tenth_system | `humble` 브랜치를 새로 clone | `foxy-devel` (20.04용, 참고만) |
+| f1tenth_system | `humble-devel` 브랜치를 새로 clone | `foxy-devel` (20.04용, 참고만) |
 | f1tenth_gym_ros | `main` 그대로 사용 가능 | 받아둔 것 사용 |
+
+> ⚠ 브랜치 이름은 **`humble-devel`** 이다. `humble` 이라는 브랜치는 **없다**
+> (2026-09 확인). 실제 브랜치 목록: `foxy-devel`, `humble-devel`,
+> `jazzy-devel`, `melodic`, `braking`.
 
 ---
 
@@ -86,20 +90,43 @@ sudo apt install -y \
 
 ---
 
-## 3. 워크스페이스 + f1tenth_system (humble)
+## 3. 워크스페이스 + f1tenth_system (humble-devel)
 
 ```bash
 mkdir -p ~/f1tenth_ws/src && cd ~/f1tenth_ws/src
 
-# ★ humble 브랜치 + 서브모듈(vesc, ackermann_mux, teleop_tools)까지
-git clone -b humble --recurse-submodules \
-    https://github.com/f1tenth/f1tenth_system.git
+git clone -b humble-devel https://github.com/f1tenth/f1tenth_system.git
+cd f1tenth_system
+
+# ★ --remote 가 중요하다 (아래 설명)
+git submodule update --init --recursive --remote
 ```
 
 > 받아 둔 `f1tenth_system-foxy-devel` 의 서브모듈 폴더(`vesc/`,
 > `ackermann_mux/`, `teleop_tools/`)는 **비어 있다.** zip 다운로드는
-> 서브모듈을 포함하지 않기 때문이다. 그래서 반드시 `--recurse-submodules`
-> 로 새로 clone 해야 한다.
+> 서브모듈을 포함하지 않기 때문이다. 그래서 반드시 서브모듈을 따로 받아야 한다.
+
+**왜 `--remote` 인가** — `humble-devel` 의 `.gitmodules` 는 서브모듈마다
+가리키는 브랜치가 다르다:
+
+| 서브모듈 | 브랜치 |
+|---|---|
+| `vesc` | `ros2` |
+| `teleop_tools` | `humble-devel` |
+| `ackermann_mux` | **지정 없음** → 기본 브랜치 `foxy-devel` |
+
+`--remote` 없이 받으면 상위 저장소에 고정(pin)된 커밋을 쓰는데, 공식 README 가
+`--remote` 를 안내하므로 그쪽을 따른다.
+
+> `ackermann_mux` 에 humble 브랜치가 없는 것은 **정상이다.** 단순한 메시지
+> mux 라 distro 간 차이가 없어 `foxy-devel` 을 그대로 쓴다. 브랜치 이름만
+> 보고 "잘못 받았나" 의심할 필요 없다.
+
+확인:
+
+```bash
+ls vesc ackermann_mux teleop_tools    # 셋 다 비어 있지 않아야 한다
+```
 
 이 저장소도 워크스페이스에 넣는다:
 
@@ -113,13 +140,56 @@ ln -sfn ~/mlcs_mpc/src/mlcs_mpc ~/f1tenth_ws/src/mlcs_mpc
 > 쪽에서 고쳐도 그게 곧 repo 라 커밋으로 보존된다. 26-jetson 저장소가
 > 쓰는 것과 같은 방식이다.
 
+### ★ 라이다가 없다 — bringup 에서 라이다를 빼야 한다
+
+`humble-devel` 의 `f1tenth_stack` 은 **라이다를 전제로** 만들어져 있다:
+
+- `package.xml` 이 `urg_node` 와 `sick_scan_xd` 를 `<depend>` 로 건다
+- `bringup_launch.py` 가 `urg_node` 를 **조건 없이** 띄운다
+
+우리 차에는 라이다가 없으므로 그대로 두면 매번 라이다 노드가 연결 실패
+에러를 뱉는다. 또 `sick_scan_xd` 는 apt 에 arm64 바이너리가 없을 수 있어
+`rosdep install` 이 거기서 멈출 수 있다.
+
+**해결 — `urg_node` 를 런치에서 뺀다:**
+
+```bash
+cd ~/f1tenth_ws/src/f1tenth_system/f1tenth_stack/launch
+cp bringup_launch.py bringup_launch.py.orig
+```
+
+`bringup_launch.py` 에서 아래 줄을 찾아 주석 처리한다:
+
+```python
+# ld.add_action(urg_node)      # ← 라이다 없음. mocap 으로 위치추정한다
+```
+
+> `urg_node = Node(...)` 정의 자체는 남겨둬도 된다 — `add_action` 만 안 하면
+> 노드가 안 뜬다. 나중에 라이다를 달면 주석만 풀면 된다.
+
+`package.xml` 의 의존성은 아래 `--skip-keys` 로 우회한다.
+
 빌드:
 
 ```bash
 cd ~/f1tenth_ws
-rosdep install --from-paths src -y --ignore-src   # 처음 한 번은 rosdep init/update 필요
+
+# ★ 없는 라이다 패키지는 건너뛴다
+rosdep install --from-paths src -y --ignore-src \
+    --skip-keys "sick_scan_xd urg_node"
+
 colcon build --symlink-install
 source install/setup.bash
+```
+
+> 처음이면 `sudo rosdep init && rosdep update` 를 먼저 한 번 실행한다.
+
+라이다를 뺐으므로 bringup 후 토픽이 이렇게 나와야 한다 (`/scan` **없음**):
+
+```bash
+ros2 topic list
+#  /ackermann_cmd  /drive  /odom  /sensors/core  /sensors/imu  /teleop ...
+#  ← /scan 이 없어야 정상이다
 ```
 
 `--symlink-install` 이면 파이썬 코드 수정은 재빌드 없이 반영된다.
