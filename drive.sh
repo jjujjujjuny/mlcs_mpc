@@ -75,8 +75,36 @@ load_ros () {
 #
 #   그래서 **실제로 떠 있는지 보고 정한다.** 추측하지 않는다.
 #   bringup 이 joy_node 를 띄우는 환경으로 바뀌어도 그대로 동작한다.
+#   ★★ 2026-09-14 추가 — `ros2 node list` 를 믿으면 안 된다.
+#
+#     ros2 CLI 는 **데몬(ros2-daemon)의 그래프 캐시**를 읽는다. 이 캐시는
+#     노드가 죽어도 곧바로 비워지지 않는다. 실측:
+#
+#       19:41  joy_node 를 kill
+#       19:42  ros2 node list  →  여전히 /joy 가 보임   ← 죽은 지 1분
+#              그래서 decide_joyarg 가 joy:=false 를 넘김
+#              → joy_node 가 아무도 안 띄움 → /joy 발행 0
+#              → 조이스틱을 아무리 움직여도 서보가 안 움직인다
+#
+#     증상이 "조이스틱이 VESC 로 안 넘어간다" 인데 로그에는 아무 에러가
+#     없다. 앞서 66번 줄의 '실측' 도 이 착시였을 가능성이 크다.
+#
+#     그래서 데몬이 아니라 **프로세스 실체**를 본다. pgrep 은 캐시가 없다.
 joy_node_running () {
-    ros2 node list 2>/dev/null | grep -qE '^/joy(_node)?$'
+    pgrep -f '/lib/joy/joy_node' >/dev/null 2>&1
+}
+
+# ── 조이스틱이 실제로 살아 있는지 확인 ───────────────────────────────────────
+#   joy_node 가 떴다고 /joy 가 나온다는 보장은 없다 (권한, 장치 분리 등).
+#   조용히 실패하면 "차가 반응을 안 하는데 에러는 없는" 상태가 된다.
+warn_if_no_joy () {
+    ( sleep 6
+      if ! timeout 4 ros2 topic echo /joy --once >/dev/null 2>&1; then
+          warn "${BLD}/joy 가 발행되지 않습니다 — 조이스틱이 먹지 않습니다.${RST}"
+          warn "  확인:  ls -l /dev/input/js0   그리고   ros2 topic hz /joy"
+      fi
+    ) &
+    PIDS="$PIDS $!"
 }
 
 # bringup 뒤에 호출 — joy_node 가 없으면 "true"(우리가 띄운다) 를 준다
@@ -117,41 +145,111 @@ kill_bringup_joy () {
 # 확인: pkill -f '[j]oy_teleop' 는 'joystick_teleop' 에 매칭되지 않는다
 #       ('joy_teleop' 이 'joystick_teleop' 의 부분문자열이 아니다).
 
+# ── ★ pkill -f 는 자기 자신의 부모 셸까지 잡는다 ────────────────────────────
+#
+#   원래 stop 모드는 `pkill -f 'mlcs_mpc'` 를 썼다. 그런데 이 스크립트의
+#   경로가 **/home/mlcs/mlcs_mpc/drive.sh** 다. 절대경로로 실행하면
+#   (`~/mlcs_mpc/drive.sh stop`) 명령줄에 'mlcs_mpc' 가 들어가므로 패턴에
+#   걸린다. pkill 은 자기 자신은 안 죽이지만 **부모 셸은 죽인다** — 그래서
+#   뒤에 남은 정리 단계가 실행되지 않은 채 끝나 버린다.
+#
+#   패턴을 실행 파일 경로로 좁히고, 자기 PID 와 부모 PID 는 건너뛴다.
+kill_matching () {
+    local pat="$1" sig="${2:--TERM}" p
+    for p in $(pgrep -f "$pat" 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        [ "$p" = "${PPID:-0}" ] && continue
+        kill "$sig" "$p" 2>/dev/null || true
+    done
+}
+
 stop_all () {
     log "정지 명령 발행 중..."
     # ★ 한 번이 아니라 반복해서 보낸다. VESC 는 마지막 명령을 유지하므로
     #   "안 보내는 것" 으로는 안 선다.
-    for _ in $(seq 1 10); do
-        ros2 topic pub --once /drive ackermann_msgs/msg/AckermannDriveStamped \
-            '{drive: {speed: 0.0, steering_angle: 0.0}}' >/dev/null 2>&1 || true
-        ros2 topic pub --once /teleop ackermann_msgs/msg/AckermannDriveStamped \
-            '{drive: {speed: 0.0, steering_angle: 0.0}}' >/dev/null 2>&1 || true
-        sleep 0.1
-    done
-    ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool '{data: false}' >/dev/null 2>&1 || true
+    # 셋을 **병렬로** 쏜다. ros2 CLI 는 기동에만 2초쯤 걸려서, 순차로 하면
+    # 종료가 10초를 넘긴다 (실측). 정지는 빠를수록 좋다.
+    pub_stop /drive  ackermann_msgs/msg/AckermannDriveStamped \
+        '{drive: {speed: 0.0, steering_angle: 0.0}}' & _s1=$!
+    pub_stop /teleop ackermann_msgs/msg/AckermannDriveStamped \
+        '{drive: {speed: 0.0, steering_angle: 0.0}}' & _s2=$!
+    pub_stop /mpc/enabled std_msgs/msg/Bool '{data: false}' & _s3=$!
+    # ★ 인자 없는 `wait` 는 브링업 launch 등 **모든** 백그라운드 잡을 기다린다
+    #   — 그러면 종료가 영영 안 끝난다. 반드시 PID 를 지정한다.
+    wait "$_s1" "$_s2" "$_s3" 2>/dev/null || true
 }
 
+# ── ★ 정지 명령은 '절대 멈추지 않는' 방식으로 보내야 한다 ────────────────────
+#
+#   2026-09-14 젯슨: Ctrl+C 로 종료가 안 되는 문제의 원인이 여기였다.
+#
+#   `ros2 topic pub --once` 는 **구독자가 나타날 때까지 무한히 기다린다.**
+#   Humble 의 기본값이 그렇다:
+#       -w, --wait-matching-subscriptions
+#           Defaults to 1 when using "-1"/"--once"/"--times"
+#
+#   그리고 Ctrl+C 는 포그라운드 **프로세스 그룹 전체**에 SIGINT 를 보내므로,
+#   cleanup 이 도는 시점에는 정지 명령을 받아줄 mux 가 이미 죽는 중이다.
+#   구독자 0 → pub 이 "Waiting for at least 1 matching subscription(s)..."
+#   에서 영영 멈춤 → cleanup 이 아래 kill 까지 **도달하지 못한다.**
+#
+#   실제로 이 좀비가 7분 넘게 남아 있는 걸 확인했다:
+#       ros2 topic pub --once /drive ...        (19:20 기동, 19:27 까지 생존)
+#       ros2 topic pub --once /mpc/enabled ...  (19:18 기동)
+#
+#   그래서 두 가지를 건다:
+#     -w 0      구독자를 기다리지 않는다 (없으면 그냥 쏘고 끝낸다)
+#     timeout   그래도 막히면 3초에 끊는다
+#   -t 20 -r 20 = 1초 동안 20번. 기존의 'seq 1 10 + sleep 0.1' 과 같은 양인데
+#   멈출 수가 없다.
+pub_stop () {
+    timeout 3 ros2 topic pub -t 20 -r 20 -w 0 "$1" "$2" "$3" >/dev/null 2>&1 || true
+}
+
+# ★ trap 이 INT 와 EXIT 양쪽에 걸려 있어 cleanup 은 두 번 불린다
+#   (INT 로 한 번, 그 뒤 스크립트가 끝나며 EXIT 로 또 한 번).
+#   정지 명령을 두 번 쏘는 건 무해하지만 종료가 그만큼 늦어진다.
+_CLEANED=0
 cleanup () {
+    [ "$_CLEANED" = "1" ] && return
+    _CLEANED=1
     echo
     log "종료 중 — 정지 명령을 보냅니다"
     stop_all
     for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
-    sleep 0.5
+    # 브링업은 별도 프로세스 그룹이라 Ctrl+C 가 닿지 않는다 — 직접 죽인다
+    [ -n "${BRINGUP_PGID:-}" ] && kill -TERM "-$BRINGUP_PGID" 2>/dev/null || true
+    sleep 1
     for p in ${PIDS:-}; do kill -9 "$p" 2>/dev/null || true; done
+    [ -n "${BRINGUP_PGID:-}" ] && kill -9 "-$BRINGUP_PGID" 2>/dev/null || true
 }
 
 PIDS=""
+BRINGUP_PGID=""
 start_bringup () {
     if [ "${MLCS_NO_BRINGUP:-0}" = "1" ]; then
         log "브링업 생략 (MLCS_NO_BRINGUP=1)"
         return
     fi
     log "차량 브링업 (VESC + mux)..."
-    ros2 launch f1tenth_stack bringup_launch.py >/tmp/mlcs_bringup.log 2>&1 &
-    PIDS="$PIDS $!"
+    # ★ setsid — 브링업을 **별도 프로세스 그룹**으로 띄운다.
+    #
+    #   Ctrl+C 는 포그라운드 프로세스 그룹 전체에 SIGINT 를 보낸다. 그냥 '&'
+    #   로 띄우면 mux/vesc_driver 가 스크립트와 **동시에** 죽기 시작한다.
+    #   그러면 cleanup 이 보내는 정지 명령을 받을 노드가 남지 않는다 —
+    #   즉 "종료할 때 차를 세운다" 는 이 스크립트의 핵심 보장이 깨진다.
+    #   VESC 는 마지막 명령을 유지하므로, 전달 경로가 죽은 채로 종료하면
+    #   차는 마지막 속도로 계속 간다.
+    #
+    #   그래서 브링업은 SIGINT 경로 밖에 두고, cleanup 이 ① 정지 명령을
+    #   먼저 보내고 ② 그 다음에 프로세스 그룹째로 죽인다.
+    setsid ros2 launch f1tenth_stack bringup_launch.py >/tmp/mlcs_bringup.log 2>&1 &
+    BRINGUP_PID=$!
+    PIDS="$PIDS $BRINGUP_PID"
     kill_bringup_joy &               # ★ launch 와 동시에 시작 (위 주석 참고)
     PIDS="$PIDS $!"
     sleep 3
+    BRINGUP_PGID="$(ps -o pgid= -p "$BRINGUP_PID" 2>/dev/null | tr -d ' ')"
 }
 
 require_ws_pkg () {
@@ -184,6 +282,7 @@ joy)
     # joy:=false — bringup 이 joy_node 를 이미 띄웠다
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
     ;;
@@ -197,6 +296,7 @@ bench)
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
     ;;
@@ -227,6 +327,7 @@ mpc)
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
     ;;
@@ -248,6 +349,7 @@ record)
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
 
@@ -343,10 +445,27 @@ stop)
     load_ros
     log "${RED}비상 정지${RST}"
     stop_all
-    pkill -f 'joystick_teleop' 2>/dev/null || true
-    pkill -f 'mlcs_mpc'        2>/dev/null || true
-    pkill -f 'bringup_launch'  2>/dev/null || true
-    pkill -9 -f '[j]oy_teleop' 2>/dev/null || true
+    # ★ 정지 명령이 실제로 전달된 뒤에 죽인다 — 순서가 중요하다.
+    #   먼저 죽이면 명령을 받아줄 노드가 없어지고, VESC 는 마지막 속도를
+    #   그대로 유지한다.
+    kill_matching 'ros2 launch mlcs_mpc'
+    kill_matching 'ros2 launch f1tenth_stack'
+    kill_matching 'bringup_launch'
+    kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/'
+    kill_matching 'joystick_teleop'
+    # ★ ros2 launch 를 죽여도 자식 노드는 고아로 남는다 (실측: launch 를
+    #   SIGTERM 하면 joy_node / vesc 노드가 그대로 살아남았다). 노드를
+    #   직접 지목해야 한다 — 특히 joy_node 는 살아 있으면 다음 기동에서
+    #   'joy_node 가 이미 떠 있다' 로 오인될 수 있다.
+    kill_matching '/lib/joy/joy_node'
+    kill_matching '/lib/vesc_driver/'
+    kill_matching '/lib/vesc_ackermann/'
+    kill_matching '/lib/ackermann_mux/'
+    kill_matching '[j]oy_teleop' -9
+    sleep 1
+    kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/' -9
+    kill_matching 'bringup_launch' -9
+    kill_matching '/lib/joy/joy_node' -9
     log "종료 완료"
     ;;
 
