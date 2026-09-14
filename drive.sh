@@ -40,12 +40,20 @@ load_ros () {
         err "  설치: docs/SETUP_JETSON.md 1절"
         exit 1
     }
+    # ★ set +u 로 감싼다 — ROS 의 setup.bash 는 미설정 변수를 참조한다
+    #   (AMENT_TRACE_SETUP_FILES, COLCON_TRACE 등). 이 스크립트는 오타로
+    #   인한 사고를 막으려고 set -u 를 켜두는데, 그 상태로 source 하면
+    #       /opt/ros/humble/setup.bash: AMENT_TRACE_SETUP_FILES: unbound variable
+    #   로 죽는다. ROS 쪽 파일이라 우리가 고칠 수 없으므로 이 구간만 끈다.
+    set +u
     # shellcheck disable=SC1091
     source /opt/ros/humble/setup.bash
     if [ -f "$WS/install/setup.bash" ]; then
         # shellcheck disable=SC1091
         source "$WS/install/setup.bash"
+        set -u
     else
+        set -u
         err "워크스페이스가 빌드되지 않았습니다: $WS/install/setup.bash"
         err "  cd $WS && colcon build --symlink-install"
         err "  (다른 위치면 MLCS_WS=... ./drive.sh ...)"

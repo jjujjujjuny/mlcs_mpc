@@ -68,6 +68,9 @@ echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 sudo apt install -y \
     ros-humble-ackermann-msgs \
     ros-humble-joy \
+    ros-humble-asio-cmake-module \
+    ros-humble-io-context \
+    ros-humble-serial-driver \
     ros-humble-teleop-twist-keyboard \
     ros-humble-tf-transformations \
     ros-humble-xacro \
@@ -183,6 +186,31 @@ source install/setup.bash
 ```
 
 > 처음이면 `sudo rosdep init && rosdep update` 를 먼저 한 번 실행한다.
+
+#### 빌드 실패 — `asio_cmake_module` 을 못 찾는 경우
+
+```
+CMake Error ... By not providing "Findasio_cmake_module.cmake" ...
+Failed   <<< vesc_driver
+Aborted  <<< vesc_ackermann  ackermann_mux
+```
+
+`vesc_driver` → `serial_driver` → `io_context` → `asio_cmake_module` 로
+이어지는 의존성인데, `--skip-keys` 를 쓰면 rosdep 이 여기까지 못 채우는
+경우가 있다. 2절에 이미 넣어 뒀지만 빠졌다면:
+
+```bash
+sudo apt install -y ros-humble-asio-cmake-module ros-humble-io-context \
+                    ros-humble-serial-driver libasio-dev
+
+# ★ 실패한 빌드 잔여물을 지워야 한다 — 안 지우면 실패 상태가 캐시된다
+cd ~/f1tenth_ws
+rm -rf build/vesc_driver build/vesc_ackermann build/ackermann_mux
+colcon build --symlink-install
+```
+
+> `vesc_driver` 가 죽으면 그 뒤 패키지가 통째로 중단되므로
+> (`2 packages not processed`), 고치고 다시 빌드하면 나머지가 따라온다.
 
 라이다를 뺐으므로 bringup 후 토픽이 이렇게 나와야 한다 (`/scan` **없음**):
 
