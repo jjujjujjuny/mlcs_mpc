@@ -43,6 +43,17 @@ ros2 launch f1tenth_stack bringup_launch.py
 ros2 topic hz /mpc/state      # 100Hz 근처
 ```
 
+> 조이스틱으로 차를 옮겨야 하면 터미널을 하나 더 띄우세요.
+> **`joy:=false` 를 꼭 붙이세요** — bringup 이 joy_node 를 이미 띄웁니다.
+>
+> ```bash
+> ros2 launch mlcs_mpc joystick.launch.py joy:=false
+> ```
+>
+> 캘리브레이션 중에는 `calibrate` 노드가 `/drive` 로 명령을 내고, 조이스틱은
+> `/teleop` 으로 냅니다. mux 우선순위상 **조이스틱이 이기므로**, RT 를 건드리면
+> 측정이 오염됩니다. 측정 중에는 조이스틱에서 손을 떼세요.
+
 > ⚠ **넓은 공간에서, 킬스위치를 손에 들고** 하세요.
 > `steer` 모드는 차가 원을 그리며 돕니다.
 

@@ -20,6 +20,8 @@ Jetson Orin Nano / Ubuntu 22.04 (Jammy) / ROS 2 Humble 대상.
 | 경로 관리 (폐곡선/곡률) | ✅ 원 궤적으로 검증 (곡률 오차 0.1%) |
 | 캘리브레이션 원 피팅 | ✅ 합성 데이터 검증 (반경 오차 0.5mm) |
 | 설정 파일 ↔ 노드 연결 | ✅ 전 키 자동 검증 |
+| 수동/자율 조정 로직 | ✅ 우선순위 검증 — safety 정지는 LB 로 안 풀린다 |
+| **조이스틱 실동작** | ❌ **미검증** — 축·버튼 번호는 F710 표준값 |
 | **젯슨 환경 구축** | ❌ **미검증** — 문서만 작성됨 |
 | **mocap 실연동** | ❌ **미검증** — 실제 NatNet 스트림으로 테스트 안 됨 |
 | **실차 주행** | ❌ **미검증** |
@@ -76,10 +78,41 @@ ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool "{data: true}"   # 출발
 ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool "{data: false}"  # 정지
 ```
 
+### 수동 주행 (조이스틱)
+
+로지텍 F710 — 뒷면 **Mode 버튼 OFF**, 앞면 스위치 **X**.
+
+```bash
+# bringup 을 이미 띄웠다면 joy:=false (joy_node 중복 방지)
+ros2 launch mlcs_mpc joystick.launch.py joy:=false
+```
+
+| 조작 | 동작 |
+|---|---|
+| **RT** 당김 | 전진 (당긴 만큼 선형, 놓으면 즉시 정지) |
+| **RB** + RT | 후진 |
+| **L스틱** 좌/우 | 조향 |
+| **LB** | 수동 ↔ 자율 토글 |
+| **START** | 비상 정지 |
+
+★ 기동 직후 0.4초간 트리거 휴지값을 자동으로 잽니다 — **RT 에서 손을 떼고**
+계세요. 이게 틀리면 RT 를 안 눌러도 차가 나갑니다.
+
+자율 주행과 같이 쓰려면 터미널 두 개로:
+
+```bash
+ros2 launch mlcs_mpc car_mpc.launch.py waypoints:=<경로.csv>   # A
+ros2 launch mlcs_mpc joystick.launch.py joy:=false             # B
+```
+
+LB 로 오갈 수 있습니다. 수동일 때는 mux 우선순위(joystick 100 > navigation 10)로
+사람 입력이 MPC 를 덮어씁니다.
+
 ### 경로 만들기
 
 ```bash
 # 차를 손/조이스틱으로 몰면서 기록 (Ctrl+C 로 저장)
+# (조이스틱으로 몰면서 — 위 joystick.launch.py 를 같이 띄워두세요)
 ros2 run mlcs_mpc waypoint_logger --ros-args -p output:=track1.csv
 
 # 다듬기 — ★ 생략하지 마세요 (곡률이 튀면 속도가 들쭉날쭉해집니다)
@@ -99,6 +132,7 @@ src/mlcs_mpc/mlcs_mpc/
   mocap_bridge.py    NatNet pose → 상태 추정 (칼만 필터)
   sim_bridge.py      시뮬 odom → 같은 인터페이스
   safety_node.py     경계 감시 / 비상 정지
+  joystick_teleop.py 로지텍 F710 수동 조종 (+ /joy 워치독)
   calibrate.py       mocap 으로 VESC 값 측정
   waypoint_logger.py 주행 경로 기록
   smooth_path.py     경로 평활화
@@ -126,6 +160,9 @@ src/mlcs_mpc/mlcs_mpc/
 3. `safety_node` 가 실험 공간 경계를 감시 — `config/safety.yaml` 의 좌표를
    **실측값으로 바꿔야 한다** (기본값은 예시)
 4. 첫 주행은 `bench:=true` 로 거치대 위에서
+5. **조이스틱이 끊기면 속도 0 을 강제 발행한다** — VESC 는 새 명령이 없으면
+   마지막 속도를 유지하므로, 발행을 멈추는 것만으로는 차가 서지 않는다
+   (26-jetson 이 이 구조로 하루에 세 번 폭주를 겪었다)
 
 ---
 

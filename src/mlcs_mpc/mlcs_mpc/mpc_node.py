@@ -148,6 +148,7 @@ class MPCNode(Node):
         self.last_state_t = None
         self.mocap_valid = False
         self.enabled = not self.require_enable
+        self.manual = False         # 사람이 조종을 가져갔는가
         self.cmd_delta = 0.0        # 마지막으로 명령한 조향각
         self.stop_reason = 'init'
 
@@ -155,6 +156,10 @@ class MPCNode(Node):
         self.create_subscription(Odometry, '/mpc/state', self._state_cb, 10)
         self.create_subscription(Bool, '/mocap/valid', self._valid_cb, 10)
         self.create_subscription(Bool, '/mpc/enabled', self._enable_cb, LATCHED)
+        # 조이스틱이 "사람이 조종 중" 을 알려주는 채널. /mpc/enabled 와
+        # 분리한 이유는 joystick_teleop.py 의 주석 참고 — 안전장치가
+        # 사람의 LB 한 번으로 풀리면 안 되기 때문이다.
+        self.create_subscription(Bool, '/mpc/manual', self._manual_cb, LATCHED)
 
         self.drive_pub = self.create_publisher(
             AckermannDriveStamped, '/drive', 10)
@@ -188,6 +193,15 @@ class MPCNode(Node):
     def _valid_cb(self, msg: Bool):
         self.mocap_valid = bool(msg.data)
 
+    def _manual_cb(self, msg: Bool):
+        was = self.manual
+        self.manual = bool(msg.data)
+        if self.manual and not was:
+            self.get_logger().warn('■ 사람이 조종을 가져갔습니다 — MPC 정지')
+        elif was and not self.manual:
+            self.get_logger().info('▶ 조종권 반환 — MPC 재개')
+            self.solver.reset()
+
     def _enable_cb(self, msg: Bool):
         was = self.enabled
         self.enabled = bool(msg.data)
@@ -211,6 +225,8 @@ class MPCNode(Node):
         age = self.get_clock().now().nanoseconds * 1e-9 - self.last_state_t
         if age > self.state_timeout:
             return f'상태 오래됨 ({age:.2f}s)'
+        if self.manual:
+            return '수동 조종 중'
         if not self.enabled:
             return '출발 대기'
         return None
