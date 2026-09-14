@@ -1,0 +1,48 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Marker Scale: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: ReferencePath
+      Enabled: true
+      Topic:
+        Value: /mpc/reference_path
+      Color: 25; 255; 25
+      Line Style: Lines
+    - Class: rviz_default_plugins/Path
+      Name: PredictedPath
+      Enabled: true
+      Topic:
+        Value: /mpc/predicted_path
+      Color: 255; 25; 25
+      Line Style: Lines
+    - Class: rviz_default_plugins/Odometry
+      Name: State
+      Enabled: true
+      Topic:
+        Value: /mpc/state
+      Keep: 1
+      Shape:
+        Shaft Length: 0.3
+        Head Length: 0.15
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Scale: 40
+      Target Frame: map

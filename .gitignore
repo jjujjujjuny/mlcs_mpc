@@ -1,0 +1,17 @@
+# ROS 2 빌드 산출물
+build/
+install/
+log/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 주행 로그 / 기록한 웨이포인트 (원본은 각자 보관)
+logs/
+*.bag
+*.db3
+
+.vscode/
+.idea/
+*.swp
