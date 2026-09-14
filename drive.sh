@@ -61,6 +61,34 @@ load_ros () {
     fi
 }
 
+# ── joy_node 를 누가 띄우는가 ────────────────────────────────────────────────
+#
+#   ★ 2026-09-14 젯슨 실측: bringup_launch.py 가 joy_node 를 **안 띄운다.**
+#     ros2 node list →  /ackermann_mux /ackermann_to_vesc_node /vesc_driver_node
+#                       /vesc_to_odom_node /static_baselink_to_laser
+#     joy_node 도 joy_teleop 도 없었고, 그래서 /joy 가 아예 발행되지 않아
+#     조이스틱을 움직여도 서보가 안 움직였다.
+#
+#     원래는 bringup 이 띄운다고 보고 joy:=false 를 넘겼는데(중복 기동 방지),
+#     그 전제가 이 환경에서는 틀렸다. humble-devel 의 구성이 다르거나,
+#     라이다를 뺄 때 함께 빠졌을 수 있다.
+#
+#   그래서 **실제로 떠 있는지 보고 정한다.** 추측하지 않는다.
+#   bringup 이 joy_node 를 띄우는 환경으로 바뀌어도 그대로 동작한다.
+joy_node_running () {
+    ros2 node list 2>/dev/null | grep -qE '^/joy(_node)?$'
+}
+
+# bringup 뒤에 호출 — joy_node 가 없으면 "true"(우리가 띄운다) 를 준다
+decide_joyarg () {
+    if [ "${MLCS_NO_BRINGUP:-0}" = "1" ]; then echo "true"; return; fi
+    if joy_node_running; then
+        echo "false"                      # bringup 이 이미 띄웠다
+    else
+        echo "true"                       # 아무도 안 띄웠다 → 우리가 띄운다
+    fi
+}
+
 # ── ★ bringup 의 joy_teleop 을 죽인다 ────────────────────────────────────────
 #
 #   f1tenth_stack 의 bringup_launch.py 는 **자기 joy_teleop 을 같이 띄운다.**
@@ -154,7 +182,8 @@ joy)
     warn "기동 직후 RT 에서 손을 떼세요 — 트리거 휴지값을 자동으로 잽니다"
     echo
     # joy:=false — bringup 이 joy_node 를 이미 띄웠다
-    JOYARG="false"; [ "${MLCS_NO_BRINGUP:-0}" = "1" ] && JOYARG="true"
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
     ;;
@@ -166,7 +195,8 @@ bench)
     log "${YLW}거치대 모드${RST} — 속도는 항상 0. 조향만 움직입니다."
     warn "바퀴가 땅에 닿지 않는지 확인하세요."
     echo
-    JOYARG="false"; [ "${MLCS_NO_BRINGUP:-0}" = "1" ] && JOYARG="true"
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
     ;;
@@ -195,7 +225,8 @@ mpc)
     echo
     log "MPC 로그: tail -f /tmp/mlcs_mpc.log"
     echo
-    JOYARG="false"; [ "${MLCS_NO_BRINGUP:-0}" = "1" ] && JOYARG="true"
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
     ;;
@@ -215,7 +246,8 @@ record)
     echo
     warn "조이스틱으로 트랙을 한 바퀴 돈 뒤 Ctrl+C 로 저장하세요."
     echo
-    JOYARG="false"; [ "${MLCS_NO_BRINGUP:-0}" = "1" ] && JOYARG="true"
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
 

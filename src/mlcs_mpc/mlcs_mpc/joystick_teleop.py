@@ -132,6 +132,7 @@ class JoystickTeleop(Node):
         self._last_joy = None
         self._wd_fired = False
         self._wd_steer = 0.0
+        self._wd_speed = 0.0     # 마지막으로 명령한 속도 (경고 수준 판단용)
 
         # 자율 전환 후 실제로 /drive 가 오는지 감시
         self._drive_seen = 0.0
@@ -340,16 +341,35 @@ class JoystickTeleop(Node):
         if self.auto_mode:
             return              # 자율 주행 중이면 /teleop 을 낼 일이 없다
 
+        # ★ 정지 상태에서는 경고하지 않는다 (2026-09-14 젯슨 실측)
+        #   joy_node 는 autorepeat_rate 가 붙기 전 기동 직후 한 박자 쉰다.
+        #   그때 워치독이 "끊겼다" 고 에러를 뱉었다가 1ms 뒤 "복구" 로 이어졌다:
+        #       /joy 가 0.33s 끊겼습니다 — ★ 속도 0 강제 발행
+        #       /joy 복구 (1ms) — 조종 재개
+        #   차는 어차피 서 있었으므로 위험한 상황이 아닌데 빨간 에러가 떠서,
+        #   진짜 폭주 위험과 구분이 안 된다. 경고가 잦으면 무시하게 되고
+        #   그게 이 워치독을 무력화한다.
+        #
+        #   ⚠ 단, **발행은 계속한다.** 0 을 계속 보내는 것이 이 워치독의
+        #     본체다 (VESC 는 마지막 명령을 유지한다). 조용히 할 뿐이다.
+        moving = abs(self._wd_speed) > 1e-6
         if not self._wd_fired:
             self._wd_fired = True
-            self.get_logger().error(
-                f'/joy 가 {gap:.2f}s 끊겼습니다 — ★ 속도 0 강제 발행.\n'
-                '  조이스틱 연결·배터리를 확인하세요.\n'
-                '  (발행을 멈추는 것으로는 안 섭니다: VESC 는 마지막 명령을 유지합니다)')
+            if moving:
+                self.get_logger().error(
+                    f'/joy 가 {gap:.2f}s 끊겼습니다 — ★ 속도 0 강제 발행.\n'
+                    '  조이스틱 연결·배터리를 확인하세요.\n'
+                    '  (발행을 멈추는 것으로는 안 섭니다: VESC 는 마지막 명령을 유지합니다)')
+            else:
+                self.get_logger().info(
+                    f'/joy 끊김 {gap:.2f}s (정지 상태) — 0 을 계속 발행합니다',
+                    throttle_duration_sec=10.0)
         self._publish(self._wd_steer, 0.0)
+        return
 
     def _publish(self, steer, speed):
         self._wd_steer = float(steer)    # 워치독이 유지할 마지막 조향
+        self._wd_speed = float(speed)    # 위험도 판단용 (정지 중이면 조용히)
         m = AckermannDriveStamped()
         m.header.stamp = self.get_clock().now().to_msg()
         m.header.frame_id = 'base_link'
