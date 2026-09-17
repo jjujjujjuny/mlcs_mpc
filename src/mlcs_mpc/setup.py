@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'mpc_node        = mlcs_mpc.mpc_node:main',
             'mocap_bridge    = mlcs_mpc.mocap_bridge:main',
+            'mocap_calibrate = mlcs_mpc.mocap_calibrate:main',
             'sim_bridge      = mlcs_mpc.sim_bridge:main',
             'joystick_teleop = mlcs_mpc.joystick_teleop:main',
             'safety_node     = mlcs_mpc.safety_node:main',

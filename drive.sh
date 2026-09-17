@@ -10,6 +10,7 @@
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
+#     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
 #     ./drive.sh topics              토픽 상태 점검
 #     ./drive.sh stop                비상 정지 + 전부 종료
 #
@@ -492,6 +493,24 @@ mocap)
     echo "    ros2 topic hz   /mpc/state                              # 100Hz 근처"
     echo
     wait
+    ;;
+
+mocapcal)
+    CM="${1:-spin}"
+    load_ros; require_ws_pkg mlcs_mpc
+    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+    CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
+    MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
+         | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' \
+               -e "s/^['\"]//" -e "s/['\"][[:space:]]*$//" \
+         | tr -d '[:space:]')
+    if ! ros2 topic list 2>/dev/null | grep -qx "$MT"; then
+        err "$MT 토픽이 없습니다 — natnet 드라이버를 먼저 띄우세요."
+        err "  docs/MOCAP_SETUP.md 참고"
+        exit 1
+    fi
+    ros2 run mlcs_mpc mocap_calibrate --ros-args \
+        -p mocap_topic:="$MT" -p mode:="$CM"
     ;;
 
 topics)

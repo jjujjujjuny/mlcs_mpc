@@ -98,6 +98,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | `./drive.sh record <이름>` | 조이스틱으로 몰면서 웨이포인트 기록 |
 | `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
 | `./drive.sh log [태그]` | 주행 + **HyperPM 학습 데이터 기록** |
+| `./drive.sh mocapcal [spin\|straight]` | 마커 오프셋 측정 |
 | `./drive.sh topics` | 토픽 상태 점검 |
 | `./drive.sh stop` | 비상 정지 + 전부 종료 |
 
@@ -155,6 +156,7 @@ src/mlcs_mpc/mlcs_mpc/
   path_manager.py    웨이포인트 → 참조 궤적, 곡률 기반 속도 프로파일
   mpc_node.py        ★ 메인 컨트롤러
   mocap_bridge.py    NatNet pose → 상태 추정 (칼만 필터)
+  mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
   sim_bridge.py      시뮬 odom → 같은 인터페이스
   safety_node.py     경계 감시 / 비상 정지
   joystick_teleop.py 로지텍 F710 수동 조종 (+ /joy 워치독)
