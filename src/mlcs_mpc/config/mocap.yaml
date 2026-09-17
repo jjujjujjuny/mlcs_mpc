@@ -1,19 +1,21 @@
 # ═══════════════════════════════════════════════════════════════════
 #  OptiTrack Motive (NatNet) 연동 설정
 #
-#  전제: 다른 PC 에서 Motive 가 돌고 있고, 같은 네트워크의 어딘가에서
-#        natnet_ros2 가 NatNet → ROS 2 변환을 하고 있다.
-#        (Jetson 에서 직접 돌려도 되고 별도 PC 에서 돌려도 된다 —
-#         ROS_DOMAIN_ID 만 같으면 토픽이 보인다)
+#  전체 절차: docs/MOCAP_SETUP.md
+#
+#  ★ 젯슨이 무선이면 Motive 의 Transmission Type 을 반드시 **Unicast** 로.
+#    Multicast 는 무선 AP 에서 걸러져 "연결은 됐는데 데이터가 0Hz" 인
+#    상태가 되고, 에러가 안 나서 원인을 찾기 어렵다.
 # ═══════════════════════════════════════════════════════════════════
 
 /**:
   ros__parameters:
 
-    # ★ Motive 의 RigidBody 이름에 따라 토픽이 정해진다.
-    #   Motive 에서 강체 이름을 'car' 로 만들었다면 아래가 맞다.
-    #   실제 이름은 `ros2 topic list | grep natnet` 으로 확인하세요.
-    mocap_topic: '/natnet_ros/car/pose'
+    # ★ natnet_ros2 는 **/<RigidBody이름>/pose** 로 발행한다.
+    #   Motive 에서 강체 이름을 'car' 로 만들었다면 /car/pose 다.
+    #   실제 이름을 반드시 확인하고 맞추세요:
+    #       ros2 topic list | grep -i pose
+    mocap_topic: '/car/pose'
 
     map_frame: 'map'
     base_frame: 'base_link'

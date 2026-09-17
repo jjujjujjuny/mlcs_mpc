@@ -406,15 +406,53 @@ cal)
 mocap)
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
-    log "mocap 위치추정만 실행 (차량 브링업 없음)"
-    ros2 run mlcs_mpc mocap_bridge --ros-args \
-        --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml" &
+
+    # 설정된 토픽이 실제로 오는지 먼저 본다 — 안 오면 브릿지를 띄워도
+    # 조용히 아무 일도 안 일어난다 (에러가 안 난다).
+    CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
+    # 따옴표(작은/큰/없음)와 줄 끝 주석을 모두 벗겨낸다
+    MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
+         | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' \
+               -e "s/^['\"]//" -e "s/['\"][[:space:]]*$//" \
+         | tr -d '[:space:]')
+    log "mocap 토픽: ${GRN}${MT}${RST}  (config/mocap.yaml)"
+
+    if ! ros2 topic list 2>/dev/null | grep -qx "$MT"; then
+        err "$MT 토픽이 없습니다."
+        echo
+        echo "  1) natnet 드라이버가 떠 있나요?"
+        echo "       ros2 launch natnet_ros2 natnet_ros2.launch.py \\"
+        echo "           serverIP:=<MotivePC> clientIP:=<젯슨> serverType:=unicast"
+        echo
+        echo "  2) 실제 토픽 이름이 다를 수 있습니다 (RigidBody 이름 = 토픽 이름):"
+        ros2 topic list 2>/dev/null | grep -i pose | sed 's/^/       /' || echo "       (pose 토픽 없음)"
+        echo
+        echo "  3) 자세한 절차: docs/MOCAP_SETUP.md"
+        exit 1
+    fi
+
+    log "토픽 존재 확인 — 수신율 측정 (5초)..."
+    HZ=$(timeout 6 ros2 topic hz "$MT" 2>/dev/null | grep -m1 'average rate' | awk '{printf "%.0f", $3}')
+    if [ -z "$HZ" ] || [ "$HZ" = "0" ]; then
+        err "$MT 토픽은 있는데 데이터가 오지 않습니다 (0 Hz)."
+        echo
+        warn "가장 흔한 원인: Motive 의 Transmission Type 이 ${BLD}Multicast${RST}"
+        echo "  젯슨이 무선이면 Multicast 는 AP 에서 걸러집니다 → ${BLD}Unicast${RST} 로 바꾸세요."
+        echo "  그 다음 흔한 것: Motive 의 Local Interface 가 다른 랜카드로 잡힘"
+        echo "  docs/MOCAP_SETUP.md 5단계 참고"
+        exit 1
+    fi
+    log "수신율 ${GRN}${HZ} Hz${RST}"
+
+    log "mocap_bridge 기동 (차량 브링업 없음)"
+    ros2 run mlcs_mpc mocap_bridge --ros-args --params-file "$CFG" &
     PIDS="$PIDS $!"
     sleep 2
     echo
-    log "차를 손으로 옮기며 값이 맞는지 확인하세요:"
-    echo "    ros2 topic echo /mpc/state --field pose.pose.position"
-    echo "    ros2 topic hz   /mpc/state        # 100Hz 근처"
+    log "차를 손으로 옮기며 확인하세요:"
+    echo "    ros2 topic echo /mpc/state --field pose.pose.position   # 1m 옮기면 1 변화"
+    echo "    ros2 topic echo /mpc/state --field twist.twist.linear.x # 밀면 +, 세우면 0"
+    echo "    ros2 topic hz   /mpc/state                              # 100Hz 근처"
     echo
     wait
     ;;

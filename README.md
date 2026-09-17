@@ -21,8 +21,8 @@ Jetson Orin Nano / Ubuntu 22.04 (Jammy) / ROS 2 Humble 대상.
 | 캘리브레이션 원 피팅 | ✅ 합성 데이터 검증 (반경 오차 0.5mm) |
 | 설정 파일 ↔ 노드 연결 | ✅ 전 키 자동 검증 |
 | 수동/자율 조정 로직 | ✅ 우선순위 검증 — safety 정지는 LB 로 안 풀린다 |
-| **조이스틱 실동작** | ❌ **미검증** — 축·버튼 번호는 F710 표준값 |
-| **젯슨 환경 구축** | ❌ **미검증** — 문서만 작성됨 |
+| 조이스틱 실동작 | ✅ 젯슨 실차 확인 (2026-09-17) — 수동 주행 성공 |
+| 젯슨 환경 구축 | ✅ 젯슨 실기 확인 — ROS 2 Humble + f1tenth_stack 빌드·구동 |
 | **mocap 실연동** | ❌ **미검증** — 실제 NatNet 스트림으로 테스트 안 됨 |
 | **실차 주행** | ❌ **미검증** |
 | **VESC 캘리브레이션** | ❌ **미측정** — 값이 전부 잠정치 |
@@ -226,5 +226,6 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 ## 문서
 
 - [docs/SETUP_JETSON.md](docs/SETUP_JETSON.md) — 젯슨 환경 구축 (여기부터)
+- [docs/MOCAP_SETUP.md](docs/MOCAP_SETUP.md) — 모션캡처 연동 (RigidBody → 토픽)
 - [docs/CALIBRATION.md](docs/CALIBRATION.md) — VESC 캘리브레이션
 - [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길
