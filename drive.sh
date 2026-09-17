@@ -405,7 +405,10 @@ cal)
 
 mocap)
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    # ★ cleanup(정지명령 발행) 을 걸지 않는다 — 이 모드는 차를 건드리지
+    #   않고 위치추정만 본다. 진단 실패로 exit 할 때마다 4.5초씩 정지
+    #   명령을 쏘는 것은 낭비이고, 브링업도 안 띄웠으므로 받을 대상도 없다.
+    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
 
     # 설정된 토픽이 실제로 오는지 먼저 본다 — 안 오면 브릿지를 띄워도
     # 조용히 아무 일도 안 일어난다 (에러가 안 난다).
