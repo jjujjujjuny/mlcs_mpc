@@ -97,6 +97,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | `./drive.sh mpc <csv>` | MPC 자율주행 + 조이스틱 (LB 로 전환) |
 | `./drive.sh record <이름>` | 조이스틱으로 몰면서 웨이포인트 기록 |
 | `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
+| `./drive.sh log [태그]` | 주행 + **HyperPM 학습 데이터 기록** |
 | `./drive.sh topics` | 토픽 상태 점검 |
 | `./drive.sh stop` | 비상 정지 + 전부 종료 |
 
@@ -159,6 +160,7 @@ src/mlcs_mpc/mlcs_mpc/
   joystick_teleop.py 로지텍 F710 수동 조종 (+ /joy 워치독)
   calibrate.py       mocap 으로 VESC 값 측정
   waypoint_logger.py 주행 경로 기록
+  data_logger.py     HyperPM 학습 데이터 수집 (100Hz, mocap 클럭)
   smooth_path.py     경로 평활화
 ```
 
@@ -228,4 +230,8 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 - [docs/SETUP_JETSON.md](docs/SETUP_JETSON.md) — 젯슨 환경 구축 (여기부터)
 - [docs/MOCAP_SETUP.md](docs/MOCAP_SETUP.md) — 모션캡처 연동 (RigidBody → 토픽)
 - [docs/CALIBRATION.md](docs/CALIBRATION.md) — VESC 캘리브레이션
-- [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길
+- [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길 (논문 분석 포함)
+
+> ★ **데이터는 지금부터 모으세요.** HyperPM 학습에 36분이 필요한데
+> (논문 기준), 나중에 몰아서 모으기 어렵습니다. 차를 몰 때마다
+> `./drive.sh log` 를 쓰면 됩니다.

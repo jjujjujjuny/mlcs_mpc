@@ -32,6 +32,7 @@ setup(
             'safety_node     = mlcs_mpc.safety_node:main',
             'calibrate       = mlcs_mpc.calibrate:main',
             'waypoint_logger = mlcs_mpc.waypoint_logger:main',
+            'data_logger     = mlcs_mpc.data_logger:main',
             'smooth_path     = mlcs_mpc.smooth_path:main',
         ],
     },

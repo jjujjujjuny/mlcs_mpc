@@ -8,6 +8,7 @@
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
+#     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh topics              토픽 상태 점검
 #     ./drive.sh stop                비상 정지 + 전부 종료
@@ -17,6 +18,7 @@
 #     MLCS_SPEED=1.5                수동 조종 최고 속도 (m/s)
 #     MLCS_NO_BRINGUP=1             브링업을 안 띄운다 (이미 떠 있을 때)
 #     MLCS_DEBUG=1                  조이스틱 값 출력
+#     MLCS_DATA=~/mlcs_data         데이터 로그 저장 폴더
 # ============================================================================
 set -u
 
@@ -330,6 +332,38 @@ mpc)
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
+    ;;
+
+log)
+    TAG="${1:-}"
+    DATA_DIR="${MLCS_DATA:-$HOME/mlcs_data}"
+    load_ros; require_ws_pkg mlcs_mpc
+    trap cleanup EXIT INT TERM
+    start_bringup
+
+    log "HyperPM 학습 데이터 기록 → ${GRN}${DATA_DIR}${RST}"
+    ros2 run mlcs_mpc data_logger --ros-args \
+        -p output_dir:="$DATA_DIR" -p tag:="$TAG" >/tmp/mlcs_datalog.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 1
+    echo
+    warn "운용 영역 전체를 덮도록 모세요 — 직선만 왕복하면 코너 데이터가 없습니다."
+    echo "    가감속 / 좌우 선회 / 한계 부근을 골고루"
+    echo "    로거 상태: tail -f /tmp/mlcs_datalog.log"
+    echo
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    ros2 launch mlcs_mpc joystick.launch.py \
+        joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
+
+    sleep 1
+    # 헤더 줄을 뺀 총 행수 → 분 (100Hz 기준). 파일이 없으면 0.
+    # ★ grep -c 는 매치가 없으면 exit 1 이라 || echo 0 이 같이 찍혀
+    #   "0\n0" 이 되고 awk 가 깨진다. head -1 로 한 줄만 취한다.
+    TOT=$( { cat "$DATA_DIR"/drive_*.csv 2>/dev/null || true; } | grep -vc '^time' || true )
+    TOT=$(echo "${TOT:-0}" | head -1)
+    echo
+    log "누적 데이터: ${GRN}$(awk -v n="$TOT" 'BEGIN{printf "%.1f", n/6000}')분${RST} / 36분 (논문 기준)"
     ;;
 
 record)
