@@ -82,6 +82,13 @@ class MPCNode(Node):
         self.declare_parameter('mass', 3.5)
         self.declare_parameter('lf', 0.176)
         self.declare_parameter('lr', 0.144)
+        # 차체 치수 — MPC 가 직접 쓰진 않지만 config 에 있으므로 선언한다
+        # (선언 안 하면 ROS 2 가 노드 기동 자체를 실패시킨다)
+        self.declare_parameter('track_width', 0.23)
+        self.declare_parameter('vehicle_width', 0.27)
+        self.declare_parameter('vehicle_length', 0.505)
+        self.declare_parameter('front_overhang', 0.10)
+        self.declare_parameter('rear_overhang', 0.075)
 
         # ── MPC 튜닝 ─────────────────────────────────────────────────
         self.declare_parameter('N', 20)
