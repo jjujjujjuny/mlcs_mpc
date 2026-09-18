@@ -56,3 +56,34 @@ C++ SDK 만 버전 협상을 안 한다.
 
 토픽 이름은 Motive 의 강체 이름이 그대로 붙어 `/<강체이름>/pose` 가 된다.
 ROS1 판(`natnet_ros_cpp`)의 `/natnet_ros/` 접두어는 **붙지 않는다.**
+
+
+## f1tenth_system-no-joy-nodes.patch
+
+**대상** [f1tenth/f1tenth_system](https://github.com/f1tenth/f1tenth_system) — 브랜치 `humble-devel`
+
+remote 가 **우리 fork 가 아니라 upstream 원본**이다. push 할 수 없고,
+`git pull` 하면 이 수정이 날아간다.
+
+### ① 조이스틱 두 노드를 bringup 에서 뺀다
+
+`bringup_launch.py` 는 `joy_node` 와 f1tenth 자체 `joy_teleop` 을 같이 띄운다.
+그런데 그 `joy_teleop` 은 우리 `joystick_teleop` 과 **같은 `/teleop` 토픽**에
+발행하고, 설정이 이렇다 (`f1tenth_stack/config/joy_teleop.yaml`):
+
+    human_control:
+      deadman_buttons: [4]              ← LB. 우리가 모드 토글로 쓰는 버튼
+      drive-speed: {axis: 1, scale: 5.0}
+
+즉 LB 를 누르는 순간 두 노드가 동시에 반응하고, 저쪽은 X 모드에서
+`axis 2`(= LT 트리거)를 조향으로 읽으면서 **5 m/s** 를 명령한다.
+`/teleop` 퍼블리셔가 둘이 되는 것 자체가 위험하다.
+
+조이스틱은 `mlcs_mpc/joystick.launch.py` 가 띄운다. 터미널 두 개로:
+
+    ros2 launch f1tenth_stack bringup_launch.py     # 터미널 A
+    ros2 launch mlcs_mpc joystick.launch.py         # 터미널 B
+
+### ② urg_node 를 뺀다
+
+라이다가 없다. 위치추정은 mocap 으로 한다.

@@ -1,0 +1,29 @@
+diff --git a/f1tenth_stack/launch/bringup_launch.py b/f1tenth_stack/launch/bringup_launch.py
+index ce934dc..998fc5a 100755
+--- a/f1tenth_stack/launch/bringup_launch.py
++++ b/f1tenth_stack/launch/bringup_launch.py
+@@ -128,13 +128,21 @@ def generate_launch_description():
+     )
+ 
+     # finalize
+-    ld.add_action(joy_node)
+-    ld.add_action(joy_teleop_node)
++    # ★ 조이스틱 두 노드는 mlcs_mpc/joystick.launch.py 가 띄운다.
++    #   여기서도 띄우면 /teleop 퍼블리셔가 둘이 된다. 특히 f1tenth 의
++    #   joy_teleop 은 deadman 이 버튼4(LB) 인데, 이건 joystick_teleop 의
++    #   수동↔자율 토글 버튼과 같다. LB 를 누르는 순간 두 노드가 동시에
++    #   반응하고, joy_teleop 쪽은 X 모드에서 axis2(=LT 트리거)를 조향으로
++    #   읽으면서 scale 5.0 으로 속도를 낸다.
++    #     ros2 launch f1tenth_stack bringup_launch.py        # 터미널 A
++    #     ros2 launch mlcs_mpc joystick.launch.py            # 터미널 B
++    # ld.add_action(joy_node)
++    # ld.add_action(joy_teleop_node)
+     ld.add_action(ackermann_to_vesc_node)
+     ld.add_action(vesc_to_odom_node)
+     ld.add_action(vesc_driver_node)
+     # ld.add_action(throttle_interpolator_node)
+-    ld.add_action(urg_node)
++    # ld.add_action(urg_node)   # 라이다 없음 — mocap 으로 위치추정
+     ld.add_action(ackermann_mux_node)
+     ld.add_action(static_tf_node)
+ 

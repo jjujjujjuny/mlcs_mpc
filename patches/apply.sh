@@ -25,5 +25,6 @@ apply_one () {
     fi
 }
 
-apply_one natnet_ros2 "$HERE/natnet_ros2-bitstream-version.patch"
+apply_one natnet_ros2     "$HERE/natnet_ros2-bitstream-version.patch"
+apply_one f1tenth_system  "$HERE/f1tenth_system-no-joy-nodes.patch"
 exit $rc
