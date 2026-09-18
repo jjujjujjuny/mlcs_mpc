@@ -187,12 +187,39 @@ source install/setup.bash
 
 ```bash
 ros2 launch natnet_ros2 natnet_ros2.launch.py \
-    serverIP:=<Motive PC IP> \
-    clientIP:=<젯슨 IP> \
-    serverType:=unicast
+    serverIP:=192.168.1.3 \
+    clientIP:=192.168.1.7 \
+    serverType:=unicast \
+    pub_rigid_body:=true \
+    activate:=true
 ```
 
+> 꺾쇠 `<...>` 는 자리표시자가 아니라 실제 값을 그대로 넣은 것이다. bash 에서
+> `<` 는 입력 리다이렉션이라 그대로 붙여넣으면 `No such file or directory` 가 난다.
+> IP 는 각자 장비에 맞게 바꾸되 꺾쇠는 쓰지 않는다.
+
 > 인자 이름이 `serverIP` / `clientIP` / `serverType` 다 (server_address 아님).
+
+### ★ `pub_rigid_body` 와 `activate` 를 빼먹지 말 것
+
+둘 다 **기본값이 `false`** 다. 빼면 이렇게 된다 — 에러가 안 난다:
+
+* `activate:=false` — 라이프사이클 노드가 configure 까지만 가고 활성화되지
+  않는다. Motive 에 연결조차 안 한 채 떠 있기만 한다.
+* `pub_rigid_body:=false` — 강체 퍼블리셔를 아예 만들지 않는다.
+
+둘 중 하나라도 빠지면 `ros2 topic list` 에 `/natnet_ros/transition_event`
+하나만 보인다. 이게 보이면 인자부터 의심하라.
+
+### 구버전 Motive (2.x) 를 쓴다면
+
+`patches/apply.sh` 를 적용해야 한다. 적용 안 하면 노드가 SIGABRT 로 즉사한다:
+
+    ClientCore.cpp:710: ValidateHostConnection():
+        Assertion `mServerDescription.HostPresent' failed.
+
+Motive 2.3 은 NatNet **3.1** 로 말하는데 드라이버의 SDK 는 **4.4** 라
+버전 협상을 안 하기 때문이다. 자세한 내용은 `patches/README.md`.
 
 ---
 

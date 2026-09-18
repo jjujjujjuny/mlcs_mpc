@@ -460,7 +460,11 @@ mocap)
         echo
         echo "  1) natnet 드라이버가 떠 있나요?"
         echo "       ros2 launch natnet_ros2 natnet_ros2.launch.py \\"
-        echo "           serverIP:=<MotivePC> clientIP:=<젯슨> serverType:=unicast"
+        echo "           serverIP:=192.168.1.3 clientIP:=\$(hostname -I | awk '{print \$1}') \\"
+        echo "           serverType:=unicast pub_rigid_body:=true activate:=true"
+        echo
+        echo "     ★ pub_rigid_body 와 activate 는 둘 다 기본값이 false 다."
+        echo "       빼먹으면 연결은 되는데 토픽이 안 나온다 (조용히 실패)."
         echo
         echo "  2) 실제 토픽 이름이 다를 수 있습니다 (RigidBody 이름 = 토픽 이름):"
         ros2 topic list 2>/dev/null | grep -i pose | sed 's/^/       /' || echo "       (pose 토픽 없음)"
