@@ -106,7 +106,7 @@ class MocapBridge(Node):
         # ── 토픽/프레임 ────────────────────────────────────────────────
         # natnet_ros2 는 보통 /natnet_ros/<RigidBody이름>/pose 로 낸다.
         # RigidBody 이름은 Motive 에서 정하므로 파라미터로 뺀다.
-        self.declare_parameter('mocap_topic', '/natnet_ros/car/pose')
+        self.declare_parameter('mocap_topic', '/car/pose')
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
