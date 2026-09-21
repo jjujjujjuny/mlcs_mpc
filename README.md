@@ -21,6 +21,7 @@ Jetson Orin Nano / Ubuntu 22.04 (Jammy) / ROS 2 Humble 대상.
 | 캘리브레이션 원 피팅 | ✅ 합성 데이터 검증 (반경 오차 0.5mm) |
 | 설정 파일 ↔ 노드 연결 | ✅ 전 키 자동 검증 |
 | 수동/자율 조정 로직 | ✅ 우선순위 검증 — safety 정지는 LB 로 안 풀린다 |
+| Stanley 컨트롤러 | ✅ 시뮬 검증 — track_5 에서 횡오차 평균 0.3cm (노이즈·지연 포함) |
 | 조이스틱 실동작 | ✅ 젯슨 실차 확인 (2026-09-17) — 수동 주행 성공 |
 | 젯슨 환경 구축 | ✅ 젯슨 실기 확인 — ROS 2 Humble + f1tenth_stack 빌드·구동 |
 | **mocap 실연동** | ❌ **미검증** — 실제 NatNet 스트림으로 테스트 안 됨 |
@@ -95,6 +96,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | `./drive.sh joy` | 브링업 + 조이스틱 수동 조종 |
 | `./drive.sh bench` | 거치대 모드 — 속도 0 고정, 조향만 |
 | `./drive.sh mpc <csv>` | MPC 자율주행 + 조이스틱 (LB 로 전환) |
+| `./drive.sh stanley <csv>` | **Stanley 자율주행** (배관 검증용) |
 | `./drive.sh record <이름>` | 조이스틱으로 몰면서 웨이포인트 기록 |
 | `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
 | `./drive.sh log [태그]` | 주행 + **HyperPM 학습 데이터 기록** |
@@ -155,6 +157,8 @@ src/mlcs_mpc/mlcs_mpc/
   mpc_solver.py      iLQR 최적화기 (acados 백엔드 자리)
   path_manager.py    웨이포인트 → 참조 궤적, 곡률 기반 속도 프로파일
   mpc_node.py        ★ 메인 컨트롤러
+  stanley_node.py    Stanley 추종 (게인 2개 — 배관 검증/베이스라인)
+  import_track.py    DeepRacer 트랙 → 웨이포인트 (+주행가능성 검사)
   mocap_bridge.py    NatNet pose → 상태 추정 (칼만 필터)
   mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
   sim_bridge.py      시뮬 odom → 같은 인터페이스

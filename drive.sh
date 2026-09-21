@@ -6,6 +6,7 @@
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
+#     ./drive.sh stanley <경로.csv>  Stanley 자율주행 (배관 검증용, 게인 2개)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
@@ -302,6 +303,41 @@ bench)
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
+    ;;
+
+stanley)
+    WP="${1:-}"
+    [ -n "$WP" ] || {
+        err "웨이포인트 파일이 필요합니다:  ./drive.sh stanley <경로.csv>"
+        echo "  트랙 가져오기:"
+        echo "    ros2 run mlcs_mpc import_track --ros-args \\"
+        echo "        -p src:=<트랙폴더> -p out:=$SCRIPT_DIR/src/mlcs_mpc/waypoints/track_5.csv"
+        exit 1
+    }
+    [ -f "$WP" ] || { err "파일이 없습니다: $WP"; exit 1; }
+    WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"
+    load_ros; require_ws_pkg mlcs_mpc
+    trap cleanup EXIT INT TERM
+    start_bringup
+
+    log "Stanley 자율주행  웨이포인트: ${GRN}$WP${RST}  속도 ${SPEED} m/s"
+    ros2 launch mlcs_mpc stanley.launch.py \
+        waypoints:="$WP" target_speed:="$SPEED" \
+        debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)" \
+        >/tmp/mlcs_stanley.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 2
+    echo
+    warn "차는 아직 출발하지 않습니다. 준비되면:"
+    echo "    ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool \"{data: true}\""
+    echo
+    log "로그: tail -f /tmp/mlcs_stanley.log"
+    log "횡오차: ros2 topic echo /stanley/cross_track"
+    echo
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    ros2 launch mlcs_mpc joystick.launch.py \
+        joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true
     ;;
 
 mpc)

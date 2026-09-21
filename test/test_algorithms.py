@@ -213,6 +213,67 @@ def test_lap():
           f'평균 {ts.mean():.1f}ms, p95 {np.percentile(ts,95):.1f}ms')
 
 
+def test_stanley():
+    """Stanley 제어법칙이 경로로 수렴하는가 (ROS 없이 수식만).
+
+    실차 조건(mocap 1mm 노이즈 + 60ms 액추에이터 지연)을 흉내낸다.
+    """
+    print('\n■ Stanley 경로 추종')
+    wp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      '..', 'src', 'mlcs_mpc', 'waypoints', 'track_5.csv')
+    if not os.path.isfile(wp):
+        check('track_5 웨이포인트 존재', False, wp)
+        return
+
+    L, MAXD, DT = 0.33, 0.36, 0.02
+    p = PathManager(wp, target_speed=1.0, closed_loop=True,
+                    params=VehicleParams(wheelbase=L, max_steer=MAXD))
+    check('트랙 로드', p.ok, f'{len(p.xy)}점 {p.total_s:.2f}m')
+
+    # ★ 차량이 물리적으로 돌 수 있는 트랙인가
+    R_car = L / math.tan(MAXD)
+    r_min = 1.0 / np.abs(p.kappa).max()
+    check('주행 가능 (최소반경 > 차량한계)', r_min > R_car,
+          f'트랙 {r_min:.2f}m > 차량 {R_car:.2f}m')
+
+    rng = np.random.default_rng(0)
+    k_e, k_soft = 1.5, 0.5
+    px, py = p.xy[0]
+    ry = p.heading[0]
+    x = px - math.sin(ry) * 0.3      # 횡오차 30cm
+    y = py + math.cos(ry) * 0.3
+    yaw, v, steer = ry + 0.4, 0.0, 0.0   # 헤딩오차 23°
+    queue = [0.0] * 3                     # 60ms 지연
+    errs = []
+    for n in range(3000):
+        mx = x + rng.normal(0, 0.001)
+        my = y + rng.normal(0, 0.001)
+        myaw = yaw + rng.normal(0, 0.002)
+        fx, fy = mx + L * math.cos(myaw), my + L * math.sin(myaw)
+        i = p.nearest_index(fx, fy)
+        cx, cy = p.xy[i]
+        cyaw = p.heading[i]
+        e = -math.sin(cyaw) * (fx - cx) + math.cos(cyaw) * (fy - cy)
+        cmd = normalize_angle(cyaw - myaw) + math.atan2(-k_e * e, k_soft + abs(v))
+        md = 3.2 * DT
+        steer = float(np.clip(np.clip(cmd, steer - md, steer + md), -MAXD, MAXD))
+        queue.append(steer)
+        applied = queue.pop(0)
+        v += np.clip(float(p.v_ref[i]) - v, -3 * DT, 3 * DT)
+        x += v * math.cos(yaw) * DT
+        y += v * math.sin(yaw) * DT
+        yaw += v * math.tan(applied) / L * DT
+        if n > 300:
+            j = p.nearest_index(x + L * math.cos(yaw), y + L * math.sin(yaw))
+            tx, ty = p.xy[j]
+            tyaw = p.heading[j]
+            errs.append(abs(-math.sin(tyaw) * (x + L * math.cos(yaw) - tx)
+                            + math.cos(tyaw) * (y + L * math.sin(yaw) - ty)))
+    errs = np.array(errs)
+    check('횡오차 수렴', errs.mean() < 0.05,
+          f'평균 {errs.mean()*100:.2f}cm 최대 {errs.max()*100:.2f}cm')
+
+
 def test_packaging():
     """ROS 패키지 구성 — 빌드는 되는데 런치가 실패하는 경우를 잡는다.
 
@@ -256,6 +317,7 @@ def main():
 
     test_packaging()
     test_jacobian()
+    test_stanley()
     test_angle()
     test_straight()
     test_circle_path()

@@ -26,6 +26,8 @@ setup(
     entry_points={
         'console_scripts': [
             'mpc_node        = mlcs_mpc.mpc_node:main',
+            'stanley_node    = mlcs_mpc.stanley_node:main',
+            'import_track    = mlcs_mpc.import_track:main',
             'mocap_bridge    = mlcs_mpc.mocap_bridge:main',
             'mocap_calibrate = mlcs_mpc.mocap_calibrate:main',
             'sim_bridge      = mlcs_mpc.sim_bridge:main',
