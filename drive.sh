@@ -646,7 +646,8 @@ rviz)
         err "  sudo apt install -y ros-humble-rviz2"
         exit 1
     }
-    WP="${1:-$SCRIPT_DIR/src/mlcs_mpc/waypoints/track_5.csv}"
+    # 인자를 주면 그 트랙, 없으면 config/track.yaml 을 따른다
+    WP="${1:-}"
     RVIZ_CFG="$SCRIPT_DIR/src/mlcs_mpc/launch/track.rviz"
     trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
 
@@ -655,9 +656,15 @@ rviz)
         log "젯슨의 track_viz 토픽을 사용합니다"
     else
         log "track_viz 를 로컬에서 띄웁니다 (트랙 표시용)"
-        ros2 run mlcs_mpc track_viz --ros-args \
-            -p waypoint_file:="$WP" \
-            -p track_dir:="${MLCS_TRACK:-}" >/tmp/mlcs_viz.log 2>&1 &
+        # ★ 빈 값을 -p 로 넘기면 안 된다. rcl 이 파싱에 실패해 노드가 죽는다:
+        #     Couldn't parse parameter override rule: '-p track_dir:='
+        #   그러면 RViz 는 뜨는데 트랙만 안 보인다 (원인 찾기 어렵다).
+        #   기본값은 config/track.yaml 에서 온다.
+        TV_ARGS=(--params-file "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml")
+        [ -n "$WP" ] && TV_ARGS+=(-p "waypoint_file:=$WP")
+        [ -n "${MLCS_TRACK:-}" ] && TV_ARGS+=(-p "track_dir:=$MLCS_TRACK")
+        ros2 run mlcs_mpc track_viz --ros-args "${TV_ARGS[@]}" \
+            >/tmp/mlcs_viz.log 2>&1 &
         PIDS="$PIDS $!"
         sleep 1
     fi
