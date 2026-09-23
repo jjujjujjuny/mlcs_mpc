@@ -15,6 +15,9 @@
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
 #     ./drive.sh rviz                RViz 시각화 (젯슨에서 — NoMachine 으로 본다)
+#     ./drive.sh natnet              mocap 드라이버만 (보통 자동으로 뜬다)
+#     ./drive.sh go                  ★ 출발 — /mpc/enabled=true
+#     ./drive.sh halt                ★ 정지 — /mpc/enabled=false (노드는 유지)
 #     ./drive.sh topics              토픽 상태 점검
 #     ./drive.sh stop                비상 정지 + 전부 종료
 #
@@ -22,6 +25,8 @@
 #     MLCS_WS=~/f1tenth_ws          워크스페이스 경로
 #     MLCS_SPEED=1.5                수동 조종 최고 속도 (m/s)
 #     MLCS_NO_BRINGUP=1             브링업을 안 띄운다 (이미 떠 있을 때)
+#     MLCS_NO_NATNET=1              natnet 을 안 띄운다 (다른 창에서 띄웠을 때)
+#     MLCS_MOTIVE_IP=192.168.1.3    Motive PC 의 IP
 #     MLCS_DEBUG=1                  조이스틱 값 출력
 #     MLCS_DATA=~/mlcs_data         데이터 로그 저장 폴더
 #     MLCS_TRACK=<트랙폴더>          경계까지 그릴 원본 트랙 폴더
@@ -32,6 +37,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${MLCS_WS:-$HOME/f1tenth_ws}"
 SPEED="${MLCS_SPEED:-1.5}"
 DEBUG="${MLCS_DEBUG:-0}"
+MOTIVE_IP="${MLCS_MOTIVE_IP:-192.168.1.3}"
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLD=$'\033[1m'; RST=$'\033[0m'
 log()  { echo "${BLD}[drive]${RST} $*"; }
@@ -227,13 +233,63 @@ cleanup () {
     for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
     # 브링업은 별도 프로세스 그룹이라 Ctrl+C 가 닿지 않는다 — 직접 죽인다
     [ -n "${BRINGUP_PGID:-}" ] && kill -TERM "-$BRINGUP_PGID" 2>/dev/null || true
+    [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null || true
     sleep 1
     for p in ${PIDS:-}; do kill -9 "$p" 2>/dev/null || true; done
     [ -n "${BRINGUP_PGID:-}" ] && kill -9 "-$BRINGUP_PGID" 2>/dev/null || true
+    [ -n "${NATNET_PGID:-}" ] && kill -9 "-$NATNET_PGID" 2>/dev/null || true
 }
 
 PIDS=""
 BRINGUP_PGID=""
+NATNET_PGID=""
+# ── mocap 드라이버 ───────────────────────────────────────────────────────────
+#
+#   ★ 이 두 인자는 **둘 다 기본값이 false** 다. 빼먹으면 연결은 되는데
+#     토픽이 하나도 안 나온다 (라이프사이클 노드가 활성화되지 않아
+#     /natnet_ros/transition_event 만 남는다). 매번 손으로 치다 빠뜨리기
+#     좋아서 여기에 박아 둔다.
+#
+#         pub_rigid_body:=true   강체 퍼블리셔를 만든다
+#         activate:=true         라이프사이클 노드를 활성화한다
+#
+#   ★ Motive 2.x 를 쓴다면 patches/apply.sh 를 먼저 적용해야 한다.
+#     안 하면 노드가 SIGABRT 로 즉사한다 (patches/README.md 참고).
+natnet_running () {
+    ros2 topic list 2>/dev/null | grep -qE '^/[A-Za-z0-9_]+/pose$'
+}
+
+start_natnet () {
+    if [ "${MLCS_NO_NATNET:-0}" = "1" ]; then
+        log "natnet 생략 (MLCS_NO_NATNET=1)"
+        return
+    fi
+    if natnet_running; then
+        log "natnet 이 이미 떠 있습니다"
+        return
+    fi
+    local CLIENT_IP
+    CLIENT_IP="$(hostname -I | awk '{print $1}')"
+    log "mocap 드라이버 (Motive ${MOTIVE_IP} → ${CLIENT_IP})..."
+    # 브링업과 같은 이유로 setsid — Ctrl+C 경로 밖에 둔다 (start_bringup 주석)
+    setsid ros2 launch natnet_ros2 natnet_ros2.launch.py \
+        serverIP:="$MOTIVE_IP" clientIP:="$CLIENT_IP" serverType:=unicast \
+        pub_rigid_body:=true activate:=true \
+        >/tmp/mlcs_natnet.log 2>&1 &
+    NATNET_PID=$!
+    PIDS="$PIDS $NATNET_PID"
+    sleep 4
+    NATNET_PGID="$(ps -o pgid= -p "$NATNET_PID" 2>/dev/null | tr -d ' ')"
+
+    if natnet_running; then
+        log "  ✓ mocap 토픽 확인"
+    else
+        warn "mocap 토픽이 아직 안 보입니다 — /tmp/mlcs_natnet.log 를 보세요."
+        warn "  Motive 의 Data Streaming 이 켜져 있는지, Local Interface 가"
+        warn "  ${MOTIVE_IP} 인지 확인하세요."
+    fi
+}
+
 start_bringup () {
     if [ "${MLCS_NO_BRINGUP:-0}" = "1" ]; then
         log "브링업 생략 (MLCS_NO_BRINGUP=1)"
@@ -319,6 +375,7 @@ stanley)
     fi
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
+    start_natnet
     start_bringup
 
     if [ -n "$WP" ]; then
@@ -353,6 +410,7 @@ mpc)
     WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"   # 절대경로
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
+    start_natnet
     start_bringup
 
     log "MPC 자율주행  웨이포인트: ${GRN}$WP${RST}"
@@ -485,7 +543,10 @@ mocap)
     # ★ cleanup(정지명령 발행) 을 걸지 않는다 — 이 모드는 차를 건드리지
     #   않고 위치추정만 본다. 진단 실패로 exit 할 때마다 4.5초씩 정지
     #   명령을 쏘는 것은 낭비이고, 브링업도 안 띄웠으므로 받을 대상도 없다.
-    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
+          [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
+          true' EXIT INT TERM
+    start_natnet
 
     # 설정된 토픽이 실제로 오는지 먼저 본다 — 안 오면 브릿지를 띄워도
     # 조용히 아무 일도 안 일어난다 (에러가 안 난다).
@@ -544,7 +605,10 @@ mocap)
 mocapcal)
     CM="${1:-spin}"
     load_ros; require_ws_pkg mlcs_mpc
-    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
+          [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
+          true' EXIT INT TERM
+    start_natnet
     CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
     MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
          | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' \
@@ -599,6 +663,61 @@ rviz)
     fi
     log "RViz — Fixed Frame=map  (NoMachine 화면으로 보세요)"
     exec rviz2 -d "$RVIZ_CFG"
+    ;;
+
+natnet)
+    # mocap 드라이버만 띄운다. 보통은 주행 모드가 알아서 띄우므로
+    # 따로 쓸 일은 "mocap 만 확인하고 싶을 때" 정도다.
+    load_ros
+    trap '[ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
+          true' EXIT INT TERM
+    start_natnet
+    echo
+    log "토픽 확인:"
+    echo "    ros2 topic list | grep pose"
+    echo "    ros2 topic hz /car/pose        # 100Hz 근처"
+    echo
+    log "로그: tail -f /tmp/mlcs_natnet.log     (Ctrl+C 로 종료)"
+    wait
+    ;;
+
+go)
+    # ★ 출발. 자율주행 노드는 /mpc/enabled=true 를 받아야 움직인다.
+    #   래치(TRANSIENT_LOCAL) 라 한 번만 쏘면 늦게 뜬 노드도 받는다.
+    load_ros
+    if ! ros2 topic list 2>/dev/null | grep -qx /mpc/enabled; then
+        err "/mpc/enabled 토픽이 없습니다 — 주행 노드가 안 떠 있습니다."
+        err "  먼저 다른 창에서:  ./drive.sh stanley"
+        exit 1
+    fi
+    warn "${BLD}차가 출발합니다. 킬스위치를 손에 드세요.${RST}"
+    # ★ -w 1 — 구독자와 **매칭될 때까지 기다렸다가** 쏜다.
+    #   -w 0 으로 두면 DDS 디스커버리가 끝나기 전에 발행할 수 있고, 그러면
+    #   메시지가 조용히 사라진다. 실제로 기동 직후에 한 번 겪었다
+    #   (드라이브 노드는 "출발 게이트 대기" 인데 go 는 "출발" 이라고 찍힘).
+    #   그 뒤 13회 재시도에서 재현되지 않았지만, 여기서 놓치면 사람이
+    #   "왜 안 나가지" 하며 다시 누르게 되므로 확실한 쪽을 쓴다.
+    #   timeout 이 상한이라 구독자가 없어도 매달리지 않는다.
+    #   -t 10 -r 20 = 0.5초간 10번. 한 번 놓쳐도 다음 것이 간다.
+    if timeout 12 ros2 topic pub -t 10 -r 20 -w 1 /mpc/enabled \
+            std_msgs/msg/Bool '{data: true}' >/dev/null 2>&1; then
+        log "${GRN}출발${RST} — 세우려면  ./drive.sh halt"
+    else
+        err "발행이 확인되지 않았습니다 — 주행 노드가 받았는지 로그를 보세요."
+        err "  노드 로그에 '▶ 출발 허가' 가 찍혀야 합니다."
+        exit 1
+    fi
+    ;;
+
+halt)
+    # 자율주행만 끈다. 노드는 살아 있으므로 ./drive.sh go 로 다시 출발한다.
+    # 완전히 내리려면 ./drive.sh stop.
+    load_ros
+    log "자율주행 해제"
+    pub_stop /mpc/enabled std_msgs/msg/Bool '{data: false}'
+    pub_stop /drive ackermann_msgs/msg/AckermannDriveStamped \
+        '{drive: {speed: 0.0, steering_angle: 0.0}}'
+    log "정지 — 다시 출발하려면  ./drive.sh go"
     ;;
 
 topics)
