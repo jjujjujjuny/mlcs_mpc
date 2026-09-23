@@ -41,6 +41,8 @@ import os
 import numpy as np
 import rclpy
 from rclpy.node import Node
+
+from .path_manager import PathManager
 from rclpy.qos import QoSProfile, DurabilityPolicy
 
 from nav_msgs.msg import Odometry, Path
@@ -128,6 +130,11 @@ class TrackViz(Node):
                 f = os.path.join(tdir, name)
                 if os.path.isfile(f):
                     setattr(self, attr, load_xy(f))
+        # ★ 파일명만 줘도 찾는다 — config/track.yaml 이 'track_5.csv' 처럼
+        #   파일명만 적기 때문이다 (절대경로는 장비마다 달라 공유가 안 된다).
+        #   stanley_node 가 쓰는 PathManager.resolve() 와 같은 규칙.
+        if wp:
+            wp = PathManager.resolve(wp)
         if self.center is None and wp and os.path.isfile(wp):
             self.center = load_xy(wp)
 

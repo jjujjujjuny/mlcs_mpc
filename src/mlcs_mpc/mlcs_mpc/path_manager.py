@@ -64,7 +64,8 @@ class PathManager:
             self.load(waypoint_file)
 
     # ────────────────────────────────────────────────────────────────
-    def resolve(self, path):
+    @staticmethod
+    def resolve(path):
         """웨이포인트 경로를 푼다.
 
         파일명만 줘도 찾게 한다. 그래야 config/track.yaml 에
