@@ -6,7 +6,9 @@
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
-#     ./drive.sh stanley <경로.csv>  Stanley 자율주행 (배관 검증용, 게인 2개)
+#     ./drive.sh stanley [경로.csv]  Stanley 자율주행 (배관 검증용, 게인 2개)
+#                                    인자 없으면 config/track.yaml 을 따른다
+#     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
@@ -308,23 +310,25 @@ bench)
     ;;
 
 stanley)
+    # ★ 인자 없이 실행하면 config/track.yaml 을 따른다. 트랙을 바꾸려면
+    #   그 파일의 waypoint_file 한 줄만 고치면 된다.
+    #   인자를 주면 그것만 이번 한 번 덮어쓴다 (파일명만 줘도 된다).
     WP="${1:-}"
-    [ -n "$WP" ] || {
-        err "웨이포인트 파일이 필요합니다:  ./drive.sh stanley <경로.csv>"
-        echo "  트랙 가져오기:"
-        echo "    ros2 run mlcs_mpc import_track --ros-args \\"
-        echo "        -p src:=<트랙폴더> -p out:=$SCRIPT_DIR/src/mlcs_mpc/waypoints/track_5.csv"
-        exit 1
-    }
-    [ -f "$WP" ] || { err "파일이 없습니다: $WP"; exit 1; }
-    WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"
+    if [ -n "$WP" ] && [ -f "$WP" ]; then
+        WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"
+    fi
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
     start_bringup
 
-    log "Stanley 자율주행  웨이포인트: ${GRN}$WP${RST}  속도 ${SPEED} m/s"
+    if [ -n "$WP" ]; then
+        log "Stanley 자율주행  웨이포인트: ${GRN}$WP${RST}  속도 ${SPEED} m/s"
+    else
+        log "Stanley 자율주행  ${GRN}config/track.yaml${RST} 을 따릅니다"
+        log "  트랙: $(grep -m1 'waypoint_file:' "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml" | sed "s/.*'\(.*\)'.*/\1/")"
+    fi
     ros2 launch mlcs_mpc stanley.launch.py \
-        waypoints:="$WP" target_speed:="$SPEED" \
+        waypoints:="$WP" target_speed:="${MLCS_SPEED:-}" \
         debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)" \
         >/tmp/mlcs_stanley.log 2>&1 &
     PIDS="$PIDS $!"
@@ -617,6 +621,16 @@ topics)
     echo "  노드:"
     ros2 node list 2>/dev/null | sed 's/^/    /'
     echo
+    ;;
+
+trackinfo)
+    # 주행 없이 트랙만 본다. 새 트랙을 넣었을 때 제일 먼저 돌릴 것.
+    load_ros; require_ws_pkg mlcs_mpc
+    # ★ 인자를 안 주면 -p 자체를 빼야 한다. 빈 값으로 넘기면
+    #   "Couldn't parse parameter override rule: '-p waypoint_file:='" 로 죽는다.
+    TI_ARGS=(--params-file "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml")
+    [ -n "${1:-}" ] && TI_ARGS+=(-p "waypoint_file:=$1")
+    ros2 run mlcs_mpc track_info --ros-args "${TI_ARGS[@]}"
     ;;
 
 stop)

@@ -64,7 +64,46 @@ class PathManager:
             self.load(waypoint_file)
 
     # ────────────────────────────────────────────────────────────────
+    def resolve(self, path):
+        """웨이포인트 경로를 푼다.
+
+        파일명만 줘도 찾게 한다. 그래야 config/track.yaml 에
+
+            waypoint_file: 'track_5.csv'
+
+        한 줄만 바꿔 트랙을 갈아끼울 수 있다. 절대경로를 적으면 장비마다,
+        워크스페이스 위치마다 달라져서 설정 파일을 공유할 수 없다.
+
+        찾는 순서:
+          1. 준 경로 그대로 (절대경로거나 현재 디렉터리 기준)
+          2. 설치된 패키지의 waypoints/    ← 보통 여기서 걸린다
+          3. 소스 트리의 waypoints/        (심링크 설치가 아닐 때 대비)
+        """
+        if not path:
+            return path
+        if os.path.isfile(path):
+            return path
+        if os.path.isabs(path):
+            return path          # 절대경로인데 없으면 그대로 두고 아래서 에러
+
+        cands = []
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            cands.append(os.path.join(
+                get_package_share_directory('mlcs_mpc'), 'waypoints', path))
+        except Exception:
+            pass
+        cands.append(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'waypoints', path))
+
+        for c in cands:
+            if os.path.isfile(c):
+                return c
+        return path              # 못 찾으면 원본 — load() 가 에러를 낸다
+
     def load(self, path):
+        path = self.resolve(path)
         if not os.path.isfile(path):
             self._err(f'파일이 없습니다: {path}')
             return False
