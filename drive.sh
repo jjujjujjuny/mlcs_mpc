@@ -384,15 +384,21 @@ stanley)
         log "Stanley 자율주행  ${GRN}config/track.yaml${RST} 을 따릅니다"
         log "  트랙: $(grep -m1 'waypoint_file:' "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml" | sed "s/.*'\(.*\)'.*/\1/")"
     fi
-    ros2 launch mlcs_mpc stanley.launch.py \
-        waypoints:="$WP" target_speed:="${MLCS_SPEED:-}" \
-        debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)" \
+    # ★ 빈 값을 'name:=' 로 넘기면 안 된다. ros2 launch 가 거부한다:
+    #     malformed launch argument 'waypoints:=', expected format '<name>:=<value>'
+    #   런치는 인자를 아예 안 주면 track.yaml 을 따르도록 되어 있으므로,
+    #   값이 있을 때만 넣는다. (-p 빈 값이 rcl 을 죽이는 것과 같은 함정)
+    ST_ARGS=(debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)")
+    [ -n "$WP" ] && ST_ARGS+=(waypoints:="$WP")
+    [ -n "${MLCS_SPEED:-}" ] && ST_ARGS+=(target_speed:="$MLCS_SPEED")
+    ros2 launch mlcs_mpc stanley.launch.py "${ST_ARGS[@]}" \
         >/tmp/mlcs_stanley.log 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
     echo
-    warn "차는 아직 출발하지 않습니다. 준비되면:"
-    echo "    ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool \"{data: true}\""
+    warn "차는 아직 출발하지 않습니다. 준비되면 다른 창에서:"
+    echo "    ./drive.sh go            # 출발"
+    echo "    ./drive.sh halt          # 정지 (노드는 유지)"
     echo
     log "로그: tail -f /tmp/mlcs_stanley.log"
     log "횡오차: ros2 topic echo /stanley/cross_track"
