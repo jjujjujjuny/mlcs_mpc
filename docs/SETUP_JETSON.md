@@ -433,6 +433,27 @@ ros2 topic pub --once /mpc/enabled std_msgs/msg/Bool "{data: true}"
 
 → `docs/CALIBRATION.md`
 
+### ④-2 RViz 로 주행 화면 보기
+
+**젯슨에서** 실행하고 NoMachine 으로 봅니다:
+
+```bash
+MLCS_TRACK=<트랙폴더> ./drive.sh rviz
+```
+
+> ⚠ 메인 PC(20.04/ROS 1)에서는 안 됩니다 — rviz2 가 없고 ROS 1↔ROS 2 는
+> 통신하지 않습니다. 젯슨 화면을 원격으로 가져오는 것이 가장 간단합니다.
+
+`ros-humble-desktop` 을 설치했다면 rviz2 가 이미 있습니다. `ros-base` 만
+깔았다면:
+
+```bash
+sudo apt install -y ros-humble-rviz2
+```
+
+NoMachine 이 느리면 RViz 좌측 Displays 에서 **Trail** 을 끄세요 (점이 계속
+쌓입니다). 그래도 느리면 `track_viz` 의 `trail_len` 을 500 으로 줄입니다.
+
 ### ⑤ 저속 실주행
 
 ```bash

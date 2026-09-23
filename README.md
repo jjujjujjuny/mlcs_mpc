@@ -101,7 +101,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
 | `./drive.sh log [태그]` | 주행 + **HyperPM 학습 데이터 기록** |
 | `./drive.sh mocapcal [spin\|straight]` | 마커 오프셋 측정 |
-| `./drive.sh rviz` | **RViz 시각화** (메인 PC 에서) |
+| `./drive.sh rviz` | **RViz 시각화** (젯슨에서 — NoMachine 으로) |
 | `./drive.sh topics` | 토픽 상태 점검 |
 | `./drive.sh stop` | 비상 정지 + 전부 종료 |
 
@@ -142,9 +142,13 @@ LB 로 오갈 수 있습니다. 수동일 때는 mux 우선순위(joystick 100 >
 트랙 좌표가 **mocap 글로벌 좌표계** 기준이라 별도 변환 없이 그대로 그려집니다.
 
 ```bash
-# 메인 PC 에서 (젯슨과 같은 ROS_DOMAIN_ID)
+# ★ 젯슨에서 실행하고 NoMachine 으로 봅니다
 MLCS_TRACK=/경로/deepracer_mpc_low_level/tracks/track_5 ./drive.sh rviz
 ```
+
+> ⚠ **메인 PC 에서는 안 됩니다.** Ubuntu 20.04 + ROS 1 Noetic 이라 rviz2 가
+> 없고, ROS 1 과 ROS 2 는 애초에 통신하지 않습니다 (TCPROS vs DDS).
+> 젯슨에서 띄우고 원격 데스크톱으로 화면만 가져오는 것이 가장 간단합니다.
 
 | 화면 요소 | 색 |
 |---|---|

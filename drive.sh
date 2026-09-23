@@ -12,7 +12,7 @@
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
-#     ./drive.sh rviz                RViz 시각화 (메인 PC 에서 실행)
+#     ./drive.sh rviz                RViz 시각화 (젯슨에서 — NoMachine 으로 본다)
 #     ./drive.sh topics              토픽 상태 점검
 #     ./drive.sh stop                비상 정지 + 전부 종료
 #
@@ -556,9 +556,28 @@ mocapcal)
     ;;
 
 rviz)
-    # ★ 메인 PC 에서 실행한다. 젯슨은 화면이 없거나 느리고, RViz 는
-    #   토픽만 받으면 되므로 같은 ROS_DOMAIN_ID 면 원격에서 보인다.
+    # ★ **젯슨에서** 실행하고 NoMachine 으로 본다.
+    #
+    #   메인 PC 는 Ubuntu 20.04 + ROS 1 Noetic 이라 rviz2 가 없고,
+    #   ROS 1 과 ROS 2 는 애초에 통신하지 않는다(DDS vs TCPROS).
+    #   ros1_bridge 를 쓰려 해도 20.04 에 ROS 2 가 있어야 하는데 없다.
+    #
+    #   그래서 젯슨에서 띄우고 원격 데스크톱으로 화면만 가져온다.
+    #   RViz 는 GPU 를 쓰므로 NoMachine 이 느리면 아래를 줄인다:
+    #     · Trail 디스플레이 끄기 (점이 계속 쌓인다)
+    #     · track_viz 의 trail_len 을 500 정도로
     load_ros
+    if [ -z "${DISPLAY:-}" ]; then
+        err "DISPLAY 가 없습니다 — SSH 로 접속하셨나요?"
+        err "  NoMachine 같은 원격 데스크톱으로 접속해서 실행하세요."
+        err "  (SSH 에서 쓰려면 ssh -X 로 접속)"
+        exit 1
+    fi
+    command -v rviz2 >/dev/null || {
+        err "rviz2 가 없습니다. ros-humble-desktop 을 설치하지 않은 경우입니다:"
+        err "  sudo apt install -y ros-humble-rviz2"
+        exit 1
+    }
     WP="${1:-$SCRIPT_DIR/src/mlcs_mpc/waypoints/track_5.csv}"
     RVIZ_CFG="$SCRIPT_DIR/src/mlcs_mpc/launch/track.rviz"
     trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
@@ -574,7 +593,7 @@ rviz)
         PIDS="$PIDS $!"
         sleep 1
     fi
-    log "RViz — Fixed Frame=map"
+    log "RViz — Fixed Frame=map  (NoMachine 화면으로 보세요)"
     exec rviz2 -d "$RVIZ_CFG"
     ;;
 
