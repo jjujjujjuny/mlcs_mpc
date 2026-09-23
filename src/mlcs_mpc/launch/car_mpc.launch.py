@@ -57,6 +57,10 @@ def generate_launch_description():
         DeclareLaunchArgument('safety', default_value='true',
                               description='경계 안전장치 사용'),
         DeclareLaunchArgument('rviz', default_value='false'),
+        DeclareLaunchArgument('viz', default_value='true',
+                              description='track_viz (RViz 용 트랙·차량 토픽)'),
+        DeclareLaunchArgument('track_dir', default_value='',
+                              description='경계까지 그리려면 원본 트랙 폴더'),
     ]
 
     mocap = Node(
@@ -78,9 +82,18 @@ def generate_launch_description():
             'require_enable': True,     # ★ 실차는 항상 출발 게이트를 건다
         }])
 
+    viz = Node(
+        package='mlcs_mpc', executable='track_viz', name='track_viz',
+        output='screen',
+        parameters=[safety_cfg, {
+            'waypoint_file': LaunchConfiguration('waypoints'),
+            'track_dir': LaunchConfiguration('track_dir'),
+        }],
+        condition=IfCondition(LaunchConfiguration('viz')))
+
     rviz = Node(
         package='rviz2', executable='rviz2', name='rviz2',
-        arguments=['-d', os.path.join(pkg, 'launch', 'mpc.rviz')],
+        arguments=['-d', os.path.join(pkg, 'launch', 'track.rviz')],
         condition=IfCondition(LaunchConfiguration('rviz')))
 
-    return LaunchDescription(args + [mocap, safety, mpc, rviz])
+    return LaunchDescription(args + [mocap, safety, mpc, viz, rviz])

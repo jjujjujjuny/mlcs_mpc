@@ -1,0 +1,115 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+    Tree Height: 700
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 30; 30; 34
+    Fixed Frame: map
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 20
+      Color: 70; 70; 75
+      Line Style:
+        Line Width: 0.01
+        Value: Lines
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Track
+      Enabled: true
+      Topic:
+        Value: /track/markers
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Path
+      Name: Centerline
+      Enabled: true
+      Topic:
+        Value: /track/centerline
+        Durability Policy: Transient Local
+      Color: 60; 220; 90
+      Line Style: Lines
+      Line Width: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: LeftBound
+      Enabled: true
+      Topic:
+        Value: /track/left_bound
+        Durability Policy: Transient Local
+      Color: 235; 235; 235
+      Line Style: Lines
+      Line Width: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: RightBound
+      Enabled: true
+      Topic:
+        Value: /track/right_bound
+        Durability Policy: Transient Local
+      Color: 235; 235; 235
+      Line Style: Lines
+      Line Width: 0.02
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Car
+      Enabled: true
+      Topic:
+        Value: /viz/car
+    - Class: rviz_default_plugins/Path
+      Name: Trail
+      Enabled: true
+      Topic:
+        Value: /viz/trail
+      Color: 255; 190; 40
+      Line Style: Lines
+      Line Width: 0.015
+    - Class: rviz_default_plugins/Path
+      Name: ReferencePath
+      Enabled: true
+      Topic:
+        Value: /mpc/reference_path
+      Color: 90; 180; 255
+      Line Style: Lines
+      Line Width: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: PredictedPath
+      Enabled: true
+      Topic:
+        Value: /mpc/predicted_path
+      Color: 255; 60; 60
+      Line Style: Lines
+      Line Width: 0.025
+    - Class: rviz_default_plugins/Odometry
+      Name: State
+      Enabled: false
+      Topic:
+        Value: /mpc/state
+      Keep: 1
+      Shape:
+        Shaft Length: 0.2
+        Shaft Radius: 0.02
+        Head Length: 0.08
+        Head Radius: 0.05
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Marker Scale: 0.3
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: TopDown
+      Target Frame: map
+      Scale: 120
+      X: 0
+      Y: 0
+      Angle: 0
+Window Geometry:
+  Height: 900
+  Width: 1400

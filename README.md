@@ -101,6 +101,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | `./drive.sh cal <모드>` | 캘리브레이션 (neutral/speed/steer) |
 | `./drive.sh log [태그]` | 주행 + **HyperPM 학습 데이터 기록** |
 | `./drive.sh mocapcal [spin\|straight]` | 마커 오프셋 측정 |
+| `./drive.sh rviz` | **RViz 시각화** (메인 PC 에서) |
 | `./drive.sh topics` | 토픽 상태 점검 |
 | `./drive.sh stop` | 비상 정지 + 전부 종료 |
 
@@ -136,6 +137,28 @@ ros2 launch mlcs_mpc joystick.launch.py joy:=false             # B
 LB 로 오갈 수 있습니다. 수동일 때는 mux 우선순위(joystick 100 > navigation 10)로
 사람 입력이 MPC 를 덮어씁니다.
 
+### 주행 화면 보기 (RViz)
+
+트랙 좌표가 **mocap 글로벌 좌표계** 기준이라 별도 변환 없이 그대로 그려집니다.
+
+```bash
+# 메인 PC 에서 (젯슨과 같은 ROS_DOMAIN_ID)
+MLCS_TRACK=/경로/deepracer_mpc_low_level/tracks/track_5 ./drive.sh rviz
+```
+
+| 화면 요소 | 색 |
+|---|---|
+| 트랙 면 / 좌우 경계 | 회색 / 흰색 |
+| 중심선 | 초록 |
+| 차량 (실측 치수) + 앞방향 | 파랑 + 주황 화살표 |
+| 실제 주행 자취 | 노랑 |
+| 컨트롤러 참조 경로 | 하늘 |
+| MPC 예측 궤적 | 빨강 |
+| safety 경계 | 빨간 사각형 |
+
+> `MLCS_TRACK` 을 주면 **좌우 경계와 트랙 면**까지 그립니다. 폭 0.6m 트랙에
+> 폭 0.27m 차량이면 좌우 여유가 16cm 뿐이라, 면으로 봐야 이탈이 보입니다.
+
 ### 경로 만들기
 
 ```bash
@@ -159,6 +182,7 @@ src/mlcs_mpc/mlcs_mpc/
   mpc_node.py        ★ 메인 컨트롤러
   stanley_node.py    Stanley 추종 (게인 2개 — 배관 검증/베이스라인)
   import_track.py    DeepRacer 트랙 → 웨이포인트 (+주행가능성 검사)
+  track_viz.py       트랙·차량·궤적 RViz 시각화
   mocap_bridge.py    NatNet pose → 상태 추정 (칼만 필터)
   mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
   sim_bridge.py      시뮬 odom → 같은 인터페이스

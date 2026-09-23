@@ -41,6 +41,12 @@ def generate_launch_description():
         DeclareLaunchArgument('mocap', default_value='true',
                               description='mocap_bridge 를 여기서 띄운다'),
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('viz', default_value='true',
+                              description='track_viz 를 띄운다 (RViz 용 토픽)'),
+        DeclareLaunchArgument('track_dir', default_value='',
+                              description='경계까지 그리려면 원본 트랙 폴더'),
+        DeclareLaunchArgument('rviz', default_value='false',
+                              description='RViz 도 같이 띄운다 (젯슨에선 보통 false)'),
     ]
 
     mocap = Node(
@@ -65,4 +71,18 @@ def generate_launch_description():
             'require_enable': True,
         }])
 
-    return LaunchDescription(args + [mocap, safety, stanley])
+    viz = Node(
+        package='mlcs_mpc', executable='track_viz', name='track_viz',
+        output='screen',
+        parameters=[safety_cfg, {
+            'waypoint_file': LaunchConfiguration('waypoints'),
+            'track_dir': LaunchConfiguration('track_dir'),
+        }],
+        condition=IfCondition(LaunchConfiguration('viz')))
+
+    rviz = Node(
+        package='rviz2', executable='rviz2', name='rviz2',
+        arguments=['-d', os.path.join(pkg, 'launch', 'track.rviz')],
+        condition=IfCondition(LaunchConfiguration('rviz')))
+
+    return LaunchDescription(args + [mocap, safety, stanley, viz, rviz])

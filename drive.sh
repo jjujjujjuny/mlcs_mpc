@@ -12,6 +12,7 @@
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
+#     ./drive.sh rviz                RViz 시각화 (메인 PC 에서 실행)
 #     ./drive.sh topics              토픽 상태 점검
 #     ./drive.sh stop                비상 정지 + 전부 종료
 #
@@ -21,6 +22,7 @@
 #     MLCS_NO_BRINGUP=1             브링업을 안 띄운다 (이미 떠 있을 때)
 #     MLCS_DEBUG=1                  조이스틱 값 출력
 #     MLCS_DATA=~/mlcs_data         데이터 로그 저장 폴더
+#     MLCS_TRACK=<트랙폴더>          경계까지 그릴 원본 트랙 폴더
 # ============================================================================
 set -u
 
@@ -551,6 +553,29 @@ mocapcal)
     fi
     ros2 run mlcs_mpc mocap_calibrate --ros-args \
         -p mocap_topic:="$MT" -p mode:="$CM"
+    ;;
+
+rviz)
+    # ★ 메인 PC 에서 실행한다. 젯슨은 화면이 없거나 느리고, RViz 는
+    #   토픽만 받으면 되므로 같은 ROS_DOMAIN_ID 면 원격에서 보인다.
+    load_ros
+    WP="${1:-$SCRIPT_DIR/src/mlcs_mpc/waypoints/track_5.csv}"
+    RVIZ_CFG="$SCRIPT_DIR/src/mlcs_mpc/launch/track.rviz"
+    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+
+    # 젯슨이 이미 track_viz 를 띄웠으면 그 토픽을 쓰고, 아니면 여기서 띄운다
+    if ros2 topic list 2>/dev/null | grep -qx /track/centerline; then
+        log "젯슨의 track_viz 토픽을 사용합니다"
+    else
+        log "track_viz 를 로컬에서 띄웁니다 (트랙 표시용)"
+        ros2 run mlcs_mpc track_viz --ros-args \
+            -p waypoint_file:="$WP" \
+            -p track_dir:="${MLCS_TRACK:-}" >/tmp/mlcs_viz.log 2>&1 &
+        PIDS="$PIDS $!"
+        sleep 1
+    fi
+    log "RViz — Fixed Frame=map"
+    exec rviz2 -d "$RVIZ_CFG"
     ;;
 
 topics)
