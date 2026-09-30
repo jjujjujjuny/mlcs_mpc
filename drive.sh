@@ -8,6 +8,8 @@
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
 #     ./drive.sh stanley [경로.csv]  Stanley 자율주행 (배관 검증용, 게인 2개)
 #                                    인자 없으면 config/track.yaml 을 따른다
+#                       --bag        주행 데이터를 rosbag 으로 기록
+#                                    (횡오차·상태·명령 — 나중에 분석용)
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
@@ -26,6 +28,7 @@
 #     MLCS_SPEED=1.5                수동 조종 최고 속도 (m/s)
 #     MLCS_NO_BRINGUP=1             브링업을 안 띄운다 (이미 떠 있을 때)
 #     MLCS_NO_NATNET=1              natnet 을 안 띄운다 (다른 창에서 띄웠을 때)
+#     MLCS_SAFETY=1                 ★ 안전장치(경계 감시)를 **켠다** — 기본은 꺼짐
 #     MLCS_MOTIVE_IP=192.168.1.3    Motive PC 의 IP
 #     MLCS_DEBUG=1                  조이스틱 값 출력
 #     MLCS_DATA=~/mlcs_data         데이터 로그 저장 폴더
@@ -36,6 +39,23 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${MLCS_WS:-$HOME/f1tenth_ws}"
 SPEED="${MLCS_SPEED:-1.5}"
+# ★ 속도는 반드시 소수점을 붙여 넘긴다.
+#
+#   ROS 2 launch 는 인자 문자열을 보고 타입을 추론한다. MLCS_SPEED=2 처럼
+#   정수로 주면 INTEGER 로 넘어가는데, 노드는 declare_parameter('max_speed', 1.5)
+#   로 DOUBLE 을 기대하므로 기동하다 죽는다:
+#
+#       InvalidParameterTypeException: Trying to set parameter 'max_speed'
+#           to '2' of type 'INTEGER', expecting type 'DOUBLE'
+#
+#   조이스틱 노드가 통째로 안 뜨므로 수동 조종이 아예 안 된다.
+#   2026-09-24 에 MLCS_SPEED=2 로 실제로 겪었다.
+case "$SPEED" in
+    *.*) ;;
+    *)   SPEED="${SPEED}.0" ;;
+esac
+SPEED_SET=0
+[ -n "${MLCS_SPEED:-}" ] && SPEED_SET=1
 DEBUG="${MLCS_DEBUG:-0}"
 MOTIVE_IP="${MLCS_MOTIVE_IP:-192.168.1.3}"
 
@@ -228,6 +248,9 @@ cleanup () {
     [ "$_CLEANED" = "1" ] && return
     _CLEANED=1
     echo
+    # ★ 기록을 **먼저** 닫는다. 노드를 죽인 뒤에 닫으면 마지막 구간이
+    #   비거나 메타데이터가 깨진다.
+    stop_bag
     log "종료 중 — 정지 명령을 보냅니다"
     stop_all
     for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
@@ -256,7 +279,7 @@ NATNET_PGID=""
 #   ★ Motive 2.x 를 쓴다면 patches/apply.sh 를 먼저 적용해야 한다.
 #     안 하면 노드가 SIGABRT 로 즉사한다 (patches/README.md 참고).
 natnet_running () {
-    ros2 topic list 2>/dev/null | grep -qE '^/[A-Za-z0-9_]+/pose$'
+    pgrep -f '/lib/natnet_ros2/natnet_ros2_node' >/dev/null 2>&1
 }
 
 start_natnet () {
@@ -278,21 +301,168 @@ start_natnet () {
         >/tmp/mlcs_natnet.log 2>&1 &
     NATNET_PID=$!
     PIDS="$PIDS $NATNET_PID"
-    sleep 4
+    sleep 5
     NATNET_PGID="$(ps -o pgid= -p "$NATNET_PID" 2>/dev/null | tr -d ' ')"
 
+    # ★ 한 번 더 시도한다 — 재연결이 간헐적으로 실패한다.
+    #
+    #   유니캐스트 NatNet 은 Motive 가 접속 클라이언트를 기억한다. drive.sh stop
+    #   으로 죽인 직후 몇 초 만에 다시 붙으면, 이전 세션이 정리되기 전이라
+    #   서버 설명을 못 받고 SDK 가 assert 로 죽는다:
+    #
+    #       ValidateHostConnection(): Assertion `HostPresent' failed  (exit -6)
+    #
+    #   Motive 자체는 멀쩡하다 — 같은 순간 커맨드 포트를 직접 찔러보면
+    #   "Motive / 2.3.0.1 / NatNet 3.1.0.0" 이 정상 응답한다.
+    #   그래서 실패를 보고하기 전에 잠시 쉬었다 한 번 더 붙어 본다.
+    #   2026-09-30 에 캘리브레이션 중간에 이걸로 한 번 날렸다.
+    if ! natnet_running; then
+        warn "natnet 이 안 떴습니다 — 잠시 뒤 다시 시도합니다"
+        [ -n "${NATNET_PGID:-}" ] && kill -9 "-$NATNET_PGID" 2>/dev/null
+        sleep 5
+        setsid ros2 launch natnet_ros2 natnet_ros2.launch.py \
+            serverIP:="$MOTIVE_IP" clientIP:="$CLIENT_IP" serverType:=unicast \
+            pub_rigid_body:=true activate:=true \
+            >/tmp/mlcs_natnet.log 2>&1 &
+        NATNET_PID=$!
+        PIDS="$PIDS $NATNET_PID"
+        sleep 6
+        NATNET_PGID="$(ps -o pgid= -p "$NATNET_PID" 2>/dev/null | tr -d ' ')"
+    fi
+
     if natnet_running; then
-        log "  ✓ mocap 토픽 확인"
+        log "  ✓ mocap 드라이버 확인"
     else
-        warn "mocap 토픽이 아직 안 보입니다 — /tmp/mlcs_natnet.log 를 보세요."
+        warn "mocap 드라이버가 안 뜹니다 — /tmp/mlcs_natnet.log 를 보세요."
         warn "  Motive 의 Data Streaming 이 켜져 있는지, Local Interface 가"
         warn "  ${MOTIVE_IP} 인지 확인하세요."
     fi
 }
 
+# ── mocap 브릿지 ─────────────────────────────────────────────────────────────
+#
+#   ★ 이미 떠 있으면 절대 또 띄우지 않는다.
+#
+#     같은 이름(/mocap_bridge)의 노드가 둘 이상이면 DDS 매칭이 꼬인다.
+#     2026-09-30 실측: 브릿지가 3개 떠 있었고 /mpc/state 가 271Hz(≈3배)로
+#     나오는데도 calibrate 는 "mocap 상태 대기 중" 에서 영영 멈춰 있었다.
+#     토픽은 멀쩡히 보이니 원인을 찾기가 아주 어렵다.
+#     (앞서 mocap_bridge 중복으로 스탬프 dt=0 이 나던 것과 같은 문제)
+# ★ ros2 node list 를 쓰면 안 된다 — 데몬 캐시라 죽은 노드가 한동안 남는다
+#   (joy_node_running 주석 참고). 그걸로 판단하면 "이미 떠 있다" 며 안 띄우고,
+#   실제로는 아무것도 없어서 차가 안 움직인다. 2026-09-30 에 실제로 겪었다:
+#   캘리브레이션이 평균 속도 -0.000 m/s 로 나왔다.
+mocap_bridge_running () {
+    pgrep -f '/lib/mlcs_mpc/mocap_bridge' >/dev/null 2>&1
+}
+
+start_mocap_bridge () {
+    if mocap_bridge_running; then
+        log "mocap 브릿지가 이미 떠 있습니다 — 그대로 씁니다"
+        return
+    fi
+    log "mocap 브릿지..."
+    ros2 run mlcs_mpc mocap_bridge --ros-args \
+        --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml" \
+        >/tmp/mlcs_mocap.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 2
+}
+
+# ── 주행 기록 (rosbag) ───────────────────────────────────────────────────────
+#
+#   ./drive.sh stanley --bag   처럼 쓴다.
+#
+#   ★ 왜 필요한가 — 로그만으로는 "잘 돌았는지" 를 알 수 없다.
+#     stanley 로그에는 막힌 사유(정지: ...)만 찍히고, 정작 품질 지표인
+#     횡오차는 /stanley/cross_track 으로 흘러갈 뿐 어디에도 안 남는다.
+#     2026-09-30 주행이 그랬다: 57.7초 무사고였다는 것만 알 수 있었고
+#     "직진에서 바깥으로 치우친다" 는 체감을 숫자로 확인할 수 없었다.
+# ── 실행별 로그 보존 ─────────────────────────────────────────────────────────
+#
+#   ★ /tmp/mlcs_stanley.log 를 매번 '>' 로 덮어쓰면 **직전 실행의 증거가
+#     사라진다.** 2026-09-30 에 이걸로 막혔다: --bag 을 붙인 두 번의 주행이
+#     안 돌았는데, 그 사이에 --bag 없이 한 번 더 띄우는 바람에 로그가 덮여
+#     차단 사유(정지: ...)를 영영 확인할 수 없었다. bag 에는 enabled/manual 이
+#     정상으로 찍혀 있어서 "왜 안 돌았나" 를 데이터로 좁히지 못했다.
+#
+#   그래서 실행마다 타임스탬프 파일에 쓰고, 문서에 적힌 /tmp 경로는
+#   그 파일을 가리키는 심링크로 유지한다. tail -f 사용법은 그대로 두면서
+#   지난 실행 기록이 남는다.
+run_log () {          # $1 = 이름 (stanley / mpc / bringup)
+    local dir="${MLCS_DATA:-$HOME/mlcs_data}/logs"
+    mkdir -p "$dir"
+    local f="$dir/$(date +%Y%m%d_%H%M%S)_$1.log"
+    ln -sfn "$f" "/tmp/mlcs_$1.log"
+    echo "$f"
+}
+
+BAG_PID=""
+BAG_DIR=""
+
+start_bag () {
+    [ "${BAG:-0}" = "1" ] || return 0
+    local base="${MLCS_DATA:-$HOME/mlcs_data}/bags"
+    mkdir -p "$base"
+    BAG_DIR="$base/$(date +%Y%m%d_%H%M%S)_${MODE}"
+    log "기록 시작 → ${GRN}${BAG_DIR}${RST}"
+    # 제어 품질을 되짚는 데 필요한 것만 담는다. /car/pose 와 /sensors/core 는
+    # "제어기가 본 것" 과 "차가 실제로 한 것" 을 대조하려고 넣는다.
+    setsid ros2 bag record -o "$BAG_DIR" \
+        /stanley/cross_track /mpc/state /mpc/reference_path \
+        /drive /ackermann_cmd /teleop \
+        /commands/motor/speed /commands/servo/position \
+        /car/pose /sensors/core /odom \
+        /mpc/enabled /mpc/manual /mocap/valid \
+        >/tmp/mlcs_bag.log 2>&1 &
+    BAG_PID=$!
+    sleep 2
+}
+
+stop_bag () {
+    [ -n "${BAG_PID:-}" ] || return 0
+    # ★ SIGINT 로 끝내야 한다. SIGKILL 이면 메타데이터가 안 써져서
+    #   bag 이 열리지 않는다. 다 쓸 시간을 준다.
+    kill -INT "$BAG_PID" 2>/dev/null
+    for _ in $(seq 1 20); do
+        kill -0 "$BAG_PID" 2>/dev/null || break
+        sleep 0.25
+    done
+    kill -9 "$BAG_PID" 2>/dev/null
+    if [ -d "${BAG_DIR:-}" ]; then
+        log "기록 저장됨: ${GRN}${BAG_DIR}${RST}"
+        log "  분석:  ros2 bag info $BAG_DIR"
+    fi
+    BAG_PID=""
+}
+
+bringup_running () {
+    pgrep -f '/lib/vesc_driver/vesc_driver_node' >/dev/null 2>&1
+}
+
 start_bringup () {
     if [ "${MLCS_NO_BRINGUP:-0}" = "1" ]; then
         log "브링업 생략 (MLCS_NO_BRINGUP=1)"
+        return
+    fi
+    # ★ 이미 떠 있으면 절대 또 띄우지 않는다.
+    #
+    #   2026-09-23 실측: 다른 창에서 ./drive.sh joy 를 돌리는 중에
+    #   ./drive.sh stanley 를 실행했더니 브링업이 두 벌 떴다.
+    #
+    #       /ackermann_mux         ×2
+    #       /ackermann_to_vesc_node ×2
+    #       /vesc_to_odom_node      ×2
+    #
+    #   vesc_driver 는 시리얼이 배타적이라 하나만 살아남지만, mux 와
+    #   ackermann_to_vesc 는 **둘 다 VESC 에 명령을 쏜다.** 게다가 같은
+    #   이름의 노드가 둘이면 DDS 매칭이 꼬인다 (mocap_bridge 로 이미 겪었다).
+    #
+    #   joy 를 Ctrl+C 로 내려도 ros2 launch 만 죽고 자식 노드는 고아로
+    #   남아서, 겉보기엔 아무것도 안 도는데 실제로는 살아 있었다.
+    if bringup_running; then
+        log "브링업이 이미 떠 있습니다 — 그대로 씁니다"
+        warn "  다른 창의 drive.sh 를 아직 안 내렸다면 먼저 내리세요."
         return
     fi
     log "차량 브링업 (VESC + mux)..."
@@ -307,7 +477,7 @@ start_bringup () {
     #
     #   그래서 브링업은 SIGINT 경로 밖에 두고, cleanup 이 ① 정지 명령을
     #   먼저 보내고 ② 그 다음에 프로세스 그룹째로 죽인다.
-    setsid ros2 launch f1tenth_stack bringup_launch.py >/tmp/mlcs_bringup.log 2>&1 &
+    setsid ros2 launch f1tenth_stack bringup_launch.py >"$(run_log bringup)" 2>&1 &
     BRINGUP_PID=$!
     PIDS="$PIDS $BRINGUP_PID"
     kill_bringup_joy &               # ★ launch 와 동시에 시작 (위 주석 참고)
@@ -327,6 +497,19 @@ require_ws_pkg () {
 # ── 모드 ────────────────────────────────────────────────────────────────────
 MODE="${1:-help}"
 shift 2>/dev/null || true
+
+# ★ --bag 은 어디에 붙어도 되게 한다. 나머지 인자는 그대로 남긴다.
+#     ./drive.sh stanley --bag
+#     ./drive.sh stanley other.csv --bag
+BAG=0
+_ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --bag) BAG=1 ;;
+        *)     _ARGS+=("$a") ;;
+    esac
+done
+set -- "${_ARGS[@]+"${_ARGS[@]}"}"
 
 case "$MODE" in
 
@@ -390,11 +573,33 @@ stanley)
     #   값이 있을 때만 넣는다. (-p 빈 값이 rcl 을 죽이는 것과 같은 함정)
     ST_ARGS=(debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)")
     [ -n "$WP" ] && ST_ARGS+=(waypoints:="$WP")
-    [ -n "${MLCS_SPEED:-}" ] && ST_ARGS+=(target_speed:="$MLCS_SPEED")
+    [ "$SPEED_SET" = 1 ] && ST_ARGS+=(target_speed:="$SPEED")
+    # ★ 안전장치는 **기본이 꺼짐**이다 (2026-09-30).
+    #
+    #   safety_node 의 비상정지에 리셋 경로가 없어서(_trip 이 래치하고 20Hz 로
+    #   /mpc/enabled=false 를 계속 쏜다), 한 번 걸리면 재시작 말고는 방법이
+    #   없었다. 트랙이 경계에 바짝 붙어 허용 횡오차가 34cm 뿐이라 정상
+    #   주행 중에도 걸렸다.
+    #
+    #   리셋 경로를 넣으면 기본값을 다시 켜짐으로 되돌릴 것.
+    if [ "${MLCS_SAFETY:-0}" = "1" ]; then
+        ST_ARGS+=(safety:=true)
+        log "안전장치 ${GRN}켜짐${RST} (MLCS_SAFETY=1) — 경계 ±2.5m, 허용 횡오차 34cm"
+        warn "  비상정지에 리셋 경로가 없습니다. 걸리면 Ctrl+C 후 재실행하세요."
+    else
+        ST_ARGS+=(safety:=false)
+        echo
+        warn "${RED}${BLD}════════ 안전장치 꺼짐 ════════${RST}"
+        warn "  경계 감시가 없습니다. 차가 트랙을 벗어나도 아무도 안 세웁니다."
+        warn "  ${BLD}킬스위치를 손에 들고, 조이스틱 START(비상정지)를 기억하세요.${RST}"
+        warn "  켜려면  MLCS_SAFETY=1 ./drive.sh stanley"
+        echo
+    fi
     ros2 launch mlcs_mpc stanley.launch.py "${ST_ARGS[@]}" \
-        >/tmp/mlcs_stanley.log 2>&1 &
+        >"$(run_log stanley)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
+    start_bag
     echo
     warn "차는 아직 출발하지 않습니다. 준비되면 다른 창에서:"
     echo "    ./drive.sh go            # 출발"
@@ -421,9 +626,10 @@ mpc)
 
     log "MPC 자율주행  웨이포인트: ${GRN}$WP${RST}"
     ros2 launch mlcs_mpc car_mpc.launch.py \
-        waypoints:="$WP" target_speed:="$SPEED" >/tmp/mlcs_mpc.log 2>&1 &
+        waypoints:="$WP" target_speed:="$SPEED" >"$(run_log mpc)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
+    start_bag
 
     echo
     warn "차는 아직 출발하지 않습니다. LB 로 자율 전환하세요."
@@ -521,20 +727,28 @@ cal)
     esac
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
+    start_natnet
     start_bringup
 
-    log "mocap 브릿지..."
-    ros2 run mlcs_mpc mocap_bridge --ros-args \
-        --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml" \
-        >/tmp/mlcs_mocap.log 2>&1 &
-    PIDS="$PIDS $!"
-    sleep 2
+    start_mocap_bridge
 
-    if ! timeout 5 ros2 topic echo /mpc/state --once >/dev/null 2>&1; then
+    # ★ 한 번만 보고 포기하면 안 된다. natnet → 브링업 → mocap_bridge 가
+    #   차례로 뜨고 DDS 디스커버리까지 끝나야 /mpc/state 가 잡히는데,
+    #   그게 5초를 넘긴다 (2026-09-30 실측: 단발 5초 확인은 실패,
+    #   조금 더 기다리면 198Hz 로 멀쩡히 나온다). 20초까지 재시도한다.
+    log "/mpc/state 대기 중..."
+    STATE_OK=0
+    for _ in $(seq 1 4); do
+        if timeout 5 ros2 topic echo /mpc/state --once >/dev/null 2>&1; then
+            STATE_OK=1; break
+        fi
+    done
+    if [ "$STATE_OK" != 1 ]; then
         err "/mpc/state 가 오지 않습니다 — mocap 연동을 먼저 확인하세요."
         err "  ./drive.sh mocap   으로 점검하고 docs/SETUP_JETSON.md 5절 참고"
         exit 1
     fi
+    log "  ✓ /mpc/state 확인"
 
     echo
     warn "${BLD}킬스위치를 손에 드세요. 차가 움직입니다.${RST}"
@@ -714,7 +928,53 @@ go)
     #   -t 10 -r 20 = 0.5초간 10번. 한 번 놓쳐도 다음 것이 간다.
     if timeout 12 ros2 topic pub -t 10 -r 20 -w 1 /mpc/enabled \
             std_msgs/msg/Bool '{data: true}' >/dev/null 2>&1; then
-        log "${GRN}출발${RST} — 세우려면  ./drive.sh halt"
+        log "${GRN}출발 신호 발행${RST} — 세우려면  ./drive.sh halt"
+
+        # ★ enabled 만으로는 안 나간다. 컨트롤러는 manual 을 **먼저** 본다
+        #   (stanley_node._blocked): 사람이 조종권을 쥐고 있으면 enabled 여도
+        #   막힌다. joystick_teleop 은 /mpc/manual=true 로 시작하므로,
+        #   조이스틱 LB 로 조종권을 넘기기 전까지 차는 가만히 있는다.
+        #
+        #   여기서 알려주지 않으면 "go 했는데 왜 안 가지" 로 한참 헤맨다.
+        #   실제로 그랬다 (2026-09-23).
+        # ★ 래치 토픽은 --qos-durability 만으로는 안 잡힌다.
+        #   --qos-reliability reliable 까지 줘야 퍼블리셔와 매칭된다.
+        MANUAL=$(timeout 8 ros2 topic echo /mpc/manual --once \
+                     --qos-durability transient_local \
+                     --qos-reliability reliable 2>/dev/null \
+                 | grep -m1 'data:' | awk '{print $2}')
+        if [ "${MANUAL:-}" = "true" ]; then
+            echo
+            warn "${BLD}아직 수동 조종 상태입니다 — 차는 안 나갑니다.${RST}"
+            warn "  조이스틱 ${BLD}LB${RST} 를 눌러 조종권을 넘기세요."
+            warn "  (컨트롤러는 /mpc/manual 을 /mpc/enabled 보다 먼저 봅니다)"
+        elif [ -z "${MANUAL:-}" ]; then
+            warn "/mpc/manual 을 못 읽었습니다 — 조이스틱이 안 떠 있을 수 있습니다."
+            warn "  안 나가면 조이스틱 LB 를 눌러 보세요."
+        fi
+
+        # ★ safety_node 의 비상정지는 **영구 래치**다 (safety_node._trip).
+        #   한 번 걸리면 tripped 를 되돌리는 경로가 없고, 20Hz 로
+        #   /mpc/enabled=false 를 계속 쏜다. go 가 true 를 보내도
+        #   즉시 덮어써져서 "출발/정지" 가 번갈아 찍히고 차는 안 나간다.
+        #
+        #   ⚠ /mpc/enabled 를 되읽어 판정하면 안 된다. 그 토픽을 래치로
+        #     발행하는 건 safety_node 뿐이라, 안전장치를 끄면 퍼블리셔가
+        #     0 이 되고 echo 가 그냥 타임아웃한다 — "값 없음" 과 "false" 를
+        #     구분하지 못해 **오탐이 났다** (2026-09-24, 안전장치를 껐는데
+        #     "트립됐다" 고 알림).
+        #
+        #   그래서 노드가 떠 있는지 + 로그에 트립이 찍혔는지로 본다.
+        #   로그는 실행할 때마다 '>' 로 덮어쓰므로 이전 주행 기록은 안 섞인다.
+        if ros2 node list 2>/dev/null | grep -qx /safety_node \
+           && grep -q '비상 정지' /tmp/mlcs_stanley.log 2>/dev/null; then
+            echo
+            err "${BLD}출발 신호가 즉시 취소됐습니다 — safety_node 가 트립된 상태입니다.${RST}"
+            err "  비상정지는 한 번 걸리면 재시작 전까지 안 풀립니다."
+            err "  사유 확인:"
+            err "      grep '비상 정지' /tmp/mlcs_stanley.log | tail -3"
+            err "  복구: 주행 창에서 Ctrl+C 후 ./drive.sh stanley 다시 실행"
+        fi
     else
         err "발행이 확인되지 않았습니다 — 주행 노드가 받았는지 로그를 보세요."
         err "  노드 로그에 '▶ 출발 허가' 가 찍혀야 합니다."
@@ -782,6 +1042,11 @@ stop)
     #   직접 지목해야 한다 — 특히 joy_node 는 살아 있으면 다음 기동에서
     #   'joy_node 가 이미 떠 있다' 로 오인될 수 있다.
     kill_matching '/lib/joy/joy_node'
+    # ★ natnet 도 우리가 띄우므로 같이 내린다. stop 이 안 죽이면 다음
+    #   실행에서 start_natnet 이 "이미 떠 있습니다" 로 넘어가 버려서,
+    #   설정(Motive IP 등)을 바꿔도 반영되지 않는다 (2026-09-30 누락 발견).
+    kill_matching '/lib/natnet_ros2/'
+    kill_matching 'natnet_ros2.launch'
     kill_matching '/lib/vesc_driver/'
     kill_matching '/lib/vesc_ackermann/'
     kill_matching '/lib/ackermann_mux/'

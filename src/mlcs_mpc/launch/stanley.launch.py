@@ -45,7 +45,21 @@ def generate_launch_description():
                               description='Stanley 횡오차 게인. 비우면 stanley.yaml'),
         DeclareLaunchArgument('bench', default_value='false',
                               description='true 면 속도 0 — 거치대 확인용'),
-        DeclareLaunchArgument('safety', default_value='true'),
+        DeclareLaunchArgument(
+            'safety', default_value='false',
+            # ★ 기본값 false — 안전장치를 끈 채로 띄운다 (2026-09-30, 사용자 결정).
+            #
+            #   safety_node 의 비상정지는 한 번 걸리면 푸는 경로가 없다
+            #   (_trip 이 tripped=True 로 래치하고 20Hz 로 /mpc/enabled=false
+            #   를 계속 쏜다). 트랙이 안전 경계에 바짝 붙어 있어서 —
+            #   허용 횡오차가 34cm 뿐이다 — 정상 주행 중에도 걸렸고,
+            #   걸리면 재시작 말고는 방법이 없었다.
+            #
+            #   ⚠ 이제 차가 트랙을 벗어나도 아무도 안 세운다.
+            #     킬스위치와 조이스틱 START(비상정지)가 유일한 안전장치다.
+            #   되살리려면 safety:=true (drive.sh 는 MLCS_SAFETY=1).
+            #   리셋 경로를 넣기 전에는 다시 켜도 같은 문제가 재발한다.
+            description='경계 감시 safety_node 를 띄운다'),
         DeclareLaunchArgument('mocap', default_value='true',
                               description='mocap_bridge 를 여기서 띄운다'),
         DeclareLaunchArgument('debug', default_value='false'),

@@ -53,7 +53,11 @@ def generate_launch_description():
             description='joy_node 를 띄운다. bringup 을 이미 띄웠으면 false'),
         DeclareLaunchArgument(
             'device_id', default_value='0',
-            description='/dev/input/jsN 의 N'),
+            # ★ 이건 **SDL 인덱스**지 /dev/input/jsN 의 N 이 아니다.
+            #   2026-09-24 실측: 수신기를 다시 꽂아 장치가 js1 이 되었어도
+            #   device_id=0 이 정상이고, 1 을 주면 아무것도 안 열린다.
+            #   조이스틱이 하나면 항상 0 이다. 여러 개 꽂았을 때만 바꾼다.
+            description='SDL 조이스틱 인덱스 (jsN 의 N 이 아님). 보통 0'),
         DeclareLaunchArgument(
             'max_speed', default_value='1.5',
             description='수동 조종 최고 속도 (m/s)'),
