@@ -32,6 +32,7 @@ calibrate — mocap 을 자로 삼아 VESC 캘리브레이션 값을 측정한�
 """
 
 import math
+import sys
 
 import numpy as np
 import rclpy
@@ -104,6 +105,14 @@ class Calibrate(Node):
             self._publish(0.0, 0.0)
             self.done = True
             self._report()
+            # ★ 끝나면 실제로 종료한다.
+            #   전에는 done 만 세우고 rclpy.spin() 에 계속 머물렀다. 그러면
+            #   ① 조작자는 언제 끝났는지 모른 채 계속 기다리고,
+            #   ② _report() 의 print 가 블록 버퍼에 갇힌 채 안 나온다
+            #      (출력을 파일로 리다이렉트하면 프로세스가 끝나야 flush 된다).
+            #   2026-09-30: 측정은 멀쩡히 끝났는데 로그에는 "mocap 상태
+            #   대기 중" 만 남아 있어 실패한 줄 알았다.
+            rclpy.shutdown()
             return
 
         if self.mode == 'speed':
@@ -210,10 +219,20 @@ class Calibrate(Node):
             print(f'  등가 조향각    : {delta_eq:+.4f} rad '
                   f'({math.degrees(delta_eq):+.2f}°)')
             print()
+            # ★ 부호 — 실측으로 확인했다 (2026-09-30).
+            #
+            #   servo = gain·δ + offset 이므로, 명령 0 일 때의 실제 조향각이
+            #   δ_eq 라면 참 중립은  offset_true = offset − gain·δ_eq  다.
+            #   전에는 '+' 로 안내했는데, 그대로 적용했더니 편향이 두 배가 됐다
+            #   (-2.36° → -5.35°). 부호를 뒤집으니 맞았다.
             print(f'  ★ steering_angle_to_servo_offset 을 이만큼 보정하세요:')
-            print(f'    새 offset = 현재 offset + (gain × {delta_eq:+.4f})')
+            print(f'    새 offset = 현재 offset − (gain × {delta_eq:+.4f})')
             print(f'    예) gain=-1.2135, offset=0.5304 이면')
-            print(f'        → {0.5304 + (-1.2135) * delta_eq:.4f}')
+            print(f'        → {0.5304 - (-1.2135) * delta_eq:.4f}')
+            print()
+            print('    한 번에 안 맞으면 두 번 재서 외삽하는 편이 확실하다:')
+            print('      기울기 = (δ2-δ1)/(offset2-offset1),  '
+                  'offset_0 = offset1 - δ1/기울기')
             print()
             print('    부호가 헷갈리면: 차가 왼쪽으로 휘면 오른쪽으로 트림을 줘야 합니다.')
             print('    한 번 고치고 다시 재서 요레이트가 0 에 가까워지는지 확인하세요.')
@@ -222,6 +241,7 @@ class Calibrate(Node):
         print('  값을 config/vesc.yaml 과 config/vehicle.yaml 에 반영하세요.')
         print('  자세한 절차: docs/CALIBRATION.md')
         print('=' * 62 + '\n')
+        sys.stdout.flush()      # 리다이렉트 시 버퍼에 갇히지 않게
 
 
 def fit_circle(x, y):

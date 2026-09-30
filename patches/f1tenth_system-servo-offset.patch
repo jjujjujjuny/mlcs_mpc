@@ -1,0 +1,52 @@
+diff --git a/f1tenth_stack/config/vesc.yaml b/f1tenth_stack/config/vesc.yaml
+index 5531a64..95c24f5 100755
+--- a/f1tenth_stack/config/vesc.yaml
++++ b/f1tenth_stack/config/vesc.yaml
+@@ -2,12 +2,44 @@
+   # general parameters shared by all vesc-related nodes
+   ros__parameters:
+     # erpm (electrical rpm) = speed_to_erpm_gain * speed (meters / second) + speed_to_erpm_offset
+-    speed_to_erpm_gain: 4614.0
++    # ✅ 실측 보정 (2026-09-30) — ./drive.sh cal speed 1.0
++    #   1.000 m/s 명령 → 실제 0.965 m/s (3.49m / 3.62s), 오차 -3.50%
++    #   차가 명령보다 느리므로 같은 speed 에 더 큰 erpm 이 필요하다:
++    #       4614.0 × 1.0363 = 4781.5
++    speed_to_erpm_gain: 4781.5
+     speed_to_erpm_offset: 0.0
+ 
+     # servo value (0 to 1) =  steering_angle_to_servo_gain * steering angle (radians) + steering_angle_to_servo_offset
+-    steering_angle_to_servo_gain: -1.2135
+-    steering_angle_to_servo_offset: 0.5304
++    # ✅ 실측 보정 (2026-09-30) — ./drive.sh cal steer ±0.2
++    #
++    #   설정값 -1.2135 로는 명령보다 **37% 더 꺾였다**:
++    #       우 -0.2000 → 실제 -0.2691 (비 1.3457, 반경 1.196 m)
++    #       좌 +0.2000 → 실제 +0.2796 (비 1.3982, 반경 1.149 m)
++    #   좌우 비대칭 3.8% (0.60°) — 중립이 맞다는 교차확인이 된다.
++    #
++    #       -1.2135 / 1.3720(평균비) = -0.8845
++    #
++    #   ※ 중립 측정 2점 외삽으로 낸 실효 gain -0.9579 와 같은 방향이다.
++    #     (그쪽은 서보 2점만 쓴 거친 추정이라 이 값이 더 정확하다)
++    steering_angle_to_servo_gain: -0.8845
++    # ✅ 실측 보정 (2026-09-30) — ./drive.sh cal neutral
++    #
++    #   조향 0 을 명령하고 0.908 m/s 로 직진시켰더니 요레이트 -0.1134 rad/s,
++    #   선회반경 8.49 m 로 **우측으로 휘었다.** 등가 조향각 -0.0412 rad(-2.36°).
++    #
++    #       새 offset = 0.5304 + (-1.2135 × -0.0412) = 0.5804
++    #
++    #   ⚠ 첫 측정은 버렸다. 그때는 1.0 m/s 를 명령했는데 실측 0.241 m/s 로,
++    #     센서리스 기동 구간(600~1400 erpm)에 갇혀 버벅거리는 상태였다.
++    #     그 요레이트는 조향 편향이 아니라 코깅의 부산물이다.
++    #     VESC 의 foc_sl_erpm 을 2500 으로 되돌린 뒤 0.908 m/s 가 나왔고,
++    #     그 상태에서 다시 쟀다.
++    #   ★ 부호 주의 — calibrate 가 안내하는 식은 **반대**다.
++    #     0.5304 → 0.5804 (안내대로 + 방향) 로 바꿨더니 편향이 두 배가 됐다:
++    #         -2.36° → -5.35°  (선회반경 8.49m → 3.52m)
++    #     두 점으로 외삽해 실제 0 이 되는 값을 구했다:
++    #         기울기 -1.0440 rad/servo →  offset 0.4909
++    steering_angle_to_servo_offset: 0.4909
+ 
+     port: /dev/sensors/vesc
+     duty_cycle_min: 0.0
