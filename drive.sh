@@ -5,6 +5,7 @@
 #  사용법:
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
+#     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
 #     ./drive.sh stanley [경로.csv]  Stanley 자율주행 (배관 검증용, 게인 2개)
 #                                    인자 없으면 config/track.yaml 을 따른다
@@ -38,7 +39,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${MLCS_WS:-$HOME/f1tenth_ws}"
-SPEED="${MLCS_SPEED:-1.5}"
+SPEED="${MLCS_SPEED:-3.5}"
 # ★ 속도는 반드시 소수점을 붙여 넘긴다.
 #
 #   ROS 2 launch 는 인자 문자열을 보고 타입을 추론한다. MLCS_SPEED=2 처럼
@@ -548,6 +549,17 @@ bench)
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
     ;;
 
+servo)
+    # 조향 기계적 한계 찾기 — 서보 값을 키보드로 직접 민다 (tools/servo_sweep.py)
+    load_ros
+    trap cleanup EXIT INT TERM
+    start_bringup
+    log "${YLW}서보 한계 측정${RST} — 속도 명령 없음. 조향만 움직입니다."
+    warn "거치대 위에서. 바퀴가 더 안 돌거나 서보가 '지잉' 거리면 거기가 한계 — 바로 되돌리세요."
+    python3 "$SCRIPT_DIR/tools/servo_sweep.py" \
+        "$WS/src/f1tenth_system/f1tenth_stack/config/vesc.yaml"
+    ;;
+
 stanley)
     # ★ 인자 없이 실행하면 config/track.yaml 을 따른다. 트랙을 바꾸려면
     #   그 파일의 waypoint_file 한 줄만 고치면 된다.
@@ -1020,7 +1032,9 @@ trackinfo)
     load_ros; require_ws_pkg mlcs_mpc
     # ★ 인자를 안 주면 -p 자체를 빼야 한다. 빈 값으로 넘기면
     #   "Couldn't parse parameter override rule: '-p waypoint_file:='" 로 죽는다.
-    TI_ARGS=(--params-file "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml")
+    # vehicle.yaml — wheelbase / max_steer 를 실차 값으로 (안 주면 코드 기본 0.36)
+    TI_ARGS=(--params-file "$SCRIPT_DIR/src/mlcs_mpc/config/vehicle.yaml"
+             --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/track.yaml")
     [ -n "${1:-}" ] && TI_ARGS+=(-p "waypoint_file:=$1")
     ros2 run mlcs_mpc track_info --ros-args "${TI_ARGS[@]}"
     ;;
