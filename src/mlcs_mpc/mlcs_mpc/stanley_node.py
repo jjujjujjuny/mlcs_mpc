@@ -82,6 +82,8 @@ class StanleyNode(Node):
         self.declare_parameter('k_soft', 0.5)
         # 헤딩오차 항의 가중. 1.0 이 표준 Stanley.
         self.declare_parameter('k_heading', 1.0)
+        # ★ 곡률 전방보상 — 1.0 이면 이론값 그대로, 0 이면 끔
+        self.declare_parameter('k_curv', 1.0)
         # 조향 변화율 제한 (rad/s). 서보가 따라갈 수 있는 범위로.
         self.declare_parameter('max_steer_rate', 3.2)
 
@@ -108,6 +110,7 @@ class StanleyNode(Node):
         self.k_e = float(gp('k_e'))
         self.k_soft = float(gp('k_soft'))
         self.k_head = float(gp('k_heading'))
+        self.k_curv = float(gp('k_curv'))
         self.max_dsteer = float(gp('max_steer_rate'))
         self.state_timeout = float(gp('state_timeout'))
         self.require_enable = bool(gp('require_enable'))
@@ -233,10 +236,28 @@ class StanleyNode(Node):
         # ── 헤딩 오차 ───────────────────────────────────────────────
         theta_e = normalize_angle(ref_yaw - yaw)
 
-        # ── Stanley 제어법칙 ────────────────────────────────────────
+        # ── Stanley 제어법칙 + 곡률 전방보상 ────────────────────────
         #   부호: 차가 경로 왼쪽(e>0)이면 오른쪽으로 꺾어야 하므로 -atan
-        steer = self.k_head * theta_e + math.atan2(
-            -self.k_e * e, self.k_soft + abs(v))
+        #
+        #   ★ 전방보상이 없으면 곡률 구간에서 횡오차가 0 으로 안 간다.
+        #
+        #     기본 Stanley 는 조향을 오차(e, theta_e)로만 만든다. 그런데 곡률
+        #     kappa 인 경로를 **유지**하는 것만으로도 atan(L·kappa) 의 조향이
+        #     필요하다. 그 각도를 오차 항이 만들어내야 하므로, 평형점에서
+        #     e 가 0 이 아닌 값에 머문다 — 제어기 잘못이 아니라 구조다.
+        #
+        #     2026-09-30 실측: track_5(평균 곡률 0.573/m, 유지 조향 10.7°)에서
+        #     횡오차가 평균 -4.29cm, 표준편차 0.95cm 로 **부호가 100% 일정**했다.
+        #     마커 오프셋을 의심해 mocap 의 offset_y 를 4.3cm 넣어봤지만
+        #     평균이 -4.20cm 로 그대로였다 — 제어기가 같은 평형점으로 돌아왔다.
+        #     그래서 원인이 이것으로 확정됐다.
+        #
+        #   kappa 부호 규약은 e 와 같다 (왼쪽 선회가 +). 그대로 더하면 된다.
+        kappa = float(self.path.kappa[i])
+        steer_ff = math.atan(self.L * kappa)
+        steer = (self.k_head * theta_e
+                 + math.atan2(-self.k_e * e, self.k_soft + abs(v))
+                 + self.k_curv * steer_ff)
 
         # 조향 변화율 제한 — 서보가 못 따라가는 명령을 내지 않는다
         max_d = self.max_dsteer * self.dt
