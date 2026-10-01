@@ -98,6 +98,65 @@ CSV 의 폭 열은 차량 모델이 **읽지 않는다** — 스칼라 `cfg.trac
 → `tools/draw_track.py` 의 `--half-width` 기본값을 0.25 로 맞췄다.
   `track_5` 는 0.30 으로 만들어져 있어 다르다.
 
+## 트랙 파이프라인 — 저자들과 같은 2단계
+
+```
+<이름>.csv        x_m,y_m,w_tr_right_m,w_tr_left_m      ← 원본 (한쪽씩 반폭)
+   ↓  mpc/tracks/track_preprocesor.py : TrackReader
+prep_<이름>.csv   s,x,y,heading,curvature,track_width   ← MPC 가 읽는 것
+   ↓  mpc/tracks/map_reader.py : getTrackCustom
+```
+
+우리 쪽 도구가 두 단계를 그대로 따른다. **곡률·heading·s 를 우리가 다시
+계산하지 않는다** — 저자 코드를 import 해서 돌린다.
+
+```bash
+./drive.sh drawtrack mytrack     # 손클릭 → 원본 CSV (1 cm 간격)
+./drive.sh preptrack mytrack     # 저자 TrackReader → prep_mytrack.csv
+./drive.sh preptrack mytrack --install    # 원저장소 mpc/tracks/ 에도 복사
+```
+
+### 저자 설정 (`track_preprocesor.py` 그대로)
+
+| | 값 |
+|---|---|
+| 스플라인 | `splprep(k=5, s=2.0, w=1/전폭, per=True)` |
+| 재샘플 | `points_per_meter = 5` → 20 cm 간격 |
+| 폭 평활 | `savgol_filter(w_r, 10, 3)` — 오른쪽만 |
+| 전폭 | `track_width = w_r + w_l` |
+| 폭 보정 | `(전폭/2 − e)·2` — 스플라인 오차만큼 좁힌다 |
+
+### ★ 걸리는 것 세 가지
+
+**① 진행 방향이 뒤집힌다.** `TrackReader.__init__` 이 `reverse=False`
+(기본값) 일 때 `np.flip(data, axis=0)` 을 한다. CCW 로 그린 트랙이 CW 가
+되고 곡률 부호가 반대로 나온다. `--reverse` 로 끈다 (실측: ∮κ ds
+−6.3077 → +6.3077).
+
+**② `s=2.0` 은 점 개수에 걸린다.** scipy 의 `s` 는 가중 잔차 제곱합이라
+점이 적으면 점당 허용 오차가 커진다. 저자들 원본은 **1.1 cm 간격**이다:
+
+| 트랙 | 점 | 길이 | 간격 |
+|---|---|---|---|
+| `lab_curvy_v1` | 1703 | 19.25 m | 1.13 cm |
+| `lab_monza` | 1662 | 18.68 m | 1.12 cm |
+| `lab_usa_v3` | 1367 | 14.80 m | 1.08 cm |
+
+우리 5 cm 를 그냥 넣으면 과평활해진다 (track_5 로 실측):
+
+| 원본 간격 | RMSE | R_min |
+|---|---|---|
+| 5.00 cm (220점) | 0.048 m | 0.966 m |
+| 2.00 cm (548점) | 0.030 m | 0.989 m |
+| 1.00 cm | 0.022 m | — |
+
+그래서 `draw_track.py` 가 주행용은 5 cm, **HyperMPC 원본은 1 cm** 로
+따로 깐다 (`--raw-spacing`).
+
+**③ `import scipy` 만 하고 `scipy.signal` 을 쓴다.** 저자 환경에서는 다른
+import 가 먼저 올려 줘서 가려졌던 문제다. `prep_track.py` 가 서브모듈을
+먼저 올린다 — 저자 코드는 손대지 않는다.
+
 ## 지금 MPC 와의 차이
 
 |  | 현재 `mpc_node` | 이 정식화 |

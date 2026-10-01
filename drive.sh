@@ -12,6 +12,7 @@
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
+#     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
@@ -550,6 +551,12 @@ bench)
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
     ;;
 
+preptrack)
+    # 저자들 TrackReader 를 그대로 돌려 prep_<이름>.csv 를 만든다.
+    # ROS 도 차량도 창도 필요 없다 (MPLBACKEND=Agg).
+    python3 "$SCRIPT_DIR/tools/prep_track.py" "$@"
+    ;;
+
 drawtrack)
     # 손클릭 레이싱 라인 → 닫힌 스플라인 → 좌/우 벽 (tools/draw_track.py)
     # ROS 도 차량도 필요 없다. 창을 띄우므로 NoMachine 으로 젯슨 화면에서.
@@ -1083,6 +1090,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

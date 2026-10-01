@@ -127,7 +127,7 @@ def fit_closed_spline(pts, dev, spacing):
     s 는 잔차 제곱합이므로 s = m·dev² 로 환산한다. dev=0 이면 찍은 점을
     정확히 통과하고(대신 울퉁불퉁), 키우면 매끄러워지며 점에서 멀어진다.
 
-    반환: (중심선 Nx2, 곡률 N, 총길이) — 실패하면 None
+    반환: (중심선 Nx2, 곡률 N, 총길이, tck) — 실패하면 None
     """
     if len(pts) < 4:
         return None
@@ -147,15 +147,27 @@ def fit_closed_spline(pts, dev, spacing):
     total = seg[-1]
     if total < 0.5:
         return None
-    u = np.interp(np.arange(0.0, total, spacing), seg, uu)
+    c, kappa = resample(tck, seg, uu, total, spacing)
+    return c, kappa, total, tck
 
+
+def resample(tck, seg, uu, total, spacing):
+    """호길이 등간격으로 다시 깔고 곡률을 해석적으로 낸다."""
+    u = np.interp(np.arange(0.0, total, spacing), seg, uu)
     c = np.array(splev(u, tck)).T
     d1 = np.array(splev(u, tck, der=1)).T
     d2 = np.array(splev(u, tck, der=2)).T
     sp = np.linalg.norm(d1, axis=1)
     kappa = ((d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0])
              / np.maximum(sp ** 3, 1e-12))
-    return c, kappa, total
+    return c, kappa
+
+
+def arclen_table(tck, n=4000):
+    uu = np.linspace(0.0, 1.0, n)
+    dense = np.array(splev(uu, tck)).T
+    seg = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(dense, axis=0), axis=1))]
+    return seg, uu, seg[-1]
 
 
 def offset_walls(c, half_width):
@@ -250,7 +262,8 @@ class TrackDrawer:
         r = fit_closed_spline(np.array(self.pts), self.dev, self.a.spacing)
         if r is None:
             return
-        c, kap, total = r
+        c, kap, total, tck = r
+        self.tck = tck
         left, right = offset_walls(c, self.hw)
         ak = np.abs(kap)
 
@@ -397,6 +410,19 @@ class TrackDrawer:
                 f.write('idx,x,y\n')
                 for i, p in enumerate(arr):
                     f.write(f'{i},{p[0]:.6f},{p[1]:.6f}\n')
+        # ③ ★ HyperMPC 원저자 형식 — 그쪽 TrackReader 가 먹는 원본
+        #    x_m,y_m,w_tr_right_m,w_tr_left_m  (한쪽씩 적는다. 저자 코드가
+        #    track_width = w_r + w_l 로 전폭을 만든다)
+        #    저자들 트랙은 1.1 cm 간격이다. s=2.0 평활화가 점 개수에 걸리므로
+        #    같은 밀도로 깔아야 같은 결과가 나온다 (5cm 로 넣으면 과평활).
+        seg, uu, total = arclen_table(self.tck)
+        craw, _ = resample(self.tck, seg, uu, total, self.a.raw_spacing)
+        with open(os.path.join(d, f'{name}.csv'), 'w', encoding='utf-8') as f:
+            f.write('x_m,y_m,w_tr_right_m,w_tr_left_m\n')
+            for q in craw:
+                f.write(f'{q[0]:.6f},{q[1]:.6f},'
+                        f'{self.hw:.6f},{self.hw:.6f}\n')
+
         with open(os.path.join(d, 'curvature_profile.csv'), 'w',
                   encoding='utf-8') as f:
             f.write('idx,s,kappa\n')
@@ -443,13 +469,16 @@ class TrackDrawer:
         print(f'\n✓ 저장했습니다')
         print(f'    주행용   {os.path.relpath(wp, REPO)}')
         print(f'    트랙자료 {os.path.relpath(d, REPO)}/')
+        print(f'    HyperMPC {os.path.relpath(os.path.join(d, name + ".csv"), REPO)}'
+              f'   ({len(craw)}점 {self.a.raw_spacing*100:.1f} cm — 저자 형식)')
         print(f'    길이 {s["total"]:.2f} m · {len(c)}점 · 폭 {2*self.hw:.2f} m · '
               f'R_min {s["r_min"]:.3f} m · 벽~경계 {s["clear"]:.3f} m')
         print(f'\n  다음:')
         print(f'    ① src/mlcs_mpc/config/track.yaml 의 waypoint_file 을 '
               f"'{name}.csv' 로")
         print(f'    ② ./drive.sh trackinfo        기하 재확인')
-        print(f'    ③ ./drive.sh stanley --bag    첫 주행은 느리게\n')
+        print(f'    ③ ./drive.sh stanley --bag    첫 주행은 느리게')
+        print(f'    ④ ./drive.sh preptrack {name}   HyperMPC 용 prep_*.csv 생성\n')
 
 
 def main():
@@ -463,7 +492,11 @@ def main():
     p.add_argument('--half-width', type=float, default=0.25,
                    help='중심선에서 벽까지 (기본 0.25 — HyperMPC 원저자 값)')
     p.add_argument('--spacing', type=float, default=0.05,
-                   help='웨이포인트 간격 m (기본 0.05)')
+                   help='주행용 웨이포인트 간격 m (기본 0.05)')
+    p.add_argument('--raw-spacing', type=float, default=0.01,
+                   help='HyperMPC 원본 CSV 간격 m (기본 0.01 — 저자들 트랙이 '
+                        '1.1 cm 다. 그쪽 s=2.0 평활화가 점 개수에 걸리므로 '
+                        '밀도를 맞춰야 같은 결과가 나온다)')
     p.add_argument('--smooth', type=float, default=0.03,
                    help='손떨림을 무시할 정도 m (기본 0.03). 0 이면 찍은 점을 '
                         '정확히 통과하지만 울퉁불퉁해진다')
