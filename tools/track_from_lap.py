@@ -85,38 +85,64 @@ def load_lap_csv(path):
     return np.array(pts, dtype=float)
 
 
-def split_laps(xy, min_pts=40):
-    """중심 기준 회전각으로 바퀴를 나눈다.
+def split_laps(xy, tol=0.30, min_len=4.0, min_pts=30):
+    """출발점으로 **되돌아오는** 구간을 한 바퀴로 센다.
 
-    ★ "시작점 근처로 돌아오면 한 바퀴" 로 판정하면, 사람이 같은 자리를
-      두 번 지나가거나 출발선 근처에서 머뭇거릴 때 엉뚱하게 잘린다.
-      중심 둘레의 **누적 회전각이 2π 를 지날 때마다** 한 바퀴로 세면
-      그런 경우에 흔들리지 않는다.
+    ★ 예전에는 중심 둘레의 누적 회전각이 2π 를 지날 때마다 한 바퀴로
+      셌다. 그건 트랙이 중심에서 봤을 때 단조롭게 돌 때만 맞는다.
+      안쪽으로 파고드는 S 나 헤어핀이 있으면 각이 되돌아가서 깨진다 —
+      실제로 사용자가 U턴 있는 라인을 몰았을 때 75 m 를 달렸는데도
+      "누적 회전 1.03 바퀴" 로 읽고 바퀴를 못 찾았다 (2026-10-01).
+
+      '되돌아옴' 은 모양에 무관하다. 호길이로 min_len 이상 간 뒤
+      출발점 tol 안으로 들어오는 첫 지점을 한 바퀴의 끝으로 본다.
     """
     if len(xy) < min_pts:
         return []
-    ctr = xy.mean(axis=0)
-    ang = np.unwrap(np.arctan2(xy[:, 1] - ctr[1], xy[:, 0] - ctr[0]))
-    total = ang[-1] - ang[0]
-    if abs(total) < 2 * np.pi * 0.95:
-        return []                      # 한 바퀴도 못 돌았다
-    s = np.sign(total)
-    laps = []
-    start = 0
-    k = 1
-    while True:
-        target = ang[0] + s * 2 * np.pi * k
-        idx = np.argmax(s * (ang - target) >= 0) if np.any(
-            s * (ang - target) >= 0) else None
-        if idx is None or idx == 0:
+    s_ = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+    laps, i, n = [], 0, len(xy)
+    while i < n - min_pts:
+        j0 = int(np.searchsorted(s_, s_[i] + min_len))
+        if j0 >= n:
             break
-        if idx - start >= min_pts:
-            laps.append((start, int(idx)))
-        start = int(idx)
-        k += 1
-        if k > 50:
-            break
+        hit = np.flatnonzero(
+            np.linalg.norm(xy[j0:] - xy[i], axis=1) < tol)
+        if len(hit) == 0:
+            i += 5
+            continue
+        j = j0 + int(hit[0])
+        if j - i >= min_pts:
+            laps.append((i, j))
+        i = j
     return laps
+
+
+def detect_interleaved(xy, min_dist=0.1):
+    """퍼블리셔가 둘 이상 섞였는지 본다.
+
+    ★ waypoint_logger 는 min_dist(0.1 m) 이상 움직였을 때만 점을 쌓는다.
+      그런데 /mpc/state 에 퍼블리셔가 둘이면 점이 두 궤적을 **번갈아**
+      찍어서, 점간 거리가 min_dist 가 아니라 '두 궤적 사이 거리' 가 된다.
+
+      2026-10-01 실측: 점간 거리 중앙 2.49 m (min_dist 의 25배),
+      1 m 넘는 점프가 88%. 그 상태로는 어떤 평활화로도 복구가 안 된다.
+
+    반환: (의심됨, 설명)
+    """
+    if len(xy) < 20:
+        return False, ''
+    d = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    med = float(np.median(d))
+    big = float(np.mean(d > max(1.0, 8 * min_dist)))
+    if med > 4 * min_dist and big > 0.3:
+        # 한 칸 건너뛰면 매끄러워지는지 — 그러면 소스가 둘이다
+        alt = float(np.median(np.linalg.norm(
+            np.diff(xy[0::2], axis=0), axis=1)))
+        return True, (f'점간 거리 중앙 {med:.2f} m (로거 min_dist {min_dist} 의 '
+                      f'{med/min_dist:.0f}배), {100*big:.0f}% 가 1 m 넘는 점프. '
+                      f'한 칸 건너뛰면 {alt:.3f} m 로 매끄러워집니다 '
+                      f'→ /mpc/state 에 퍼블리셔가 둘입니다.')
+    return False, ''
 
 
 def lap_quality(xy, poly):
@@ -184,15 +210,24 @@ def main():
     print(f'   경계 밖 점 {n_out}개'
           + ('  ⚠ mocap 튐이거나 경계가 실제보다 좁습니다' if n_out else ''))
 
-    ctr = raw.mean(axis=0)
-    _ang = np.unwrap(np.arctan2(raw[:, 1] - ctr[1], raw[:, 0] - ctr[0]))
-    print(f'   누적 회전 {abs(_ang[-1]-_ang[0])/(2*np.pi):.2f} 바퀴 '
-          f'(진입·이탈 구간이 섞여 있어도 됩니다)')
+    _d = np.linalg.norm(np.diff(raw, axis=0), axis=1)
+    print(f'   점간 거리 중앙 {np.median(_d):.3f} m')
+
+    bad, why = detect_interleaved(raw)
+    if bad:
+        print(f'\n✗ 기록이 오염됐습니다 — {why}')
+        print('  어떤 평활화로도 복구되지 않습니다. 원인을 없애고 다시 찍으세요:')
+        print('     ./drive.sh stop            떠 있는 노드를 전부 내린다')
+        print('     ros2 topic info /mpc/state 퍼블리셔가 1 인지 확인')
+        print('     ./drive.sh record <이름>   다시 기록')
+        print('  (mocap_bridge 가 둘 떠 있거나 sim_bridge 가 같이 돌면 이렇게 됩니다)')
+        sys.exit(1)
 
     laps = split_laps(raw)
     if not laps:
-        print('✗ 한 바퀴를 못 찾았습니다 (누적 회전각이 2π 에 못 미침).')
-        print('  출발점으로 완전히 돌아오게 한 바퀴를 더 도세요.')
+        print('✗ 한 바퀴를 못 찾았습니다 — 출발점으로 되돌아온 구간이 없습니다.')
+        print('  출발한 자리로 완전히 돌아오게 한 바퀴를 더 도세요.')
+        print('  (--lap 으로 고를 수 있게 두세 바퀴 도는 편이 낫습니다)')
         sys.exit(1)
     print(f'\n■ 바퀴 {len(laps)}개')
     for i, (s0, s1) in enumerate(laps, 1):

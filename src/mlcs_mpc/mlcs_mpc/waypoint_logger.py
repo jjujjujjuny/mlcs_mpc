@@ -52,6 +52,8 @@ class WaypointLogger(Node):
         self.pts = []
         self.last = None
 
+        self.jumps = 0
+        self.warned = False
         self.create_subscription(Odometry, '/mpc/state', self._cb, 10)
         self.create_timer(2.0, self._status)
         self.get_logger().info(
@@ -66,10 +68,24 @@ class WaypointLogger(Node):
         if self.last is not None:
             if math.hypot(x - self.last[0], y - self.last[1]) < self.min_dist:
                 return
+        # ★ 퍼블리셔가 둘이면 점이 두 궤적을 번갈아 찍는다. 그러면 점간
+        #   거리가 min_dist 가 아니라 '두 궤적 사이 거리' 가 되어 기록이
+        #   통째로 못 쓰게 된다. 한 바퀴 다 돌고 나서 알면 늦으니 여기서
+        #   센다 (2026-10-01 에 실제로 겪었다 — 중앙 2.49 m).
+        if self.last is not None:
+            if math.hypot(x - self.last[0], y - self.last[1]) > 10 * self.min_dist:
+                self.jumps += 1
         self.last = (x, y)
         self.pts.append((x, y, v))
 
     def _status(self):
+        if self.jumps > 10 and self.jumps > 0.3 * len(self.pts) and not self.warned:
+            self.warned = True
+            self.get_logger().error(
+                f'✗ 점이 튑니다 ({self.jumps}/{len(self.pts)}). '
+                '/mpc/state 에 퍼블리셔가 둘일 가능성이 큽니다 — '
+                '지금 멈추고  ros2 topic info /mpc/state  로 확인하세요. '
+                '이대로 기록해도 못 씁니다.')
         if self.pts:
             d = 0.0
             a = np.array(self.pts)
