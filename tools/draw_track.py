@@ -327,6 +327,13 @@ class TrackDrawer:
                                  fontsize=8.5, va='bottom')
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
         self.fig.canvas.mpl_connect('key_press_event', self.on_key)
+        # ★★ 이 자기참조가 없으면 클릭이 안 먹는다.
+        #   matplotlib 의 CallbackRegistry 는 bound method 를 WeakMethod 로
+        #   들고 있다 (3.5.1 에서 확인). 그래서 이 인스턴스를 아무도 안 들고
+        #   있으면 GC 되고, 창은 떠 있는데 콜백만 조용히 죽는다 — __init__
+        #   안의 첫 redraw() 는 이미 끝났으니 경계는 보이고 클릭만 안 먹는
+        #   증상이 된다. 그림에 묶어 두면 그림이 살아 있는 동안 안 죽는다.
+        self.fig._mlcs_drawer = self
         self.redraw()
 
     # ── 입력 ────────────────────────────────────────────────────────
@@ -724,8 +731,9 @@ def main():
           f'(max_steer {a.max_steer})')
     print(f'■ 창에서 클릭하세요. 4점부터 스플라인이 생깁니다. s 로 저장.\n')
 
-    TrackDrawer(a)
+    drawer = TrackDrawer(a)     # ★ 반환값을 반드시 받아 둔다 (위 주석 참고)
     plt.show()
+    del drawer
 
 
 if __name__ == '__main__':
