@@ -69,7 +69,7 @@ class StanleyNode(Node):
 
         # ── 차량 ─────────────────────────────────────────────────────
         self.declare_parameter('wheelbase', 0.33)
-        self.declare_parameter('max_steer', 0.36)
+        self.declare_parameter('max_steer', 0.40)
         self.declare_parameter('max_speed', 1.5)
         self.declare_parameter('min_speed', 0.3)
 

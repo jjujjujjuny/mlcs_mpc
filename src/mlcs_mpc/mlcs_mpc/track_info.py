@@ -49,7 +49,7 @@ class TrackInfo(Node):
 
         # 차량 한계 — 못 도는 코너가 있는지 판정용
         self.declare_parameter('wheelbase', 0.33)
-        self.declare_parameter('max_steer', 0.36)
+        self.declare_parameter('max_steer', 0.40)
 
         # safety_node 와 같은 값을 받아 여유를 계산한다
         self.declare_parameter('x_min', -3.0)

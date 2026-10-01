@@ -17,9 +17,11 @@ import_track — DeepRacer 트랙 폴더를 우리 웨이포인트 형식으로 
   이 트랙들은 **DeepRacer 기준**으로 만들어졌다. DeepRacer 는 조향각이
   우리보다 크므로, 그 차가 돌 수 있던 코너를 우리 차는 못 돈다.
 
-  우리 차 한계:  R_min = L/tan(δ_max) = 0.33/tan(0.36) = 0.877 m
+  우리 차 한계:  R_min = L/tan(δ_max) = 0.33/tan(0.40) = 0.781 m
+                 (δ_max 는 2026-09-30 에 실측했다. 전에는 0.36 으로 가정해 0.877 m 여서,
+                  아래 비율은 그 덜 관대한 기준에서 나왔다 — 지금 다시 돌리면 조금 줄어든다)
 
-  실측 결과 (2026-09-21):
+  실측 결과 (2026-09-21, max_steer=0.36 기준):
 
       track_1  최소반경 0.294 m → 35.0% 구간 주행 불가
       track_2  최소반경 0.191 m → 33.2% 불가
@@ -77,7 +79,7 @@ class ImportTrack(Node):
         self.declare_parameter('src', '')
         self.declare_parameter('out', '')
         self.declare_parameter('wheelbase', 0.33)
-        self.declare_parameter('max_steer', 0.36)
+        self.declare_parameter('max_steer', 0.40)
         self.declare_parameter('mu', 0.35)
         self.declare_parameter('grip_util', 0.6)
         self.declare_parameter('target_speed', 1.0)

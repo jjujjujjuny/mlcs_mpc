@@ -57,7 +57,7 @@ class VehicleParams:
                  min_speed=0.0,
                  max_accel=3.0,
                  max_decel=4.0,
-                 max_steer=0.36,     # 미측정 — 기구 스토퍼로 확인 필요
+                 max_steer=0.40,     # ✅ 실측 (2026-09-30) — vehicle.yaml 과 같은 값
                  max_steer_rate=3.2, # rad/s, 서보 속도 한계
                  mu=0.35):           # 미측정 — 노면 마찰
         self.wheelbase = wheelbase

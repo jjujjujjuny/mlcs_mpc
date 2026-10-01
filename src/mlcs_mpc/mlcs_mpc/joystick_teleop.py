@@ -89,7 +89,7 @@ class JoystickTeleop(Node):
 
         # ── 상한 ────────────────────────────────────────────────────
         self.declare_parameter('max_speed', 1.5)   # ★ 캘리브레이션 전 저속
-        self.declare_parameter('max_steer', 0.36)
+        self.declare_parameter('max_steer', 0.40)
 
         # ── 안전 ────────────────────────────────────────────────────
         # 0.3s = joy 20~50Hz 기준 6~15 프레임. 무선 순간 끊김에는 안 걸리고

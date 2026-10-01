@@ -73,7 +73,7 @@ class MPCNode(Node):
         self.declare_parameter('min_speed', 0.0)
         self.declare_parameter('max_accel', 3.0)
         self.declare_parameter('max_decel', 4.0)
-        self.declare_parameter('max_steer', 0.36)
+        self.declare_parameter('max_steer', 0.40)
         self.declare_parameter('max_steer_rate', 3.2)
         self.declare_parameter('mu', 0.35)
         # ↓ 운동학 모델은 안 쓰지만 config/vehicle.yaml 에 있는 값들.
