@@ -14,6 +14,7 @@
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
+#     ./drive.sh preview <이름>      트랙 프리뷰 그림 (배치 + 곡률)
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
@@ -558,6 +559,11 @@ stracks)
     python3 "$SCRIPT_DIR/tools/make_s_track.py" "$@"
     ;;
 
+preview)
+    # 트랙을 그림 한 장으로 — 배치 + 곡률 프로파일 (tools/preview_track.py)
+    python3 "$SCRIPT_DIR/tools/preview_track.py" "$@"
+    ;;
+
 preptrack)
     # 저자들 TrackReader 를 그대로 돌려 prep_<이름>.csv 를 만든다.
     # ROS 도 차량도 창도 필요 없다 (MPLBACKEND=Agg).
@@ -1097,6 +1103,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

@@ -1,6 +1,6 @@
 {
   "name": "s_track",
-  "created": "2026-10-01T20:33:54",
+  "created": "2026-10-01T21:27:07",
   "source": "tools/make_s_track.py (직선 + S자, 2회 회전대칭)",
   "coordinate_frame": {
     "name": "mocap_world",

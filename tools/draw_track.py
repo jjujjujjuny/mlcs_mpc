@@ -512,7 +512,8 @@ def write_track(name, c, kap, left, right, craw, hw, s, prep, cfg,
           f"'{name}.csv' 로")
     print(f'    ② ./drive.sh trackinfo        기하 재확인')
     print(f'    ③ ./drive.sh stanley --bag    첫 주행은 느리게')
-    print(f'    ④ ./drive.sh preptrack {name}   HyperMPC 용 prep_*.csv 생성\n')
+    print(f'    ④ ./drive.sh preptrack {name}   HyperMPC 용 prep_*.csv 생성')
+    print(f'    ⑤ ./drive.sh preview {name}     그림으로 확인 (배치 + 곡률)\n')
 
 
 class TrackDrawer:
@@ -929,121 +930,6 @@ class TrackDrawer:
                  max_steer=self.a.max_steer, kappa_lim=self.kappa_lim,
                  max_bad_run=self.a.max_bad_run),
             spacing=self.a.spacing, raw_spacing=self.a.raw_spacing)
-        name = self.a.name
-        c, kap = self.fit['c'], self.fit['kappa']
-        left, right = self.fit['left'], self.fit['right']
-
-        # ① 주행용 — path_manager 가 읽는 형식 (# x,y). 속도는 안 적는다.
-        #    적지 않으면 path_manager 가 곡률로 v_ref 를 만든다.
-        wp = os.path.join(WAYPOINTS, f'{name}.csv')
-        with open(wp, 'w', encoding='utf-8') as f:
-            f.write(f'# x,y   {name} — tools/draw_track.py '
-                    f'{time.strftime("%Y-%m-%d %H:%M")}\n')
-            f.write(f'# 길이 {s["total"]:.2f} m, {len(c)}점 {self.a.spacing} m 간격, '
-                    f'폭 {2*self.hw:.2f} m, R_min {s["r_min"]:.3f} m\n')
-            for p in c:
-                f.write(f'{p[0]:.4f},{p[1]:.4f}\n')
-
-        # ② 트랙 자료 — lab_map/reference/tracks/* 와 같은 idx,x,y 형식
-        d = os.path.join(OUTDIR, name)
-        os.makedirs(d, exist_ok=True)
-        for fn, arr in (('centerline.csv', c), ('left_boundary.csv', left),
-                        ('right_boundary.csv', right)):
-            with open(os.path.join(d, fn), 'w', encoding='utf-8') as f:
-                f.write('idx,x,y\n')
-                for i, p in enumerate(arr):
-                    f.write(f'{i},{p[0]:.6f},{p[1]:.6f}\n')
-        # ③ ★ HyperMPC 원저자 형식 — 그쪽 TrackReader 가 먹는 원본
-        #    x_m,y_m,w_tr_right_m,w_tr_left_m  (한쪽씩 적는다. 저자 코드가
-        #    track_width = w_r + w_l 로 전폭을 만든다)
-        #    저자들 트랙은 1.1 cm 간격이다. s=2.0 평활화가 점 개수에 걸리므로
-        #    같은 밀도로 깔아야 같은 결과가 나온다 (5cm 로 넣으면 과평활).
-        seg, uu, total = arclen_table(self.tck)
-        craw, _ = resample(self.tck, seg, uu, total, self.a.raw_spacing)
-        with open(os.path.join(d, f'{name}.csv'), 'w', encoding='utf-8') as f:
-            f.write('x_m,y_m,w_tr_right_m,w_tr_left_m\n')
-            for q in craw:
-                f.write(f'{q[0]:.6f},{q[1]:.6f},'
-                        f'{self.hw:.6f},{self.hw:.6f}\n')
-
-        with open(os.path.join(d, 'curvature_profile.csv'), 'w',
-                  encoding='utf-8') as f:
-            f.write('idx,s,kappa\n')
-            for i, k in enumerate(kap):
-                f.write(f'{i},{i*self.a.spacing:.4f},{k:.6f}\n')
-
-        meta = {
-            'name': name,
-            'created': time.strftime('%Y-%m-%dT%H:%M:%S'),
-            'source': 'tools/draw_track.py (손클릭 + 닫힌 주기 스플라인)',
-            'coordinate_frame': {
-                'name': 'mocap_world', 'unit': 'meter',
-                'note': '경계 JSON 과 같은 프레임. /car/pose 와 변환 없이 비교 가능',
-            },
-            'boundary_source': os.path.relpath(self.a.boundary, REPO),
-            'generation': {
-                'clicked_points': [[float(p[0]), float(p[1])] for p in self.pts],
-                'spline': 'scipy.interpolate.splprep(k=3, per=1)',
-                'smooth_dev_m': self.dev,
-                'spacing_m': self.a.spacing,
-                'half_width_m': self.hw,
-            },
-            'vehicle_limits': {
-                'wheelbase': self.a.wheelbase,
-                'max_steer': self.a.max_steer,
-                'kappa_limit': self.kappa_lim,
-                'r_min_car': 1.0 / self.kappa_lim,
-            },
-            'geometry': {
-                'closed': True,
-                'path_length_m': float(s['total']),
-                'num_points': int(len(c)),
-                'max_abs_kappa': float(s['k_max']),
-                'min_radius_m': float(s['r_min']),
-                'infeasible_fraction': float(s['bad']),
-                'infeasible_points': int(s['bad_n']),
-                'infeasible_longest_run_m': float(s['bad_run']),
-                'max_bad_run_m': float(self.a.max_bad_run),
-                'wall_fold_points': int(s['fold_n']),
-                'wall_fold_longest_run_m': float(s['fold_run']),
-                'winding_number': float(s['wind']),
-                'enclosed_area_m2': float(s['area']),
-                'track_width_m': 2 * self.hw,
-                'wall_to_boundary_clearance_m': float(s['clear']),
-                'inside_lab_boundary': bool(s['inside']),
-            },
-        }
-        if self.prep and 'err' not in self.prep:
-            pr = self.prep
-            meta['hypermpc_preprocessed'] = {
-                'note': '저자 track_preprocesor.TrackReader 로 낸 값. '
-                        'prep_<이름>.csv 는 ./drive.sh preptrack 으로 만든다',
-                'rmse_m': pr['rmse'], 'num_points': pr['n'],
-                'spacing_m': pr['spacing'], 'path_length_m': pr['total'],
-                'min_radius_m': pr['r_min'],
-                'infeasible_fraction': pr['bad'],
-                'track_width_corrected_m': [pr['w_min'], pr['w_max']],
-            }
-        with open(os.path.join(d, 'track.json'), 'w', encoding='utf-8') as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
-
-        print(f'\n✓ 저장했습니다')
-        print(f'    주행용   {os.path.relpath(wp, REPO)}')
-        print(f'    트랙자료 {os.path.relpath(d, REPO)}/')
-        print(f'    HyperMPC {os.path.relpath(os.path.join(d, name + ".csv"), REPO)}'
-              f'   ({len(craw)}점 {self.a.raw_spacing*100:.1f} cm — 저자 형식)')
-        print(f'    길이 {s["total"]:.2f} m · {len(c)}점 · 폭 {2*self.hw:.2f} m · '
-              f'R_min {s["r_min"]:.3f} m · 벽~경계 {s["clear"]:.3f} m')
-        if self.prep and 'err' not in self.prep:
-            pr = self.prep
-            print(f'    전처리 후 R_min {pr["r_min"]:.3f} m · {pr["n"]}점 '
-                  f'{pr["spacing"]*100:.0f}cm · RMSE {pr["rmse"]:.4f} m')
-        print(f'\n  다음:')
-        print(f'    ① src/mlcs_mpc/config/track.yaml 의 waypoint_file 을 '
-              f"'{name}.csv' 로")
-        print(f'    ② ./drive.sh trackinfo        기하 재확인')
-        print(f'    ③ ./drive.sh stanley --bag    첫 주행은 느리게')
-        print(f'    ④ ./drive.sh preptrack {name}   HyperMPC 용 prep_*.csv 생성\n')
 
 
 def main():
