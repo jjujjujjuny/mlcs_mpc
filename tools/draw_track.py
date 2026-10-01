@@ -54,15 +54,37 @@ draw_track.py — 손으로 레이싱 라인을 찍으면 스플라인 + 양쪽 
     [  ]         트랙 폭  ∓0.02 / ±0.02 m
     -  =         평활화   덜 / 더  (손떨림을 얼마나 무시할지)
     r            진행 방향 뒤집기
-    t            track_5 겹쳐 보기 켜고 끄기
+    t            track_5 겹쳐 보기     h  HyperMPC 전처리 겹쳐 보기
     s            저장                  q  끝내기
 
   점은 4개 이상이어야 스플라인이 생긴다 (3차 주기 스플라인).
+
+■ ★ 선이 두 개 보이는 이유 — 둘 다 통과해야 저장된다
+
+  초록/주황/빨강 굵은 선   우리 스플라인 (k=3, 5 cm). 이게
+                           waypoints/<이름>.csv 가 되고 Stanley 가 따라간다.
+  주황 파선                저자 전처리기를 통과한 것 (k=5, s=2.0, 20 cm).
+                           **HyperMPC 가 실제로 받는 중심선이다.**
+                           한계를 넘는 점에 × 가 찍힌다.
+
+  두 스플라인은 설정이 달라 곡률이 **양방향으로** 달라진다 (실측):
+
+      트랙      우리 R_min   저자 R_min
+      넉넉        1.074 m     1.274 m    ← 전처리가 완만하게
+      보통        0.684 m     0.921 m    ← 우리만 불합격
+      급함        0.406 m     0.510 m    ← 둘 다 불합격
+
+  그래서 한쪽만 보면 "그려서 ✓ → preptrack 에서 ✗" 가 난다. 저장은
+  **둘 다** 통과해야 되고, 전처리 결과는 ./drive.sh preptrack 이 내는
+  값과 같다 (검증: R_min 1.274 양쪽 일치).
+
+  원저장소가 없으면 미리보기만 빠지고 나머지는 그대로 쓴다.
 """
 import argparse
 import json
 import math
 import os
+import pathlib
 import sys
 import time
 
@@ -81,10 +103,97 @@ from matplotlib.collections import LineCollection           # noqa: E402
 from matplotlib.path import Path as MplPath                 # noqa: E402
 from scipy.interpolate import splev, splprep                # noqa: E402
 
+
+def setup_font():
+    """한글이 □ 로 나오지 않게 폰트를 잡는다.
+
+    matplotlib 기본 폰트(DejaVu Sans)에는 한글 글리프가 없어서, 그냥 띄우면
+    화면의 라벨과 안내문이 전부 네모로 보인다 (젯슨에서 실제로 그렇다).
+    Noto Sans CJK 가 깔려 있으면 그것을 쓴다 — .ttc 묶음이라 matplotlib 은
+    첫 face 이름(보통 'Noto Sans CJK JP')으로만 등록하지만, pan-CJK 폰트라
+    한글 글리프가 같이 들어 있다.
+
+    패널은 monospace 로 숫자를 맞추므로 monospace 목록에도 끼워 넣는다.
+    못 찾으면 경고만 하고 넘어간다 — 도구는 그대로 쓸 수 있다.
+    """
+    import matplotlib.font_manager as fm
+    have = {f.name for f in fm.fontManager.ttflist}
+    for cand in ('Noto Sans CJK KR', 'Noto Sans CJK JP', 'NanumGothic',
+                 'NanumBarunGothic', 'UnDotum', 'Baekmuk Gulim',
+                 'Noto Sans KR'):
+        if cand in have:
+            matplotlib.rcParams['font.family'] = [cand, 'DejaVu Sans']
+            matplotlib.rcParams['font.monospace'] = [cand, 'DejaVu Sans Mono']
+            # CJK 폰트에는 U+2212(−) 가 없는 경우가 있어 ASCII 하이픈을 쓴다
+            matplotlib.rcParams['axes.unicode_minus'] = False
+            return cand
+    print('⚠ 한글 폰트를 못 찾았습니다 — 화면 글자가 □ 로 보일 수 있습니다.')
+    print('  sudo apt install fonts-noto-cjk   (또는 fonts-nanum)')
+    return None
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOUNDARY = os.path.join(REPO, 'lab_map/data/boundary/map_boundary_data.json')
 WAYPOINTS = os.path.join(REPO, 'src/mlcs_mpc/waypoints')
 OUTDIR = os.path.join(REPO, 'lab_map/data/handdrawn')
+
+
+def load_track_reader(hypermpc):
+    """저자들 TrackReader 를 가져온다. 없으면 None — 도구는 그대로 쓴다.
+
+    ★ 저자 코드가 `import scipy` 만 하고 scipy.signal / interpolate /
+      integrate 를 쓴다. 먼저 올려 줘야 AttributeError 가 안 난다.
+      (그쪽 환경에서는 map_reader 가 먼저 로드돼 가려졌던 문제다)
+    """
+    tracks = os.path.join(os.path.expanduser(hypermpc), 'mpc/tracks')
+    if not os.path.isdir(tracks):
+        return None
+    try:
+        import scipy.integrate      # noqa: F401
+        import scipy.interpolate    # noqa: F401
+        import scipy.signal         # noqa: F401
+        if tracks not in sys.path:
+            sys.path.insert(0, tracks)
+        from track_preprocesor import TrackReader
+        return TrackReader
+    except Exception as e:
+        print(f'⚠ 저자 전처리기를 못 불렀습니다 ({e}) — 미리보기 없이 갑니다')
+        return None
+
+
+def run_prep(TrackReader, craw, half_width, spacing):
+    """저자 전처리기를 그대로 돌려 MPC 가 실제로 받을 값을 낸다.
+
+    TrackReader 가 경로를 받으므로 임시 파일을 거친다. 1 cm 1000점에
+    11.6 ms (젯슨 실측) — 클릭마다 돌려도 된다.
+    """
+    import tempfile
+    import warnings
+    f = tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False,
+                                    encoding='utf-8')
+    try:
+        f.write('x_m,y_m,w_tr_right_m,w_tr_left_m\n')
+        for q in craw:
+            f.write(f'{q[0]:.6f},{q[1]:.6f},{half_width:.6f},{half_width:.6f}\n')
+        f.close()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')     # splprep 의 per= 경고
+            t = TrackReader(pathlib.Path(f.name))
+    except Exception as e:
+        return {'err': str(e)}
+    finally:
+        try:
+            os.unlink(f.name)
+        except OSError:
+            pass
+    ak = np.abs(t.re_curvature)
+    return dict(
+        c=np.c_[t.re_x, t.re_y], kappa=t.re_curvature, rmse=float(t.rmse),
+        n=int(t.re_N), total=float(t.track_lenght), k_max=float(ak.max()),
+        r_min=float(1.0 / max(ak.max(), 1e-9)),
+        w_min=float(t.re_track_width_corrected.min()),
+        w_max=float(t.re_track_width_corrected.max()),
+        spacing=float(t.track_lenght / max(t.re_N, 1)),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -190,7 +299,16 @@ class TrackDrawer:
         self.dev = args.smooth
         self.hw = args.half_width
         self.show_ref = True
+        self.show_prep = True
         self.fit = None
+        self.prep = None
+        self.tck = None
+        # 저자 전처리기 — 없으면 미리보기만 빠지고 나머지는 그대로 쓴다
+        self.TrackReader = load_track_reader(args.hypermpc)
+        if self.TrackReader is None:
+            print(f'⚠ {args.hypermpc} 가 없어 HyperMPC 미리보기를 끕니다.')
+            print(f'  git clone https://github.com/hyper-mpc/hypermpc_code.git '
+                  f'{args.hypermpc}')
         self.stats = {}
 
         self.kappa_lim = math.tan(args.max_steer) / args.wheelbase
@@ -202,6 +320,7 @@ class TrackDrawer:
             self.ref = np.loadtxt(rp, delimiter=',', comments='#',
                                   usecols=(0, 1))
 
+        setup_font()
         self.fig, self.ax = plt.subplots(figsize=(9.5, 10))
         self.fig.canvas.manager.set_window_title('draw_track — 레이싱 라인')
         self.txt = self.fig.text(0.015, 0.012, '', family='monospace',
@@ -243,6 +362,8 @@ class TrackDrawer:
             self.pts = self.pts[::-1]
         elif k == 't':
             self.show_ref = not self.show_ref
+        elif k == 'h':
+            self.show_prep = not self.show_prep
         elif k == 's':
             self.save()
             return
@@ -256,6 +377,7 @@ class TrackDrawer:
     # ── 계산 + 그리기 ───────────────────────────────────────────────
     def recompute(self):
         self.fit = None
+        self.prep = None
         self.stats = {}
         if len(self.pts) < 4:
             return
@@ -276,6 +398,19 @@ class TrackDrawer:
                   dist_to_polygon(right, self.V).min())
 
         self.fit = dict(c=c, kappa=kap, left=left, right=right)
+
+        # ★ MPC 가 실제로 받을 값 — 저자 전처리기를 그대로 돌린다.
+        #   우리 스플라인(k=3, 5cm)과 저자 것(k=5, s=2.0, 20cm)이 다르므로
+        #   여기서 같이 봐야 "그려서 ✓ → preptrack 에서 ✗" 를 막는다.
+        if self.TrackReader is not None and self.tck is not None:
+            seg, uu, T = arclen_table(self.tck)
+            craw, _ = resample(self.tck, seg, uu, T, self.a.raw_spacing)
+            self.prep = run_prep(self.TrackReader, craw, self.hw,
+                                 self.a.raw_spacing)
+            if 'err' not in self.prep:
+                pk = np.abs(self.prep['kappa'])
+                self.prep['bad'] = float((pk > self.kappa_lim).mean())
+                self.prep['warn'] = float((pk > self.kappa_tgt).mean())
         self.stats = dict(
             n=len(c), total=total, k_max=ak.max(), r_min=1.0 / max(ak.max(), 1e-9),
             bad=float((ak > self.kappa_lim).mean()),
@@ -283,6 +418,12 @@ class TrackDrawer:
             inside=inside, clear=clr,
             fold=self.hw * ak.max() >= 1.0,
         )
+
+    def prep_ok(self):
+        """저자 전처리 후에도 주행 가능한가. 전처리기가 없으면 판정 보류."""
+        if not self.prep or 'err' in self.prep:
+            return None
+        return self.prep['bad'] == 0.0
 
     def redraw(self):
         self.recompute()
@@ -328,6 +469,19 @@ class TrackDrawer:
                 ax.plot(c[bad, 0], c[bad, 1], '.', color='#c0392b',
                         markersize=3, zorder=6)
 
+        # ★ MPC 가 실제로 받는 중심선 — 우리 것과 눈으로 비교된다
+        if self.show_prep and self.prep and 'err' not in self.prep:
+            pc = self.prep['c']
+            pk = np.abs(self.prep['kappa'])
+            ax.plot(np.r_[pc[:, 0], pc[0, 0]], np.r_[pc[:, 1], pc[0, 1]],
+                    '--', color='#8E5A05', linewidth=1.6, zorder=7,
+                    label=f'HyperMPC 전처리 ({self.prep["n"]}점 '
+                          f'{self.prep["spacing"]*100:.0f}cm)')
+            over = pk > self.kappa_lim
+            if over.any():
+                ax.plot(pc[over, 0], pc[over, 1], 'x', color='#c0392b',
+                        markersize=7, markeredgewidth=2, zorder=8)
+
         pad = 0.35
         ax.set_xlim(self.V[:, 0].min() - pad, self.V[:, 0].max() + pad)
         ax.set_ylim(self.V[:, 1].min() - pad, self.V[:, 1].max() + pad)
@@ -341,15 +495,17 @@ class TrackDrawer:
         if not s:
             return (f'점 {len(self.pts)}개 — 4개부터 스플라인이 생깁니다  '
                     f'│ 폭 {2*self.hw:.2f} m  평활 {self.dev:.2f} m')
-        ok = s['inside'] and s['bad'] == 0 and not s['fold']
+        po = self.prep_ok()
+        ok = (s['inside'] and s['bad'] == 0 and not s['fold']
+              and po is not False)
         return (f'{"✓ 저장 가능" if ok else "✗ 아직 안 됨"}   '
                 f'길이 {s["total"]:.2f} m   R_min {s["r_min"]:.3f} m   '
                 f'불가 {100*s["bad"]:.1f}%   폭 {2*self.hw:.2f} m')
 
     def panel(self):
         s = self.stats
-        L = [f'키: 좌클릭 추가 · 우클릭 삭제 · u 취소 · c 비우기 · '
-             f'[ ] 폭 · - = 평활 · r 뒤집기 · t 참고 · s 저장 · q 끝',
+        L = [f'키: 좌클릭 추가 · 우클릭 삭제 · u 취소 · c 비우기 · [ ] 폭 · '
+             f'- = 평활 · r 뒤집기 · t 참고 · h 전처리 · s 저장 · q 끝',
              f'차 한계: R_min {1/self.kappa_lim:.3f} m '
              f'(κ {self.kappa_lim:.3f}, max_steer {self.a.max_steer})   '
              f'권장 여유: κ ≤ {self.kappa_tgt:.2f} (R {1/self.kappa_tgt:.2f} m)']
@@ -365,6 +521,20 @@ class TrackDrawer:
         if s['fold']:
             L.append(f'✗ 벽이 접힙니다 — 폭 {2*self.hw:.2f} m 가 '
                      f'코너 반경 {s["r_min"]:.2f} m 보다 큽니다. [ 로 줄이세요')
+
+        # ★ MPC 가 실제로 받는 값. 우리 스플라인과 다르므로 이 줄이 기준이다.
+        if self.TrackReader is None:
+            L.append('· HyperMPC 전처리 미리보기 꺼짐 '
+                     '(--hypermpc 경로에 원저장소가 없습니다)')
+        elif self.prep and 'err' in self.prep:
+            L.append(f'· HyperMPC 전처리 실패: {self.prep["err"]}')
+        elif self.prep:
+            pr = self.prep
+            L.append(
+                f'{mark(pr["bad"] == 0)} HyperMPC 전처리 후 (k=5, s=2.0, '
+                f'{pr["n"]}점 {pr["spacing"]*100:.0f}cm)  '
+                f'R_min {pr["r_min"]:.3f} m  한계초과 {100*pr["bad"]:.1f}%  '
+                f'RMSE {pr["rmse"]:.4f} m  폭보정 {pr["w_min"]:.3f}~{pr["w_max"]:.3f} m')
         return '\n'.join(L)
 
     # ── 저장 ────────────────────────────────────────────────────────
@@ -383,6 +553,19 @@ class TrackDrawer:
             print(f'⚠ 주행 불가 구간이 {100*s["bad"]:.1f}% 남아 있습니다 '
                   f'(R_min {s["r_min"]:.3f} m < 한계 {1/self.kappa_lim:.3f} m)')
             print('  그래도 저장하려면 --allow-infeasible 로 다시 실행하세요.')
+            if not self.a.allow_infeasible:
+                return
+        # ★ 우리 스플라인은 통과했는데 저자 전처리 후에 걸리는 경우.
+        #   MPC 가 받는 건 뒤쪽이므로 여기서 막는 게 맞다.
+        if self.prep_ok() is False:
+            pr = self.prep
+            print(f'⚠ 우리 스플라인은 통과했지만 HyperMPC 전처리 후에 '
+                  f'{100*pr["bad"]:.1f}% 가 주행 불가입니다 '
+                  f'(R_min {s["r_min"]:.3f} → {pr["r_min"]:.3f} m)')
+            print('  저자 전처리기가 k=5 / s=2.0 으로 다시 매끄럽게 하면서 '
+                  '곡률이 바뀝니다.')
+            print('  코너를 더 완만하게 찍거나 = 로 평활화를 올려 보세요. '
+                  '강행하려면 --allow-infeasible.')
             if not self.a.allow_infeasible:
                 return
 
@@ -463,6 +646,17 @@ class TrackDrawer:
                 'inside_lab_boundary': bool(s['inside']),
             },
         }
+        if self.prep and 'err' not in self.prep:
+            pr = self.prep
+            meta['hypermpc_preprocessed'] = {
+                'note': '저자 track_preprocesor.TrackReader 로 낸 값. '
+                        'prep_<이름>.csv 는 ./drive.sh preptrack 으로 만든다',
+                'rmse_m': pr['rmse'], 'num_points': pr['n'],
+                'spacing_m': pr['spacing'], 'path_length_m': pr['total'],
+                'min_radius_m': pr['r_min'],
+                'infeasible_fraction': pr['bad'],
+                'track_width_corrected_m': [pr['w_min'], pr['w_max']],
+            }
         with open(os.path.join(d, 'track.json'), 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
@@ -473,6 +667,10 @@ class TrackDrawer:
               f'   ({len(craw)}점 {self.a.raw_spacing*100:.1f} cm — 저자 형식)')
         print(f'    길이 {s["total"]:.2f} m · {len(c)}점 · 폭 {2*self.hw:.2f} m · '
               f'R_min {s["r_min"]:.3f} m · 벽~경계 {s["clear"]:.3f} m')
+        if self.prep and 'err' not in self.prep:
+            pr = self.prep
+            print(f'    전처리 후 R_min {pr["r_min"]:.3f} m · {pr["n"]}점 '
+                  f'{pr["spacing"]*100:.0f}cm · RMSE {pr["rmse"]:.4f} m')
         print(f'\n  다음:')
         print(f'    ① src/mlcs_mpc/config/track.yaml 의 waypoint_file 을 '
               f"'{name}.csv' 로")
@@ -505,6 +703,9 @@ def main():
                    help='실측값 (2026-09-30). vehicle.yaml 과 같아야 한다')
     p.add_argument('--kappa-target', type=float, default=1.0,
                    help='권장 곡률 상한. 한계 1.281 에 붙이면 여유가 없다')
+    p.add_argument('--hypermpc', default='~/hypermpc_code',
+                   help='원저장소 경로. 그리는 중에 저자 전처리 결과를 같이 '
+                        '보여준다 (없으면 미리보기만 빠진다)')
     p.add_argument('--allow-infeasible', action='store_true',
                    help='주행 불가 구간이 있어도 저장 (권장하지 않음)')
     a = p.parse_args()
