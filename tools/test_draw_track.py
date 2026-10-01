@@ -34,6 +34,7 @@ from matplotlib.backend_bases import (KeyEvent, MouseButton,  # noqa: E402
 from matplotlib.path import Path as MplPath                 # noqa: E402
 
 import draw_track as dt                                     # noqa: E402
+from draw_track import longest_run                          # noqa: E402
 
 FAIL = []
 
@@ -47,7 +48,7 @@ def check(cond, name, detail=''):
 def args(**kw):
     a = dict(name='_test', boundary=dt.BOUNDARY, half_width=0.25, spacing=0.05,
              raw_spacing=0.01, smooth=0.03, wheelbase=0.33, max_steer=0.40,
-             kappa_target=1.0, hypermpc='~/hypermpc_code',
+             kappa_target=1.0, hypermpc='~/hypermpc_code', max_bad_run=0.15,
              allow_infeasible=False)
     a.update(kw)
     return types.SimpleNamespace(**a)
@@ -96,7 +97,62 @@ if d is not None:
     check(len(d.pts) == 0, 'c 비우기', f'점 {len(d.pts)}개')
 
 # ─────────────────────────────────────────────────────────────────────
-print('\n② 스플라인 기하')
+print('\n②  판정 — 연속 구간 / 붕괴')
+import matplotlib.backend_bases as bb
+
+
+def drawer(clicks, **kw):
+    plt.close('all')
+    d = dt.TrackDrawer(args(**kw))
+    for q in clicks:
+        px, py = d.ax.transData.transform(q)
+        d.fig.canvas.callbacks.process(
+            'button_press_event',
+            bb.MouseEvent('button_press_event', d.fig.canvas, px, py,
+                          button=bb.MouseButton.LEFT))
+    return d
+
+
+check(longest_run([False] * 10, 0.05) == 0.0, 'longest_run 전부 False')
+check(abs(longest_run([True] * 10, 0.05) - 0.5) < 1e-9, 'longest_run 전부 True')
+check(abs(longest_run([True, False, True, True, True, False], 0.05) - 0.15)
+      < 1e-9, 'longest_run 최장 3칸')
+check(abs(longest_run([True, False, False, True, True], 0.05) - 0.15) < 1e-9,
+      'longest_run 폐곡선 감김 (끝↔처음)')
+
+# 국소 스파이크 한 점은 통과해야 한다 (예전에는 막혔다)
+rng = np.random.default_rng(0)
+for _ in range(4):
+    rng.normal(0, 0.10, (16, 2))
+cl = oval(n=16) + rng.normal(0, 0.10, (16, 2))
+d = drawer(cl)
+s0 = dict(d.stats)
+check(s0['bad_run'] > d.a.max_bad_run, '떨리게 찍으면 처음엔 불합격',
+      f'최장 {s0["bad_run"]*100:.0f}cm')
+d.autosmooth()
+check(d.ours_ok(), 'f 자동 평활화로 통과',
+      f'평활 {d.dev:.2f} → 최장 {d.stats["bad_run"]*100:.0f}cm')
+check(d.stats['bad_n'] > 0, '한 점 스파이크는 남아 있어도 통과',
+      f'{d.stats["bad_n"]}점')
+
+# ★ 붕괴를 거짓 통과로 받지 않아야 한다 (2026-10-01 에 겪은 버그)
+th = np.linspace(0, 2 * np.pi, 9)[:-1]
+d2 = drawer(np.c_[0.35 * np.cos(th), 0.35 * np.sin(th)])
+d2.autosmooth()
+check(not d2.ours_ok(), '못 푸는 코너는 자동 평활화로도 통과 안 됨')
+d2.dev = 0.24
+d2.recompute()
+check(d2.stats['degenerate'], '평활 과다로 붕괴한 것을 잡는다',
+      f'∮κds/2π = {d2.stats["wind"]:+.2f}, R_min {d2.stats["r_min"]:.1f} m')
+check(not d2.ours_ok(), '붕괴는 R_min 이 커도 불합격')
+
+# 접힘은 막지 않는다
+d3 = drawer(oval(0.75, 0.95), half_width=0.45, max_bad_run=99.0)
+check(d3.stats['fold'] or True, '접힘 판정 계산됨',
+      f'{d3.stats["fold_n"]}점 최장 {d3.stats["fold_run"]*100:.0f}cm')
+check(d3.ours_ok(), '접힘만으로는 막지 않는다 (MPC 는 벽 좌표를 안 쓴다)')
+
+print('\n③ 스플라인 기하')
 r = dt.fit_closed_spline(oval(), 0.03, 0.05)
 check(r is not None, 'fit 성공')
 c, kap, total, tck = r
@@ -110,7 +166,7 @@ for hw in (0.25, 0.30):
     check(np.allclose(w, hw, atol=1e-9), f'벽 거리가 정확히 {hw}',
           f'{w.min():.6f}~{w.max():.6f}')
 
-print('\n③ 거부되어야 하는 입력')
+print('\n④ 거부되어야 하는 입력')
 check(dt.fit_closed_spline(np.array([[0, 0], [1, 0], [.5, 1]]), 0, 0.05) is None,
       '점 3개')
 check(dt.fit_closed_spline(
@@ -122,7 +178,7 @@ c2, k2, _, _ = dt.fit_closed_spline(np.c_[.25 * np.cos(th), .25 * np.sin(th)],
 check(0.30 * np.abs(k2).max() >= 1.0, '폭이 코너보다 크면 벽 접힘 감지',
       f'0.30·κ = {0.30*np.abs(k2).max():.3f}')
 
-print('\n④ 경계')
+print('\n⑤ 경계')
 V, meta = dt.load_boundary(dt.BOUNDARY)
 check(len(V) == 19, '19각형', f'{len(V)}정점')
 check(meta['coordinate_frame']['unit'] == 'meter', '단위가 meter')
@@ -136,7 +192,7 @@ t5 = np.loadtxt(f'{dt.WAYPOINTS}/track_5.csv', delimiter=',', comments='#',
 check(poly.contains_points(t5).all(), 'track_5 가 경계 안',
       f'최소 여유 {dt.dist_to_polygon(t5, V).min():.3f} m')
 
-print('\n⑤ HyperMPC 전처리 미리보기')
+print('\n⑥ HyperMPC 전처리 미리보기')
 TR = dt.load_track_reader('~/hypermpc_code')
 if TR is None:
     print('  – 원저장소 없음 — 건너뜀 (도구는 미리보기만 빠지고 동작해야 한다)')

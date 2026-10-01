@@ -53,11 +53,34 @@ draw_track.py — 손으로 레이싱 라인을 찍으면 스플라인 + 양쪽 
     u            마지막 점 취소        c  전부 지우기
     [  ]         트랙 폭  ∓0.02 / ±0.02 m
     -  =         평활화   덜 / 더  (손떨림을 얼마나 무시할지)
+    f            자동 평활화 — 통과하는 최소값을 찾아 준다
     r            진행 방향 뒤집기
     t            track_5 겹쳐 보기     h  HyperMPC 전처리 겹쳐 보기
     s            저장                  q  끝내기
 
   점은 4개 이상이어야 스플라인이 생긴다 (3차 주기 스플라인).
+
+■ 무엇이 막고 무엇이 경고인가
+
+  손으로 찍으면 클릭점 사이에서 스플라인이 국소적으로 튄다. **피할 수
+  없다.** 그래서 "한 점이라도 넘으면 불합격" 으로는 통과가 거의 불가능하다.
+  5 cm 한 칸이 넘는 것과 2 m 가 내리 넘는 것은 전혀 다른 문제이므로,
+  비율이 아니라 **최장 연속 구간**으로 판정한다.
+
+    막는다    곡률이 한계를 넘는 구간이 **연속 15 cm 를 넘을 때**
+              (--max-bad-run, 기본 0.15 m = 5cm 세 칸)
+              그리고 실험실 경계를 벗어날 때
+
+    경고만    벽 접힘 (hw·κ ≥ 1). 접힌 벽이 망치는 것은
+              left/right_boundary.csv (참고용) 와 그 구간의 여유 숫자뿐이다.
+              **MPC 는 벽 좌표를 받지 않는다** — 스칼라 cfg.track_width 만
+              쓴다 (casadi_car_model.py:106). 주행 가능성을 가르는 것은
+              곡률이므로, 막는 것은 곡률 하나로 한다.
+
+              거슬리면 [ 로 폭을 줄이면 사라진다 (hw 가 작아지면 hw·κ < 1).
+
+  f 를 누르면 통과하는 **최소 평활화**를 찾아 준다. 그래도 안 되면 평활화로
+  풀 문제가 아니다 — 빨간 구간의 점을 우클릭으로 지우고 더 벌려 찍어야 한다.
 
 ■ ★ 선이 두 개 보이는 이유 — 둘 다 통과해야 저장된다
 
@@ -279,6 +302,46 @@ def arclen_table(tck, n=4000):
     return seg, uu, seg[-1]
 
 
+def shoelace(xy):
+    x, y = xy[:, 0], xy[:, 1]
+    return 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def winding(kappa, spacing):
+    """∮κ ds / 2π. 단순 폐곡선이면 ±1 이다.
+
+    ★ 평활화를 세게 걸면 스플라인이 **붕괴한다** — 고리가 접혀서 거의
+      직선이 되고 곡률이 0 에 수렴한다. 그러면 R_min 이 10^9 로 나오면서
+      "곡률 한계 통과" 로 보인다. 실제로 자동 평활화가 그 거짓 통과를
+      받아들이는 것을 겪었다 (작은 고리에 평활 0.24).
+
+      ∮κ ds 는 그걸 잡는다 — 붕괴하면 0 에 가까워지고, 8자로 교차하면
+      0, 정상 폐곡선이면 ±2π 다.
+    """
+    return float((kappa * spacing).sum() / (2.0 * np.pi))
+
+
+def longest_run(mask, spacing):
+    """폐곡선에서 True 가 연속으로 이어지는 최대 호길이 [m].
+
+    ★ "한 점이라도 넘으면 불합격" 은 손으로 찍는 입력에 쓸 수 없다.
+      스플라인이 클릭점 사이에서 국소적으로 튀는 것은 피할 수 없고,
+      5 cm 한 칸이 넘는 것과 2 m 가 내리 넘는 것은 전혀 다른 문제다.
+      그래서 비율과 함께 **최장 연속 구간**을 본다.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    if not mask.any():
+        return 0.0
+    if mask.all():
+        return float(len(mask) * spacing)
+    # 폐곡선이므로 두 번 이어 붙여 감긴 구간도 잡는다
+    run = best = 0
+    for b in np.r_[mask, mask]:
+        run = run + 1 if b else 0
+        best = max(best, run)
+    return float(min(best, int(mask.sum())) * spacing)
+
+
 def offset_walls(c, half_width):
     """중심선 양쪽으로 벽. 폐곡선이므로 차분을 감아서 접선을 낸다."""
     t = np.roll(c, -1, axis=0) - np.roll(c, 1, axis=0)
@@ -365,6 +428,9 @@ class TrackDrawer:
             self.dev = min(0.50, self.dev + 0.01)
         elif k == '-':
             self.dev = max(0.0, self.dev - 0.01)
+        elif k == 'f':
+            self.autosmooth()
+            return
         elif k == 'r':
             self.pts = self.pts[::-1]
         elif k == 't':
@@ -379,6 +445,56 @@ class TrackDrawer:
             return
         else:
             return
+        self.redraw()
+
+    def autosmooth(self):
+        """통과하는 가장 작은 평활화를 찾는다.
+
+        손으로 찍으면 클릭점 사이에서 스플라인이 국소적으로 튀는 것을 피할
+        수 없다. 평활화를 올리면 사라지지만, 많이 올리면 찍은 모양에서
+        멀어진다. 그래서 **통과하는 최소값**을 찾아 준다.
+
+        우리 스플라인과 저자 전처리 결과를 둘 다 본다 — 저장 조건과 같다.
+        """
+        if len(self.pts) < 4:
+            print('✗ 점이 4개 미만입니다')
+            return
+        keep = self.dev
+        print(f'■ 자동 평활화 — {keep:.2f} m 부터 올려 봅니다 '
+              f'(허용 연속 {self.a.max_bad_run*100:.0f}cm)')
+        collapsed = 0
+        for dev in np.arange(keep, 0.501, 0.01):
+            self.dev = round(float(dev), 3)
+            self.recompute()
+            if not self.stats:
+                continue
+            s = self.stats
+            # 한 번 붕괴하면 더 올려도 돌아오지 않는다 — 몇 번 보고 끊는다
+            collapsed = collapsed + 1 if s['degenerate'] else 0
+            if collapsed >= 3:
+                print(f'  붕괴 평활 {self.dev:.2f} — 더 올려도 돌아오지 '
+                      f'않습니다. 중단합니다.')
+                break
+            ok = self.ours_ok() and self.prep_ok() is not False
+            flag = '✓' if ok else ('붕괴' if s['degenerate'] else '  ')
+            pr_s = ''
+            if self.prep and 'err' not in self.prep:
+                pr_s = f'  전처리 {min(self.prep["r_min"], 999.0):.3f} m'
+            print(f'  {flag:>2} 평활 {self.dev:.2f}  R_min {s["r_min"]:7.3f} m  '
+                  f'최장불가 {s["bad_run"]*100:3.0f}cm  '
+                  f'∮κds/2π {s["wind"]:+.2f}{pr_s}')
+            if ok:
+                print(f'→ 평활 {self.dev:.2f} m 로 맞췄습니다. '
+                      f'모양이 뭉개졌으면 - 로 내리고 그 코너를 다시 찍으세요.')
+                self.redraw()
+                return
+        reached = self.dev
+        self.dev = keep
+        print(f'✗ 평활 {reached:.2f} m 까지 올려도 통과하지 못했습니다 — '
+              f'평활화로 풀 문제가 아닙니다. (평활은 {keep:.2f} 로 되돌립니다)')
+        print(f'  코너 하나가 R {1/self.kappa_lim:.2f} m 보다 급하게 찍혀 '
+              f'있을 가능성이 큽니다. 빨간 구간의 점을 우클릭으로 지우고 '
+              f'더 벌려서 다시 찍으세요.')
         self.redraw()
 
     # ── 계산 + 그리기 ───────────────────────────────────────────────
@@ -418,19 +534,52 @@ class TrackDrawer:
                 pk = np.abs(self.prep['kappa'])
                 self.prep['bad'] = float((pk > self.kappa_lim).mean())
                 self.prep['warn'] = float((pk > self.kappa_tgt).mean())
+        wind = winding(kap, self.a.spacing)
+        area = shoelace(c)
+        area_click = shoelace(np.array(self.pts)) if len(self.pts) >= 3 else 0.0
+        # 단순 폐곡선인가 — 붕괴/8자 교차를 잡는다
+        degenerate = (abs(abs(wind) - 1.0) > 0.15
+                      or area < max(0.25 * area_click, 0.05))
+        bad_m = ak > self.kappa_lim
+        fold_m = self.hw * ak >= 1.0
+        sp = self.a.spacing
         self.stats = dict(
-            n=len(c), total=total, k_max=ak.max(), r_min=1.0 / max(ak.max(), 1e-9),
-            bad=float((ak > self.kappa_lim).mean()),
+            n=len(c), total=total, k_max=ak.max(),
+            r_min=min(1.0 / max(ak.max(), 1e-9), 999.0),
+            bad=float(bad_m.mean()), bad_n=int(bad_m.sum()),
+            bad_run=longest_run(bad_m, sp),
             warn=float((ak > self.kappa_tgt).mean()),
             inside=inside, clear=clr,
-            fold=self.hw * ak.max() >= 1.0,
+            fold=bool(fold_m.any()), fold_n=int(fold_m.sum()),
+            fold_run=longest_run(fold_m, sp),
+            wind=wind, area=area, area_click=area_click,
+            degenerate=bool(degenerate),
         )
 
     def prep_ok(self):
         """저자 전처리 후에도 주행 가능한가. 전처리기가 없으면 판정 보류."""
         if not self.prep or 'err' in self.prep:
             return None
-        return self.prep['bad'] == 0.0
+        pk = np.abs(self.prep['kappa'])
+        run = longest_run(pk > self.kappa_lim, self.prep['spacing'])
+        self.prep['bad_run'] = run
+        return run <= self.a.max_bad_run
+
+    def ours_ok(self):
+        """우리 스플라인이 통과하는가.
+
+        ★ 접힘은 여기서 막지 않는다. 접힌 벽이 망치는 것은
+          left/right_boundary.csv (참고용) 와 그 구간의 경계 여유 숫자뿐이고,
+          **MPC 는 벽 좌표를 안 받는다** — 스칼라 cfg.track_width 만 쓴다
+          (casadi_car_model.py:106). 주행 가능성을 가르는 것은 곡률이다.
+          그래서 접힘은 경고로만 알리고, 막는 것은 곡률 하나로 한다.
+        """
+        s = self.stats
+        if not s:
+            return False
+        if s['degenerate']:
+            return False
+        return s['inside'] and s['bad_run'] <= self.a.max_bad_run
 
     def redraw(self):
         self.recompute()
@@ -502,17 +651,17 @@ class TrackDrawer:
         if not s:
             return (f'점 {len(self.pts)}개 — 4개부터 스플라인이 생깁니다  '
                     f'│ 폭 {2*self.hw:.2f} m  평활 {self.dev:.2f} m')
-        po = self.prep_ok()
-        ok = (s['inside'] and s['bad'] == 0 and not s['fold']
-              and po is not False)
+        ok = self.ours_ok() and self.prep_ok() is not False
         return (f'{"✓ 저장 가능" if ok else "✗ 아직 안 됨"}   '
                 f'길이 {s["total"]:.2f} m   R_min {s["r_min"]:.3f} m   '
-                f'불가 {100*s["bad"]:.1f}%   폭 {2*self.hw:.2f} m')
+                f'불가 {100*s["bad"]:.1f}% (최장 {s["bad_run"]*100:.0f}cm '
+                f'/ 허용 {self.a.max_bad_run*100:.0f}cm)   폭 {2*self.hw:.2f} m')
 
     def panel(self):
         s = self.stats
         L = [f'키: 좌클릭 추가 · 우클릭 삭제 · u 취소 · c 비우기 · [ ] 폭 · '
-             f'- = 평활 · r 뒤집기 · t 참고 · h 전처리 · s 저장 · q 끝',
+             f'- = 평활 · f 자동평활 · r 뒤집기 · t 참고 · h 전처리 · '
+             f's 저장 · q 끝',
              f'차 한계: R_min {1/self.kappa_lim:.3f} m '
              f'(κ {self.kappa_lim:.3f}, max_steer {self.a.max_steer})   '
              f'권장 여유: κ ≤ {self.kappa_tgt:.2f} (R {1/self.kappa_tgt:.2f} m)']
@@ -521,13 +670,23 @@ class TrackDrawer:
         def mark(b):
             return '✓' if b else '✗'
         L.append(
-            f'{mark(s["bad"] == 0)} 곡률  R_min {s["r_min"]:.3f} m   '
-            f'한계초과 {100*s["bad"]:.1f}%   권장초과 {100*s["warn"]:.1f}%'
-            f'    {mark(s["inside"])} 경계 포함   '
-            f'벽~경계 여유 {s["clear"]:.3f} m')
+            f'{mark(s["bad_run"] <= self.a.max_bad_run)} 곡률  '
+            f'R_min {s["r_min"]:.3f} m   한계초과 {s["bad_n"]}점 '
+            f'{100*s["bad"]:.1f}%  최장 연속 {s["bad_run"]*100:.0f}cm   '
+            f'권장초과 {100*s["warn"]:.1f}%'
+            f'    {mark(s["inside"])} 경계 포함   여유 {s["clear"]:.3f} m')
+        if s['degenerate']:
+            L.append(f'✗ 단순 폐곡선이 아닙니다 — ∮κ ds / 2π = {s["wind"]:+.2f} '
+                     f'(±1 이어야 함), 면적 {s["area"]:.2f} m² '
+                     f'/ 클릭 {s["area_click"]:.2f} m². '
+                     f'평활화가 과해 고리가 붕괴했거나 선이 교차했습니다 — '
+                     f'- 로 내리세요')
         if s['fold']:
-            L.append(f'✗ 벽이 접힙니다 — 폭 {2*self.hw:.2f} m 가 '
-                     f'코너 반경 {s["r_min"]:.2f} m 보다 큽니다. [ 로 줄이세요')
+            # 경고만 — 막지 않는다. 이유는 ours_ok() 주석 참고.
+            L.append(f'⚠ 벽 접힘 {s["fold_n"]}점 (최장 {s["fold_run"]*100:.0f}cm) '
+                     f'— left/right_boundary.csv 가 그 구간에서 꼬입니다. '
+                     f'MPC 는 벽 좌표를 안 쓰니 주행에는 영향 없습니다. '
+                     f'[ 로 폭을 줄이면 사라집니다')
 
         # ★ MPC 가 실제로 받는 값. 우리 스플라인과 다르므로 이 줄이 기준이다.
         if self.TrackReader is None:
@@ -538,9 +697,10 @@ class TrackDrawer:
         elif self.prep:
             pr = self.prep
             L.append(
-                f'{mark(pr["bad"] == 0)} HyperMPC 전처리 후 (k=5, s=2.0, '
+                f'{mark(self.prep_ok() is not False)} HyperMPC 전처리 후 (k=5, s=2.0, '
                 f'{pr["n"]}점 {pr["spacing"]*100:.0f}cm)  '
-                f'R_min {pr["r_min"]:.3f} m  한계초과 {100*pr["bad"]:.1f}%  '
+                f'R_min {pr["r_min"]:.3f} m  한계초과 {100*pr["bad"]:.1f}% '
+                f'(최장 {pr.get("bad_run", 0)*100:.0f}cm)  '
                 f'RMSE {pr["rmse"]:.4f} m  폭보정 {pr["w_min"]:.3f}~{pr["w_max"]:.3f} m')
         return '\n'.join(L)
 
@@ -551,28 +711,47 @@ class TrackDrawer:
             print('✗ 점이 4개 미만이거나 스플라인이 안 만들어졌습니다')
             return
         if s['fold']:
-            print('✗ 벽이 접혀 있습니다 — 폭을 줄이세요')
+            # 막지 않는다 — 알리기만 한다 (ours_ok() 주석 참고)
+            print(f'⚠ 벽 접힘 {s["fold_n"]}점 (최장 {s["fold_run"]*100:.0f}cm) '
+                  f'— left/right_boundary.csv 가 그 구간에서 꼬입니다.')
+            print(f'  MPC 는 벽 좌표를 안 받으니 (스칼라 cfg.track_width) '
+                  f'주행에는 영향 없습니다. 거슬리면 [ 로 폭을 줄이세요.')
+        if s['degenerate']:
+            print(f'✗ 단순 폐곡선이 아닙니다 — ∮κ ds / 2π = {s["wind"]:+.2f} '
+                  f'(±1 이어야 함), 면적 {s["area"]:.2f} / '
+                  f'클릭 {s["area_click"]:.2f} m²')
+            print('  평활화가 과해 고리가 붕괴했거나 선이 스스로 교차합니다. '
+                  '- 로 평활화를 내리세요.')
             return
         if not s['inside']:
             print('✗ 중심선이나 벽이 실험실 경계를 벗어납니다')
             return
-        if s['bad'] > 0:
-            print(f'⚠ 주행 불가 구간이 {100*s["bad"]:.1f}% 남아 있습니다 '
-                  f'(R_min {s["r_min"]:.3f} m < 한계 {1/self.kappa_lim:.3f} m)')
-            print('  그래도 저장하려면 --allow-infeasible 로 다시 실행하세요.')
+        if s['bad_run'] > self.a.max_bad_run:
+            print(f'⚠ 주행 불가 구간이 연속 {s["bad_run"]*100:.0f}cm 입니다 '
+                  f'(허용 {self.a.max_bad_run*100:.0f}cm, '
+                  f'{s["bad_n"]}점 {100*s["bad"]:.1f}%, '
+                  f'R_min {s["r_min"]:.3f} < 한계 {1/self.kappa_lim:.3f} m)')
+            print('  f 를 눌러 자동 평활화를 시도하거나, 그 코너를 더 완만하게 '
+                  '찍어 보세요.')
+            print('  허용치를 바꾸려면 --max-bad-run, 강행하려면 '
+                  '--allow-infeasible.')
             if not self.a.allow_infeasible:
                 return
+        elif s['bad_n']:
+            print(f'· 한계초과 {s["bad_n"]}점 (최장 연속 '
+                  f'{s["bad_run"]*100:.0f}cm ≤ 허용 '
+                  f'{self.a.max_bad_run*100:.0f}cm) — 국소 스파이크로 보고 넘어갑니다')
         # ★ 우리 스플라인은 통과했는데 저자 전처리 후에 걸리는 경우.
         #   MPC 가 받는 건 뒤쪽이므로 여기서 막는 게 맞다.
         if self.prep_ok() is False:
             pr = self.prep
             print(f'⚠ 우리 스플라인은 통과했지만 HyperMPC 전처리 후에 '
-                  f'{100*pr["bad"]:.1f}% 가 주행 불가입니다 '
+                  f'연속 {pr["bad_run"]*100:.0f}cm 가 주행 불가입니다 '
                   f'(R_min {s["r_min"]:.3f} → {pr["r_min"]:.3f} m)')
             print('  저자 전처리기가 k=5 / s=2.0 으로 다시 매끄럽게 하면서 '
                   '곡률이 바뀝니다.')
-            print('  코너를 더 완만하게 찍거나 = 로 평활화를 올려 보세요. '
-                  '강행하려면 --allow-infeasible.')
+            print('  f 로 자동 평활화를 시도해 보세요. 강행하려면 '
+                  '--allow-infeasible.')
             if not self.a.allow_infeasible:
                 return
 
@@ -648,6 +827,13 @@ class TrackDrawer:
                 'max_abs_kappa': float(s['k_max']),
                 'min_radius_m': float(s['r_min']),
                 'infeasible_fraction': float(s['bad']),
+                'infeasible_points': int(s['bad_n']),
+                'infeasible_longest_run_m': float(s['bad_run']),
+                'max_bad_run_m': float(self.a.max_bad_run),
+                'wall_fold_points': int(s['fold_n']),
+                'wall_fold_longest_run_m': float(s['fold_run']),
+                'winding_number': float(s['wind']),
+                'enclosed_area_m2': float(s['area']),
                 'track_width_m': 2 * self.hw,
                 'wall_to_boundary_clearance_m': float(s['clear']),
                 'inside_lab_boundary': bool(s['inside']),
@@ -713,6 +899,11 @@ def main():
     p.add_argument('--hypermpc', default='~/hypermpc_code',
                    help='원저장소 경로. 그리는 중에 저자 전처리 결과를 같이 '
                         '보여준다 (없으면 미리보기만 빠진다)')
+    p.add_argument('--max-bad-run', type=float, default=0.15,
+                   help='한계를 넘는 구간이 연속으로 이 길이를 넘으면 막는다 '
+                        '(m, 기본 0.15 = 5cm 세 칸). "한 점이라도" 로 막으면 '
+                        '손으로 찍는 입력에서는 통과가 거의 불가능하다. '
+                        '0 으로 주면 예전처럼 한 점도 허용하지 않는다')
     p.add_argument('--allow-infeasible', action='store_true',
                    help='주행 불가 구간이 있어도 저장 (권장하지 않음)')
     a = p.parse_args()
