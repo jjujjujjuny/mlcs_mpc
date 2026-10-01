@@ -28,6 +28,7 @@ waypoint_logger — 차를 손으로/조이스틱으로 몰면서 주행 경로�
 import csv
 import math
 import os
+import signal
 
 import numpy as np
 import rclpy
@@ -101,6 +102,16 @@ class WaypointLogger(Node):
 
 
 def main(args=None):
+    # ★ SIGTERM 에서도 저장해야 한다.
+    #
+    #   저장은 아래 finally 에서 일어나는데, SIGTERM 은 파이썬을 그냥
+    #   끝내 버려서 finally 가 돌지 않는다. drive.sh 가 종료할 때 자식을
+    #   TERM 으로 정리하므로, 이게 없으면 한 바퀴를 통째로 날린다.
+    #   (2026-10-01 에 ./drive.sh record 가 그랬다)
+    def _on_term(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _on_term)
+
     rclpy.init(args=args)
     node = WaypointLogger()
     try:

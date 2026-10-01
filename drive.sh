@@ -259,6 +259,15 @@ cleanup () {
     stop_bag
     log "종료 중 — 정지 명령을 보냅니다"
     stop_all
+    # ★ 저장할 틈을 준다 — INT 를 먼저, 그것도 **노드 프로세스에 직접**.
+    #
+    #   waypoint_logger 는 KeyboardInterrupt/SIGTERM 에서 기록을 쓴다.
+    #   그런데 PIDS 에 들어 있는 건 `ros2 run` **래퍼** PID 라서, 거기에
+    #   신호를 보내면 노드까지 안 간다 (실측: 래퍼에 TERM 을 줘도 노드가
+    #   그대로 살아 있었다). 경로로 직접 찍어야 한다.
+    kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/' -INT
+    for p in ${PIDS:-}; do kill -INT "$p" 2>/dev/null || true; done
+    sleep 1.5
     for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
     # 브링업은 별도 프로세스 그룹이라 Ctrl+C 가 닿지 않는다 — 직접 죽인다
     [ -n "${BRINGUP_PGID:-}" ] && kill -TERM "-$BRINGUP_PGID" 2>/dev/null || true
@@ -286,6 +295,26 @@ NATNET_PGID=""
 #     안 하면 노드가 SIGABRT 로 즉사한다 (patches/README.md 참고).
 natnet_running () {
     pgrep -f '/lib/natnet_ros2/natnet_ros2_node' >/dev/null 2>&1
+}
+
+wait_for_state () {
+    # ★ 한 번만 보고 포기하면 안 된다. natnet → 브링업 → mocap_bridge 가
+    #   차례로 뜨고 DDS 디스커버리까지 끝나야 /mpc/state 가 잡히는데,
+    #   그게 5초를 넘긴다 (2026-09-30 실측: 단발 5초 확인은 실패,
+    #   조금 더 기다리면 198Hz 로 멀쩡히 나온다). 20초까지 재시도한다.
+    log "/mpc/state 대기 중..."
+    local ok=0 _
+    for _ in $(seq 1 4); do
+        if timeout 5 ros2 topic echo /mpc/state --once >/dev/null 2>&1; then
+            ok=1; break
+        fi
+    done
+    if [ "$ok" != 1 ]; then
+        err "/mpc/state 가 오지 않습니다 — mocap 연동을 먼저 확인하세요."
+        err "  ./drive.sh mocap   으로 점검하고 docs/SETUP_JETSON.md 5절 참고"
+        exit 1
+    fi
+    log "  ✓ /mpc/state 확인"
 }
 
 start_natnet () {
@@ -731,7 +760,13 @@ record)
     OUT="$SCRIPT_DIR/src/mlcs_mpc/waypoints/${NAME}.csv"
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
+    # ★ mocap 이 있어야 한다. waypoint_logger 는 /mpc/state 를 받아 적는데
+    #   그 토픽을 내는 건 mocap_bridge 다. 예전에는 start_bringup 만 불러서
+    #   **점이 0개로 끝나고 파일이 안 생겼다** (2026-10-01).
+    start_natnet
     start_bringup
+    start_mocap_bridge
+    wait_for_state
 
     log "웨이포인트 기록 → ${GRN}$OUT${RST}"
     ros2 run mlcs_mpc waypoint_logger --ros-args \
@@ -740,6 +775,8 @@ record)
     sleep 1
     echo
     warn "조이스틱으로 트랙을 한 바퀴 돈 뒤 Ctrl+C 로 저장하세요."
+    log "  진행 상황은 다른 터미널에서:  tail -f /tmp/mlcs_wp.log"
+    log "  두세 바퀴 돌면 laptrack 이 가장 매끄러운 바퀴를 골라 씁니다."
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
@@ -748,14 +785,24 @@ record)
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
 
     # 조이스틱이 끝나면 로거를 정리하고 평활화를 안내한다
-    sleep 1
+    sleep 2
     if [ -f "$OUT" ]; then
         echo
         log "저장됨: $OUT"
+        tail -4 /tmp/mlcs_wp.log 2>/dev/null | sed 's/^/    /'
         log "다음 — ${BLD}그대로 쓰지 마세요${RST} (사람 주행은 곡률이 튑니다):"
         echo "    ./drive.sh laptrack $NAME"
         echo "        한 바퀴만 잘라내고 평활화·벽·경계검사·HyperMPC 형식까지"
         echo "        한 번에 합니다. (중심선만 다듬으려면 smooth_path)"
+    else
+        echo
+        err "파일이 생기지 않았습니다: $OUT"
+        err "로거가 남긴 말:"
+        tail -8 /tmp/mlcs_wp.log 2>/dev/null | sed 's/^/    /'
+        echo
+        err "흔한 원인:"
+        err "  · 점이 3개 미만 — mocap 이 차를 못 봤다. ./drive.sh mocap 으로 확인"
+        err "  · 차를 안 움직였다 — 0.1m 이상 움직여야 한 점이 쌓인다"
     fi
     ;;
 
@@ -784,19 +831,7 @@ cal)
     #   차례로 뜨고 DDS 디스커버리까지 끝나야 /mpc/state 가 잡히는데,
     #   그게 5초를 넘긴다 (2026-09-30 실측: 단발 5초 확인은 실패,
     #   조금 더 기다리면 198Hz 로 멀쩡히 나온다). 20초까지 재시도한다.
-    log "/mpc/state 대기 중..."
-    STATE_OK=0
-    for _ in $(seq 1 4); do
-        if timeout 5 ros2 topic echo /mpc/state --once >/dev/null 2>&1; then
-            STATE_OK=1; break
-        fi
-    done
-    if [ "$STATE_OK" != 1 ]; then
-        err "/mpc/state 가 오지 않습니다 — mocap 연동을 먼저 확인하세요."
-        err "  ./drive.sh mocap   으로 점검하고 docs/SETUP_JETSON.md 5절 참고"
-        exit 1
-    fi
-    log "  ✓ /mpc/state 확인"
+    wait_for_state
 
     echo
     warn "${BLD}킬스위치를 손에 드세요. 차가 움직입니다.${RST}"
