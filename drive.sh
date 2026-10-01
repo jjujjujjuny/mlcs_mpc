@@ -18,6 +18,7 @@
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh laptrack <기록>     그 기록 한 바퀴 → 트랙 (★ 권장)
+#     ./drive.sh checkstate [초]     기록 전에 /mpc/state 가 멀쩡한지 점검
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
@@ -391,6 +392,37 @@ mocap_bridge_running () {
     pgrep -f '/lib/mlcs_mpc/mocap_bridge' >/dev/null 2>&1
 }
 
+# ★ /mpc/state 에 퍼블리셔가 둘이면 기록이 통째로 못 쓰게 된다.
+#
+#   waypoint_logger 는 min_dist(0.1m) 이상 움직였을 때만 점을 쌓는데,
+#   퍼블리셔가 둘이면 점이 두 궤적을 **번갈아** 찍는다. 그러면 점간
+#   거리가 min_dist 가 아니라 두 궤적 사이 거리가 되고, 어떤 평활화로도
+#   복구되지 않는다 (2026-10-01 에 두 번 겪었다 — 점간 중앙 2.4 m).
+#
+#   ros2 topic info 는 데몬 캐시 때문에 못 믿는다. 프로세스를 직접 센다.
+ensure_single_state_publisher () {
+    local n extra p
+    n="$(pgrep -fc '/lib/mlcs_mpc/mocap_bridge' 2>/dev/null || echo 0)"
+    if pgrep -f '/lib/mlcs_mpc/sim_bridge' >/dev/null 2>&1; then
+        warn "sim_bridge 가 떠 있습니다 — /mpc/state 를 같이 냅니다. 내립니다."
+        kill_matching '/lib/mlcs_mpc/sim_bridge' -9
+        sleep 1
+    fi
+    if [ "${n:-0}" -gt 1 ]; then
+        warn "mocap_bridge 가 ${n}개 떠 있습니다 — 하나만 남깁니다."
+        # 가장 오래된 것 하나만 남기고 나머지를 내린다
+        extra="$(pgrep -f '/lib/mlcs_mpc/mocap_bridge' | tail -n +2)"
+        for p in $extra; do kill -9 "$p" 2>/dev/null || true; done
+        sleep 1
+        n="$(pgrep -fc '/lib/mlcs_mpc/mocap_bridge' 2>/dev/null || echo 0)"
+        log "  → 이제 ${n}개"
+    fi
+    if [ "${n:-0}" -gt 1 ]; then
+        err "mocap_bridge 를 하나로 못 줄였습니다. ./drive.sh stop 후 다시 하세요."
+        exit 1
+    fi
+}
+
 start_mocap_bridge () {
     if mocap_bridge_running; then
         log "mocap 브릿지가 이미 떠 있습니다 — 그대로 씁니다"
@@ -589,6 +621,12 @@ stracks)
     python3 "$SCRIPT_DIR/tools/make_s_track.py" "$@"
     ;;
 
+checkstate)
+    # 기록 전에 /mpc/state 에 궤적이 하나만 오는지 몇 초 본다.
+    load_ros
+    python3 "$SCRIPT_DIR/tools/check_state.py" "$@"
+    ;;
+
 laptrack)
     # 수동 주행 기록 한 바퀴 → 트랙 (tools/track_from_lap.py)
     # 차가 실제로 돈 라인이라 선회반경과 경계가 자동으로 지켜진다.
@@ -766,7 +804,13 @@ record)
     start_natnet
     start_bringup
     start_mocap_bridge
+    ensure_single_state_publisher
     wait_for_state
+    # ★ 증상을 직접 잰다 — 원인(브릿지 2개/강체 2개/sim_bridge)을 짐작하지 않는다
+    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
+        err "기록을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
+        exit 1
+    fi
 
     log "웨이포인트 기록 → ${GRN}$OUT${RST}"
     ros2 run mlcs_mpc waypoint_logger --ros-args \
@@ -1146,6 +1190,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
