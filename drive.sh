@@ -17,6 +17,7 @@
 #     ./drive.sh preview <이름>      트랙 프리뷰 그림 (배치 + 곡률)
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
+#     ./drive.sh laptrack <기록>     그 기록 한 바퀴 → 트랙 (★ 권장)
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
@@ -559,6 +560,12 @@ stracks)
     python3 "$SCRIPT_DIR/tools/make_s_track.py" "$@"
     ;;
 
+laptrack)
+    # 수동 주행 기록 한 바퀴 → 트랙 (tools/track_from_lap.py)
+    # 차가 실제로 돈 라인이라 선회반경과 경계가 자동으로 지켜진다.
+    python3 "$SCRIPT_DIR/tools/track_from_lap.py" "$@"
+    ;;
+
 preview)
     # 트랙을 그림 한 장으로 — 배치 + 곡률 프로파일 (tools/preview_track.py)
     python3 "$SCRIPT_DIR/tools/preview_track.py" "$@"
@@ -745,9 +752,10 @@ record)
     if [ -f "$OUT" ]; then
         echo
         log "저장됨: $OUT"
-        log "다음 — ${BLD}평활화를 건너뛰지 마세요${RST} (곡률이 튀면 속도가 들쭉날쭉합니다):"
-        echo "    ros2 run mlcs_mpc smooth_path --ros-args \\"
-        echo "        -p input:=$OUT -p output:=${OUT%.csv}_smooth.csv"
+        log "다음 — ${BLD}그대로 쓰지 마세요${RST} (사람 주행은 곡률이 튑니다):"
+        echo "    ./drive.sh laptrack $NAME"
+        echo "        한 바퀴만 잘라내고 평활화·벽·경계검사·HyperMPC 형식까지"
+        echo "        한 번에 합니다. (중심선만 다듬으려면 smooth_path)"
     fi
     ;;
 
@@ -1103,6 +1111,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
