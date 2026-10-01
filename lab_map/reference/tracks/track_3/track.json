@@ -1,0 +1,9 @@
+{
+  "label": "Tall + skewed (y stretched 1.20, shear kx 0.15)",
+  "shape": "tall_skew",
+  "width": 0.6,
+  "num_points": 566,
+  "path_length_m": 17.000000000000004,
+  "max_abs_kappa": 2.814542302750035,
+  "min_turn_radius_m": 0.35529755549345243
+}

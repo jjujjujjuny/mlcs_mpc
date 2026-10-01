@@ -1,0 +1,9 @@
+{
+  "label": "Original lab centerline",
+  "shape": "original",
+  "width": 0.6,
+  "num_points": 566,
+  "path_length_m": 17.000782231860263,
+  "max_abs_kappa": 3.405804820228344,
+  "min_turn_radius_m": 0.2936163558347875
+}

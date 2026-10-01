@@ -1,0 +1,31 @@
+{
+  "source_track_json": "/home/user/Desktop/map_data/track_data/latest_track_waypoints.json",
+  "source_boundary_json": "/home/user/Desktop/map_data/map_boundary_data/map_boundary_data.json",
+  "method": "smooth_curve_then_expand_within_map_boundary",
+  "track": {
+    "closed": true,
+    "width_m": 0.6,
+    "half_width_m": 0.3,
+    "resample_spacing_m": 0.04,
+    "curve_iter": 4,
+    "max_scale_requested": 1.4,
+    "scale_used": 1.119735211133957,
+    "clicked_waypoint_count": 81,
+    "smooth_centerline_count": 428,
+    "centerline_point_count": 428,
+    "centerline_length_m": 19.17438739749163
+  },
+  "files": {
+    "clicked_waypoints_csv": "/home/user/Desktop/map_data/track_linear_data/track_clicked_waypoints.csv",
+    "smooth_centerline_csv": "/home/user/Desktop/map_data/track_linear_data/track_smooth_centerline.csv",
+    "centerline_csv": "/home/user/Desktop/map_data/track_linear_data/track_centerline.csv",
+    "left_boundary_csv": "/home/user/Desktop/map_data/track_linear_data/track_left_boundary.csv",
+    "right_boundary_csv": "/home/user/Desktop/map_data/track_linear_data/track_right_boundary.csv",
+    "preview_png": "/home/user/Desktop/map_data/track_linear_data/track_linear_preview.png"
+  },
+  "notes": [
+    "Clicked waypoints are first smoothed into a curve.",
+    "Then the curved centerline is expanded outward about its centroid.",
+    "The final scale is chosen automatically so that the centerline and both width boundaries stay inside the map boundary."
+  ]
+}

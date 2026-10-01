@@ -1,0 +1,137 @@
+{
+  "name": "map_boundary_data",
+  "created_unix_time": 1777982624,
+  "source_outer_boundary_json": "/home/user/Desktop/map_data/outer_boundary_map_1777982442/outer_boundary_map.json",
+  "coordinate_frame": {
+    "name": "mocap_world_rotated_if_applied",
+    "unit": "meter",
+    "point_reference": "turtlebot_model_center",
+    "description": "Boundary vertices generated from manual boundary trace. Use these vertices as the map boundary for road generation."
+  },
+  "boundary": {
+    "closed": true,
+    "num_vertices": 19,
+    "vertices": [
+      {
+        "id": 0,
+        "x": -2.2819277010779624,
+        "y": -0.5128577186955556
+      },
+      {
+        "id": 1,
+        "x": -1.676951796106194,
+        "y": -2.113556138226234
+      },
+      {
+        "id": 2,
+        "x": -0.9263676943709118,
+        "y": -2.474982067238524
+      },
+      {
+        "id": 3,
+        "x": -0.650608814865035,
+        "y": -3.03601330981381
+      },
+      {
+        "id": 4,
+        "x": 1.4253778854805257,
+        "y": -3.3230396968524376
+      },
+      {
+        "id": 5,
+        "x": 1.700881626171342,
+        "y": -3.1106502815552886
+      },
+      {
+        "id": 6,
+        "x": 1.717096535552414,
+        "y": -2.1181007186914522
+      },
+      {
+        "id": 7,
+        "x": 2.6960270193703506,
+        "y": -1.3931103936949845
+      },
+      {
+        "id": 8,
+        "x": 2.98371571194421,
+        "y": -0.9502587918989521
+      },
+      {
+        "id": 9,
+        "x": 2.913338078610196,
+        "y": -0.7099375960824108
+      },
+      {
+        "id": 10,
+        "x": 1.9774821013775394,
+        "y": 0.04541157393853516
+      },
+      {
+        "id": 11,
+        "x": 1.3929994803662127,
+        "y": 1.298214943494638
+      },
+      {
+        "id": 12,
+        "x": 1.3053158107711513,
+        "y": 2.2868603770788245
+      },
+      {
+        "id": 13,
+        "x": 0.9806643142890181,
+        "y": 2.3776875021899206
+      },
+      {
+        "id": 14,
+        "x": 0.4850458069135891,
+        "y": 3.144469877653381
+      },
+      {
+        "id": 15,
+        "x": 0.08054308491066611,
+        "y": 3.4217302447871605
+      },
+      {
+        "id": 16,
+        "x": -1.5188833603620981,
+        "y": 2.864713531290991
+      },
+      {
+        "id": 17,
+        "x": -2.138278854584861,
+        "y": 2.426492760402138
+      },
+      {
+        "id": 18,
+        "x": -2.7924082927186777,
+        "y": 0.6285517837053972
+      }
+    ]
+  },
+  "geometry": {
+    "area_m2": 24.13115304306307,
+    "perimeter_m": 19.53650824919861
+  },
+  "generation_parameters": {
+    "stride": 5,
+    "n_bins": 180,
+    "percentile": 97.0,
+    "smooth_window": 5,
+    "epsilon": 0.12,
+    "trim_head": 0,
+    "trim_tail": 0
+  },
+  "notes": [
+    "Vertices are ordered around the estimated outer boundary.",
+    "The first and last vertices are not duplicated in the vertices list.",
+    "When drawing roads or checking containment, close the polygon by connecting the last vertex back to the first.",
+    "These coordinates are based on corrected model-center mocap data."
+  ],
+  "coordinate_fix": {
+    "operation": "undo_rot180",
+    "description": "Applied x=-x, y=-y to convert visualization-rotated map/track data back to original mocap world coordinates.",
+    "unix_time": 1777986103,
+    "backup_dir": "/home/user/Desktop/map_data/backup_before_unrotate_1777986103"
+  }
+}

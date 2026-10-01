@@ -1,0 +1,9 @@
+{
+  "label": "Wide + tilted (x stretched 1.20, rotated -15 deg)",
+  "shape": "wide_tilted",
+  "width": 0.6,
+  "num_points": 566,
+  "path_length_m": 17.0,
+  "max_abs_kappa": 4.544141998991477,
+  "min_turn_radius_m": 0.22006354559825356
+}

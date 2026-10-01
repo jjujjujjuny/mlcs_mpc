@@ -1,0 +1,9 @@
+{
+  "label": "Wide (x stretched 1.40)",
+  "shape": "wide",
+  "width": 0.6,
+  "num_points": 566,
+  "path_length_m": 17.0,
+  "max_abs_kappa": 5.243266160841796,
+  "min_turn_radius_m": 0.19072081586631717
+}

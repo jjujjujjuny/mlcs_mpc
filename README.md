@@ -264,6 +264,7 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 - [docs/SETUP_JETSON.md](docs/SETUP_JETSON.md) — 젯슨 환경 구축 (여기부터)
 - [docs/MOCAP_SETUP.md](docs/MOCAP_SETUP.md) — 모션캡처 연동 (RigidBody → 토픽)
 - [docs/CALIBRATION.md](docs/CALIBRATION.md) — VESC 캘리브레이션
+- [lab_map/](lab_map/) — 실험실 경계(19각형) + 트랙 생성 도구 (메인 PC 에서 가져옴)
 - [docs/TRACKS.md](docs/TRACKS.md) — 트랙 출처와 **주행 가능성** (★ 주행 전 확인)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길 (논문 분석 포함)
 
