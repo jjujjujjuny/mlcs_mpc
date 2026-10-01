@@ -53,6 +53,51 @@ p = [ 차량 10 + 앞타이어 10 + 뒤타이어 10 + 곡률 1 ] → 31
 
 파라미터 기본값은 원본 `single_track_params.py` / `pacejka_params.py` 에서 가져왔다.
 
+## 트랙 폭 — 0.25 는 반폭이다 (2026-10-01 확인)
+
+원저장소를 받아 확인했다. `conf_mpc/config_car.yaml` 의 `track_width: 0.25` 가
+`robot_model/car/casadi_car_model.py:106` 에서 이렇게 쓰인다:
+
+```python
+h_left  = cfg.track_width - n        #  n ≤ +0.25
+h_right = cfg.track_width + n        #  n ≥ -0.25
+track_soft_constraints_cost = soft_constraint(h_left) + soft_constraint(h_right)
+```
+
+**`/2` 가 없으므로 반폭**이다 — 전폭 0.50 m. 같은 저장소의
+`casadi_car_model_drift_parking.py:107` 은 `width_s(s)/2 - n` 으로 전폭을
+받으므로 이름이 파일마다 다른 뜻이다. 차량 모델 쪽이 반폭이고, 그것이
+논문 결과를 낸 설정이다.
+
+### ⚠ 하드 제약이 아니다
+
+```python
+def soft_constraint(h, lambda_=cfg.soft_constraint_lambda):   # 200.0
+    return cs.log(1 + cs.exp(-lambda_ * h))
+```
+
+비용에 더하는 배리어이고, `mpc_formulation_car.py` 의
+`ocp.constraints.lbx` 는 **비어 있다** — 상태에 하드 상한이 아예 없다.
+즉 0.25 는 "벽" 이 아니라 "중심선에서 이만큼 벗어나면 비용이 물린다" 는
+튜닝값이다. 저자들 트랙 중 `lab_curvy_v1` 은 반폭 0.125 로 **차폭
+0.27 m 보다도 좁다** — 벽으로 읽으면 말이 안 되는 값이다.
+
+### 저자들 트랙 (`mpc/tracks/*.csv`, `x_m,y_m,w_tr_right_m,w_tr_left_m`)
+
+| 트랙 | 반폭 | 전폭 | 크기 |
+|---|---|---|---|
+| `lab_curvy_v1` | 0.125 | 0.25 m | 3.73 × 6.19 m |
+| `lab_monza` | 0.230~0.510 | 0.46~1.02 m | 4.20 × 5.76 m |
+| `lab_usa_v3` | 0.550 | 1.10 m | 2.59 × 5.61 m |
+
+CSV 의 폭 열은 차량 모델이 **읽지 않는다** — 스칼라 `cfg.track_width` 만
+쓴다. 폭 열을 쓰는 것은 drift-parking 모델뿐이다.
+
+실험실 크기가 우리와 비슷하다 (우리 19각형은 5.78 × 6.74 m).
+
+→ `tools/draw_track.py` 의 `--half-width` 기본값을 0.25 로 맞췄다.
+  `track_5` 는 0.30 으로 만들어져 있어 다르다.
+
 ## 지금 MPC 와의 차이
 
 |  | 현재 `mpc_node` | 이 정식화 |

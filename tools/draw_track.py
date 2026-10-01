@@ -26,6 +26,26 @@ draw_track.py — 손으로 레이싱 라인을 찍으면 스플라인 + 양쪽 
   실제로 track_1 은 이 검사 없이 만들어져서 31% 가 주행 불가였다.
   자세한 경위는 docs/TRACKS.md 에 있다.
 
+■ 트랙 폭은 왜 ±0.25 인가
+
+  HyperMPC 원저자 값이다. conf_mpc/config_car.yaml 의 track_width: 0.25 가
+  robot_model/car/casadi_car_model.py:106 에서 이렇게 쓰인다:
+
+      h_left  = cfg.track_width - n        →  n ≤ +0.25
+      h_right = cfg.track_width + n        →  n ≥ -0.25
+
+  **/2 가 없으므로 반폭**이다 (전폭 0.50 m). 같은 저장소의 drift-parking
+  모델은 width_s(s)/2 - n 으로 전폭을 받으니, 이름이 파일마다 다른 뜻으로
+  쓰인다 — 차량 모델 쪽이 반폭이고 그것이 논문 결과를 낸 설정이다.
+
+  ⚠ 이것은 **소프트 제약**이다. log(1+exp(-200·h)) 를 비용에 더하는
+  배리어이고, ocp.constraints.lbx 는 비어 있다 — 하드 상한이 아예 없다.
+  즉 0.25 는 "벽" 이 아니라 "중심선에서 이만큼 벗어나면 비용이 물린다" 는
+  튜닝값이다. 실제로 저자들 트랙 중 lab_curvy_v1 은 반폭 0.125 로
+  **차폭(0.27 m)보다도 좁다.**
+
+  track_5 는 반폭 0.30 으로 만들어져 있어 다르다. --half-width 로 바꿀 수 있다.
+
 ■ 키
 
     왼쪽 클릭    점 추가
@@ -440,8 +460,8 @@ def main():
     p.add_argument('name', nargs='?', default=None,
                    help='트랙 이름 (기본: hand_날짜시각)')
     p.add_argument('--boundary', default=BOUNDARY)
-    p.add_argument('--half-width', type=float, default=0.30,
-                   help='중심선에서 벽까지 (기본 0.30 — track_5 와 같다)')
+    p.add_argument('--half-width', type=float, default=0.25,
+                   help='중심선에서 벽까지 (기본 0.25 — HyperMPC 원저자 값)')
     p.add_argument('--spacing', type=float, default=0.05,
                    help='웨이포인트 간격 m (기본 0.05)')
     p.add_argument('--smooth', type=float, default=0.03,
