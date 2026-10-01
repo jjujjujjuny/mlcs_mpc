@@ -11,6 +11,7 @@
 #                                    인자 없으면 config/track.yaml 을 따른다
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
+#     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
@@ -549,6 +550,13 @@ bench)
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
     ;;
 
+drawtrack)
+    # 손클릭 레이싱 라인 → 닫힌 스플라인 → 좌/우 벽 (tools/draw_track.py)
+    # ROS 도 차량도 필요 없다. 창을 띄우므로 NoMachine 으로 젯슨 화면에서.
+    [ -n "${DISPLAY:-}" ] || { err "DISPLAY 가 없습니다 — NoMachine 으로 젯슨 화면에 접속한 뒤 실행하세요"; exit 1; }
+    python3 "$SCRIPT_DIR/tools/draw_track.py" "$@"
+    ;;
+
 servo)
     # 조향 기계적 한계 찾기 — 서보 값을 키보드로 직접 민다 (tools/servo_sweep.py)
     load_ros
@@ -1073,6 +1081,8 @@ stop)
     ;;
 
 help|--help|-h|*)
-    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+    # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
+    #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
+    sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
