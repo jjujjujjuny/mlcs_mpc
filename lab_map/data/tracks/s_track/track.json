@@ -1,0 +1,55 @@
+{
+  "name": "s_track",
+  "created": "2026-10-01T20:33:54",
+  "source": "tools/make_s_track.py (직선 + S자, 2회 회전대칭)",
+  "coordinate_frame": {
+    "name": "mocap_world",
+    "unit": "meter",
+    "note": "경계 JSON 과 같은 프레임. /car/pose 와 변환 없이 비교 가능"
+  },
+  "boundary_source": "lab_map/data/boundary/map_boundary_data.json",
+  "generation": {
+    "clicked_points": [],
+    "spline": "해석적 — 곡률 프로파일 적분 (스플라인 아님)",
+    "smooth_dev_m": 0.0,
+    "spacing_m": 0.05,
+    "half_width_m": 0.25
+  },
+  "vehicle_limits": {
+    "wheelbase": 0.33,
+    "max_steer": 0.4,
+    "kappa_limit": 1.2811915719338236,
+    "r_min_car": 0.7805233986129064
+  },
+  "geometry": {
+    "closed": true,
+    "path_length_m": 11.985999999998828,
+    "num_points": 240,
+    "max_abs_kappa": 1.0211375472276116,
+    "min_radius_m": 0.9793,
+    "infeasible_fraction": 0.0,
+    "infeasible_points": 0,
+    "infeasible_longest_run_m": 0.0,
+    "max_bad_run_m": 0.15,
+    "wall_fold_points": 0,
+    "wall_fold_longest_run_m": 0.0,
+    "winding_number": 0.9998531918891267,
+    "enclosed_area_m2": 10.168793052748779,
+    "track_width_m": 0.5,
+    "wall_to_boundary_clearance_m": 0.30180001292120895,
+    "inside_lab_boundary": true
+  },
+  "hypermpc_preprocessed": {
+    "note": "저자 track_preprocesor.TrackReader 로 낸 값. prep_<이름>.csv 는 ./drive.sh preptrack 으로 만든다",
+    "rmse_m": 0.020431412101881208,
+    "num_points": 59,
+    "spacing_m": 0.20130598304898456,
+    "path_length_m": 11.87705299989009,
+    "min_radius_m": 0.8447581256002639,
+    "infeasible_fraction": 0.0,
+    "track_width_corrected_m": [
+      0.4416027843650525,
+      0.4921882436536642
+    ]
+  }
+}

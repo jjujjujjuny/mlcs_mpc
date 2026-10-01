@@ -12,6 +12,7 @@
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
+#     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
 #     ./drive.sh trackinfo [파일]    트랙 기하 + 안전 여유 점검 (주행 없음)
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
@@ -41,7 +42,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${MLCS_WS:-$HOME/f1tenth_ws}"
-SPEED="${MLCS_SPEED:-3.5}"
+SPEED="${MLCS_SPEED:-4.5}"
 # ★ 속도는 반드시 소수점을 붙여 넘긴다.
 #
 #   ROS 2 launch 는 인자 문자열을 보고 타입을 추론한다. MLCS_SPEED=2 처럼
@@ -549,6 +550,12 @@ bench)
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
+    ;;
+
+stracks)
+    # 직선 + S자 트랙을 해석적으로 생성 (tools/make_s_track.py)
+    # 손클릭과 달리 곡률이 설계로 보장된다. 창도 ROS 도 차량도 필요 없다.
+    python3 "$SCRIPT_DIR/tools/make_s_track.py" "$@"
     ;;
 
 preptrack)
@@ -1090,6 +1097,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

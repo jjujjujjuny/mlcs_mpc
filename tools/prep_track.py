@@ -60,14 +60,14 @@ import scipy.signal         # noqa: F401
 os.environ.setdefault('MPLBACKEND', 'Agg')   # 창을 띄우지 않는다
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HANDDRAWN = os.path.join(REPO, 'lab_map/data/handdrawn')
+HANDDRAWN = os.path.join(REPO, 'lab_map/data/tracks')
 
 
 def main():
     p = argparse.ArgumentParser(
         description='HyperMPC 원저자 TrackReader 로 prep_<이름>.csv 생성',
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    p.add_argument('name', help='트랙 이름 (lab_map/data/handdrawn/<이름>/)')
+    p.add_argument('name', help='트랙 이름 (lab_map/data/tracks/<이름>/)')
     p.add_argument('--hypermpc', default=os.path.expanduser('~/hypermpc_code'),
                    help='원저장소 경로 (기본 ~/hypermpc_code)')
     p.add_argument('--reverse', action='store_true',
