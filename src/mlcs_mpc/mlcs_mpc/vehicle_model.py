@@ -50,9 +50,9 @@ class VehicleParams:
 
     def __init__(self,
                  wheelbase=0.33,     # 미측정 — f1tenth 표준 섀시 기준
-                 lf=0.176,           # 미측정 — 무게중심~앞축
-                 lr=0.144,           # 미측정 — 무게중심~뒤축
-                 mass=3.5,           # 미측정
+                 lf=0.1802,          # ✅ 실측 2026-10-02 — 앞축~무게중심
+                 lr=0.1498,          # ✅ 실측 — 뒤축~무게중심 (lf+lr=L)
+                 mass=3.097,         # ✅ 실측 (kg) — 앞 1400g / 뒤 1685g
                  max_speed=4.0,
                  min_speed=0.0,
                  max_accel=3.0,
