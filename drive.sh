@@ -4,6 +4,7 @@
 #
 #  사용법:
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
+#                       --log        몰면서 HyperPM 학습 데이터도 쌓는다
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
@@ -20,7 +21,7 @@
 #     ./drive.sh laptrack <기록>     그 기록 한 바퀴 → 트랙 (★ 권장)
 #     ./drive.sh checkstate [초]     기록 전에 /mpc/state 가 멀쩡한지 점검
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
-#     ./drive.sh log [태그]          조이스틱 주행 + HyperPM 학습 데이터 기록
+#     ./drive.sh log [태그]          joy --log 과 같음 (예전 이름)
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
 #     ./drive.sh rviz                RViz 시각화 (젯슨에서 — NoMachine 으로 본다)
@@ -251,6 +252,77 @@ pub_stop () {
 #   (INT 로 한 번, 그 뒤 스크립트가 끝나며 EXIT 로 또 한 번).
 #   정지 명령을 두 번 쏘는 건 무해하지만 종료가 그만큼 늦어진다.
 _CLEANED=0
+# ── HyperPM 학습 데이터 ────────────────────────────────────────────
+#
+#  ./drive.sh joy --log   과  ./drive.sh log   가 **같은 코드**를 쓴다.
+#  따로 두면 한쪽만 고치는 일이 생긴다 (log 모드가 mocap 을 안 띄워서
+#  데이터가 0분이었던 게 그런 경우였다 — 2026-11-02).
+start_data_logger () {
+    local tag="${1:-}"
+    DATA_DIR="${MLCS_DATA:-$HOME/mlcs_data}"
+    # ★ data_logger 는 /mpc/state 를 시간 기준으로 삼는다. mocap 이 없으면
+    #   한 줄도 안 쌓인다. 36분을 모으기 전에 여기서 막는다.
+    start_natnet
+    start_mocap_bridge
+    ensure_single_state_publisher
+    wait_for_state
+    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
+        err "데이터 수집을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
+        exit 1
+    fi
+    log "HyperPM 학습 데이터 기록 → ${GRN}${DATA_DIR}${RST}"
+    ros2 run mlcs_mpc data_logger --ros-args \
+        -p output_dir:="$DATA_DIR" -p tag:="$tag" >/tmp/mlcs_datalog.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 1
+    echo
+    warn "운용 영역 전체를 덮도록 모으세요 — 한 바퀴만 돌면 좁은 영역만 쌓입니다."
+    echo "    가감속 / 좌우 선회 / 8자 / 한계 부근을 골고루"
+    echo "    로거 상태: tail -f /tmp/mlcs_datalog.log"
+    echo
+}
+
+report_data_total () {
+    [ -n "${DATA_DIR:-}" ] || return 0
+    # 헤더 줄을 뺀 총 행수 → 분 (100Hz 기준). 파일이 없으면 0.
+    # ★ grep -c 는 매치가 없으면 exit 1 이라 || echo 0 이 같이 찍혀
+    #   "0\n0" 이 되고 awk 가 깨진다. head -1 로 한 줄만 취한다.
+    local tot
+    tot=$( { cat "$DATA_DIR"/drive_*.csv 2>/dev/null || true; } | grep -vc '^time' || true )
+    tot=$(echo "${tot:-0}" | head -1)
+    echo
+    log "누적 데이터: ${GRN}$(awk -v n="$tot" 'BEGIN{printf "%.1f", n/6000}')분${RST} / 36분 (논문 기준)"
+}
+
+# 조이스틱 수동 조종 세션. LOGDATA=1 이면 학습 데이터를 같이 쌓는다.
+joy_session () {
+    local tag="${1:-}"
+    start_bringup
+    [ "$LOGDATA" = 1 ] && start_data_logger "$tag"
+
+    local note=""
+    [ "$LOGDATA" = 1 ] && note="  ${YLW}+ 학습 데이터 수집${RST}"
+    log "조이스틱 수동 조종  ${GRN}max_speed=${SPEED} m/s${RST}${note}"
+    echo
+    echo "    RT 당김        전진 (놓으면 즉시 정지)"
+    echo "    RB + RT        후진"
+    echo "    L스틱          조향"
+    echo "    START          비상 정지"
+    echo
+    warn "기동 직후 RT 에서 손을 떼세요 — 트리거 휴지값을 자동으로 잽니다"
+    echo
+    # joy:=false — bringup 이 joy_node 를 이미 띄웠다
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    warn_if_no_joy
+    ros2 launch mlcs_mpc joystick.launch.py \
+        joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false \
+        debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
+
+    [ "$LOGDATA" = 1 ] && { sleep 1; report_data_total; }
+    return 0
+}
+
 cleanup () {
     [ "$_CLEANED" = "1" ] && return
     _CLEANED=1
@@ -569,10 +641,12 @@ shift 2>/dev/null || true
 #     ./drive.sh stanley --bag
 #     ./drive.sh stanley other.csv --bag
 BAG=0
+LOGDATA=0
 _ARGS=()
 for a in "$@"; do
     case "$a" in
         --bag) BAG=1 ;;
+        --log) LOGDATA=1 ;;
         *)     _ARGS+=("$a") ;;
     esac
 done
@@ -581,24 +655,11 @@ set -- "${_ARGS[@]+"${_ARGS[@]}"}"
 case "$MODE" in
 
 joy)
+    # ./drive.sh joy          그냥 수동 조종
+    # ./drive.sh joy --log    몰면서 HyperPM 학습 데이터도 쌓는다
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
-    start_bringup
-    log "조이스틱 수동 조종  ${GRN}max_speed=${SPEED} m/s${RST}"
-    echo
-    echo "    RT 당김        전진 (놓으면 즉시 정지)"
-    echo "    RB + RT        후진"
-    echo "    L스틱          조향"
-    echo "    START          비상 정지"
-    echo
-    warn "기동 직후 RT 에서 손을 떼세요 — 트리거 휴지값을 자동으로 잽니다"
-    echo
-    # joy:=false — bringup 이 joy_node 를 이미 띄웠다
-    JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
-    warn_if_no_joy
-    ros2 launch mlcs_mpc joystick.launch.py \
-        joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
+    joy_session "${1:-}"
     ;;
 
 bench)
@@ -762,46 +823,11 @@ mpc)
     ;;
 
 log)
-    TAG="${1:-}"
-    DATA_DIR="${MLCS_DATA:-$HOME/mlcs_data}"
+    # ./drive.sh joy --log 과 같다. 예전부터 쓰던 이름이라 남겨둔다.
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
-    # ★ record 와 같은 이유로 mocap 이 있어야 한다. data_logger 는
-    #   /mpc/state 를 시간 기준으로 삼는데 그 토픽을 내는 건 mocap_bridge 다.
-    #   start_bringup 만 부르면 **한 줄도 안 쌓인다** (2026-11-02 발견).
-    start_natnet
-    start_bringup
-    start_mocap_bridge
-    ensure_single_state_publisher
-    wait_for_state
-    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
-        err "기록을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
-        exit 1
-    fi
-
-    log "HyperPM 학습 데이터 기록 → ${GRN}${DATA_DIR}${RST}"
-    ros2 run mlcs_mpc data_logger --ros-args \
-        -p output_dir:="$DATA_DIR" -p tag:="$TAG" >/tmp/mlcs_datalog.log 2>&1 &
-    PIDS="$PIDS $!"
-    sleep 1
-    echo
-    warn "운용 영역 전체를 덮도록 모세요 — 직선만 왕복하면 코너 데이터가 없습니다."
-    echo "    가감속 / 좌우 선회 / 한계 부근을 골고루"
-    echo "    로거 상태: tail -f /tmp/mlcs_datalog.log"
-    echo
-    JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
-    ros2 launch mlcs_mpc joystick.launch.py \
-        joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
-
-    sleep 1
-    # 헤더 줄을 뺀 총 행수 → 분 (100Hz 기준). 파일이 없으면 0.
-    # ★ grep -c 는 매치가 없으면 exit 1 이라 || echo 0 이 같이 찍혀
-    #   "0\n0" 이 되고 awk 가 깨진다. head -1 로 한 줄만 취한다.
-    TOT=$( { cat "$DATA_DIR"/drive_*.csv 2>/dev/null || true; } | grep -vc '^time' || true )
-    TOT=$(echo "${TOT:-0}" | head -1)
-    echo
-    log "누적 데이터: ${GRN}$(awk -v n="$TOT" 'BEGIN{printf "%.1f", n/6000}')분${RST} / 36분 (논문 기준)"
+    LOGDATA=1
+    joy_session "${1:-}"
     ;;
 
 record)
@@ -1201,6 +1227,6 @@ stop)
 help|--help|-h|*)
     # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
     #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
