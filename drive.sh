@@ -248,10 +248,6 @@ pub_stop () {
     timeout 3 ros2 topic pub -t 20 -r 20 -w 0 "$1" "$2" "$3" >/dev/null 2>&1 || true
 }
 
-# ★ trap 이 INT 와 EXIT 양쪽에 걸려 있어 cleanup 은 두 번 불린다
-#   (INT 로 한 번, 그 뒤 스크립트가 끝나며 EXIT 로 또 한 번).
-#   정지 명령을 두 번 쏘는 건 무해하지만 종료가 그만큼 늦어진다.
-_CLEANED=0
 # ── HyperPM 학습 데이터 ────────────────────────────────────────────
 #
 #  ./drive.sh joy --log   과  ./drive.sh log   가 **같은 코드**를 쓴다.
@@ -333,32 +329,95 @@ joy_session () {
     return 0
 }
 
+# ── 종료 ────────────────────────────────────────────────────────────
+#
+#  ★ Ctrl+C 한 번이면 알아서 정리하고 **끝나야** 한다.
+#
+#    예전에는 `trap cleanup EXIT INT TERM` 이었다. 그런데 bash 의 INT 트랩은
+#    핸들러를 돌린 뒤 **스크립트를 계속 진행**한다. 그래서 Ctrl+C 를 눌러도
+#    /mpc/state 대기 루프가 계속 돌아 "✗ /mpc/state 가 오지 않습니다" 를
+#    찍고서야 끝났다 (2026-11-02). 신호를 받으면 정리 후 exit 해야 한다.
+#
+#    정리 중에 Ctrl+C 를 **한 번 더** 누르면 기다리지 않고 바로 죽인다.
+_CLEANED=0
+_FORCE=0
+
+# PID 와 그 자식들에게 신호를 보낸다.
+# ★ `ros2 run` 래퍼는 받은 신호를 노드에 넘기지 않는다 (실측: 래퍼에 INT 를
+#   줘도 노드가 살아 있었다). 래퍼만 죽이면 노드가 고아로 남는다 —
+#   mocap_bridge 가 중복으로 떠 있던 원인 중 하나다. 자식까지 찍는다.
+signal_tree () {
+    local pid="$1" sig="$2" c g
+    for c in $(pgrep -P "$pid" 2>/dev/null); do
+        for g in $(pgrep -P "$c" 2>/dev/null); do kill "$sig" "$g" 2>/dev/null || true; done
+        kill "$sig" "$c" 2>/dev/null || true
+    done
+    kill "$sig" "$pid" 2>/dev/null || true
+}
+
+# 우리가 띄운 것이 다 내려갈 때까지 기다린다 (최대 $1 초).
+# ★ 고정 sleep 대신 폴링한다. 다 내려갔으면 바로 다음으로 — 종료가 빠르다.
+wait_gone () {
+    local limit="$1" t=0 p alive
+    while :; do
+        alive=0
+        for p in ${PIDS:-}; do
+            kill -0 "$p" 2>/dev/null && { alive=1; break; }
+            [ -n "$(pgrep -P "$p" 2>/dev/null)" ] && { alive=1; break; }
+        done
+        [ "$alive" = 0 ] && return 0
+        [ "$_FORCE" = 1 ] && return 0
+        t=$(awk -v a="$t" 'BEGIN{print a+0.1}')
+        awk -v a="$t" -v b="$limit" 'BEGIN{exit !(a>=b)}' && return 0
+        sleep 0.1
+    done
+}
+
 cleanup () {
     [ "$_CLEANED" = "1" ] && return
     _CLEANED=1
     echo
+    # 정리 중 두 번째 Ctrl+C → 기다림을 건너뛰고 바로 죽인다
+    trap '_FORCE=1; echo; warn "강제 종료합니다"' INT
     # ★ 기록을 **먼저** 닫는다. 노드를 죽인 뒤에 닫으면 마지막 구간이
     #   비거나 메타데이터가 깨진다.
     stop_bag
-    log "종료 중 — 정지 명령을 보냅니다"
-    stop_all
-    # ★ 저장할 틈을 준다 — INT 를 먼저, 그것도 **노드 프로세스에 직접**.
-    #
-    #   waypoint_logger 는 KeyboardInterrupt/SIGTERM 에서 기록을 쓴다.
-    #   그런데 PIDS 에 들어 있는 건 `ros2 run` **래퍼** PID 라서, 거기에
-    #   신호를 보내면 노드까지 안 간다 (실측: 래퍼에 TERM 을 줘도 노드가
-    #   그대로 살아 있었다). 경로로 직접 찍어야 한다.
+    # ★ VESC 가 떠 있을 때만 정지 명령을 쏜다. 없으면 ros2 CLI 기동만으로
+    #   3초를 버린다 (mocap / natnet / rviz 모드).
+    if bringup_running; then
+        log "종료 중 — 정지 명령을 보냅니다"
+        [ "$_FORCE" = 1 ] || stop_all
+    else
+        log "종료 중..."
+    fi
+    # ① INT — 노드가 저장할 틈을 준다 (data_logger / waypoint_logger)
+    for p in ${PIDS:-}; do signal_tree "$p" -INT; done
     kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/' -INT
-    for p in ${PIDS:-}; do kill -INT "$p" 2>/dev/null || true; done
-    sleep 1.5
-    for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
-    # 브링업은 별도 프로세스 그룹이라 Ctrl+C 가 닿지 않는다 — 직접 죽인다
+    wait_gone 2.0
+    # ② TERM — 브링업·natnet 은 setsid 로 띄워 Ctrl+C 가 안 닿는다. 직접.
+    for p in ${PIDS:-}; do signal_tree "$p" -TERM; done
     [ -n "${BRINGUP_PGID:-}" ] && kill -TERM "-$BRINGUP_PGID" 2>/dev/null || true
     [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null || true
-    sleep 1
-    for p in ${PIDS:-}; do kill -9 "$p" 2>/dev/null || true; done
-    [ -n "${BRINGUP_PGID:-}" ] && kill -9 "-$BRINGUP_PGID" 2>/dev/null || true
-    [ -n "${NATNET_PGID:-}" ] && kill -9 "-$NATNET_PGID" 2>/dev/null || true
+    wait_gone 1.5
+    # ③ KILL — 남은 것
+    for p in ${PIDS:-}; do signal_tree "$p" -KILL; done
+    [ -n "${BRINGUP_PGID:-}" ] && kill -KILL "-$BRINGUP_PGID" 2>/dev/null || true
+    [ -n "${NATNET_PGID:-}" ] && kill -KILL "-$NATNET_PGID" 2>/dev/null || true
+    log "종료 완료"
+}
+
+# 신호를 받으면 정리하고 **끝낸다**. 130 = 128+SIGINT, 143 = 128+SIGTERM.
+on_signal () {
+    cleanup
+    trap - EXIT        # EXIT 트랩이 cleanup 을 또 부르지 않게
+    exit "$1"
+}
+
+# 모든 모드가 이걸로 트랩을 건다. 따로 쓰면 반드시 갈라진다.
+arm_cleanup () {
+    trap cleanup EXIT
+    trap 'on_signal 130' INT
+    trap 'on_signal 143' TERM
 }
 
 PIDS=""
@@ -668,13 +727,13 @@ joy)
     # ./drive.sh joy          그냥 수동 조종
     # ./drive.sh joy --log    몰면서 HyperPM 학습 데이터도 쌓는다
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     joy_session "${1:-}"
     ;;
 
 bench)
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     start_bringup
     log "${YLW}거치대 모드${RST} — 속도는 항상 0. 조향만 움직입니다."
     warn "바퀴가 땅에 닿지 않는지 확인하세요."
@@ -725,7 +784,7 @@ drawtrack)
 servo)
     # 조향 기계적 한계 찾기 — 서보 값을 키보드로 직접 민다 (tools/servo_sweep.py)
     load_ros
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     start_bringup
     log "${YLW}서보 한계 측정${RST} — 속도 명령 없음. 조향만 움직입니다."
     warn "거치대 위에서. 바퀴가 더 안 돌거나 서보가 '지잉' 거리면 거기가 한계 — 바로 되돌리세요."
@@ -742,7 +801,7 @@ stanley)
         WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"
     fi
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     start_natnet
     start_bringup
 
@@ -805,7 +864,7 @@ mpc)
     [ -f "$WP" ] || { err "파일이 없습니다: $WP"; exit 1; }
     WP="$(cd "$(dirname "$WP")" && pwd)/$(basename "$WP")"   # 절대경로
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     start_natnet
     start_bringup
 
@@ -835,7 +894,7 @@ mpc)
 log)
     # ./drive.sh joy --log 과 같다. 예전부터 쓰던 이름이라 남겨둔다.
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     LOGDATA=1
     joy_session "${1:-}"
     ;;
@@ -844,7 +903,7 @@ record)
     NAME="${1:-track_$(date +%Y%m%d_%H%M%S)}"
     OUT="$SCRIPT_DIR/src/mlcs_mpc/waypoints/${NAME}.csv"
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     # ★ mocap 이 있어야 한다. waypoint_logger 는 /mpc/state 를 받아 적는데
     #   그 토픽을 내는 건 mocap_bridge 다. 예전에는 start_bringup 만 불러서
     #   **점이 0개로 끝나고 파일이 안 생겼다** (2026-10-01).
@@ -912,7 +971,7 @@ cal)
            exit 1 ;;
     esac
     load_ros; require_ws_pkg mlcs_mpc
-    trap cleanup EXIT INT TERM
+    arm_cleanup
     start_natnet
     start_bringup
 
@@ -937,9 +996,10 @@ mocap)
     # ★ cleanup(정지명령 발행) 을 걸지 않는다 — 이 모드는 차를 건드리지
     #   않고 위치추정만 본다. 진단 실패로 exit 할 때마다 4.5초씩 정지
     #   명령을 쏘는 것은 낭비이고, 브링업도 안 띄웠으므로 받을 대상도 없다.
-    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
-          [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
-          true' EXIT INT TERM
+    # ★ 공용 정리를 쓴다. 예전의 직접 쓴 트랩은 ① Ctrl+C 뒤에도 스크립트를
+    #   계속 진행했고 ② 래퍼 PID 에만 신호를 줘서 노드(mocap_bridge 등)가
+    #   고아로 남았다 — 다음 실행에서 브릿지가 중복되는 원인이 된다.
+    arm_cleanup
     start_natnet
 
     # 설정된 토픽이 실제로 오는지 먼저 본다 — 안 오면 브릿지를 띄워도
@@ -999,9 +1059,10 @@ mocap)
 mocapcal)
     CM="${1:-spin}"
     load_ros; require_ws_pkg mlcs_mpc
-    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done
-          [ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
-          true' EXIT INT TERM
+    # ★ 공용 정리를 쓴다. 예전의 직접 쓴 트랩은 ① Ctrl+C 뒤에도 스크립트를
+    #   계속 진행했고 ② 래퍼 PID 에만 신호를 줘서 노드(mocap_bridge 등)가
+    #   고아로 남았다 — 다음 실행에서 브릿지가 중복되는 원인이 된다.
+    arm_cleanup
     start_natnet
     CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
     MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
@@ -1043,7 +1104,10 @@ rviz)
     # 인자를 주면 그 트랙, 없으면 config/track.yaml 을 따른다
     WP="${1:-}"
     RVIZ_CFG="$SCRIPT_DIR/src/mlcs_mpc/launch/track.rviz"
-    trap 'for p in ${PIDS:-}; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+    # ★ 공용 정리를 쓴다. 예전의 직접 쓴 트랩은 ① Ctrl+C 뒤에도 스크립트를
+    #   계속 진행했고 ② 래퍼 PID 에만 신호를 줘서 노드(mocap_bridge 등)가
+    #   고아로 남았다 — 다음 실행에서 브릿지가 중복되는 원인이 된다.
+    arm_cleanup
 
     # 젯슨이 이미 track_viz 를 띄웠으면 그 토픽을 쓰고, 아니면 여기서 띄운다
     if ros2 topic list 2>/dev/null | grep -qx /track/centerline; then
@@ -1070,8 +1134,10 @@ natnet)
     # mocap 드라이버만 띄운다. 보통은 주행 모드가 알아서 띄우므로
     # 따로 쓸 일은 "mocap 만 확인하고 싶을 때" 정도다.
     load_ros
-    trap '[ -n "${NATNET_PGID:-}" ] && kill -TERM "-$NATNET_PGID" 2>/dev/null
-          true' EXIT INT TERM
+    # ★ 공용 정리를 쓴다. 예전의 직접 쓴 트랩은 ① Ctrl+C 뒤에도 스크립트를
+    #   계속 진행했고 ② 래퍼 PID 에만 신호를 줘서 노드(mocap_bridge 등)가
+    #   고아로 남았다 — 다음 실행에서 브릿지가 중복되는 원인이 된다.
+    arm_cleanup
     start_natnet
     echo
     log "토픽 확인:"

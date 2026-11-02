@@ -36,6 +36,7 @@ import sys
 
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from nav_msgs.msg import Odometry
@@ -273,7 +274,12 @@ def main(args=None):
     node = Calibrate()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+        # ★ Ctrl+C 는 ExternalShutdownException 으로도 올라온다.
+        #   rclpy 의 기본 시그널 핸들러가 컨텍스트를 먼저 내리면
+        #   spin() 이 KeyboardInterrupt 가 아니라 이걸 던진다. 안 잡으면
+        #   역추적이 찍히고 ros2 run 이 종료코드 1 을 낸다 — 정상 종료인데
+        #   실패처럼 보이고, drive.sh 의 종료 경로도 지저분해진다.
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         try:
