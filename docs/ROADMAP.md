@@ -4,6 +4,7 @@
 
 ```
 [1단계] 운동학 MPC + mocap 위치추정          ← ★ 지금 여기 (시뮬 검증 완료)
+[1.5단계] LiDAR localization 로 /mpc/state 대체  ← 11/14 MAGP 분기 → docs/magp/MAGP_2026_개발전략.md
 [2단계] 실차 검증 + 파라미터 동정
 [3단계] 동역학 모델 (Pacejka 타이어)
 [4단계] HyperPM — 시변 파라미터 신경망
