@@ -267,6 +267,10 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 - [lab_map/](lab_map/) — 실험실 경계(19각형) + 트랙 생성 도구 (메인 PC 에서 가져옴)
 - [docs/TRACKS.md](docs/TRACKS.md) — 트랙 출처와 **주행 가능성** (★ 주행 전 확인)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길 (논문 분석 포함)
+- **[docs/magp/MAGP_2026_개발전략.md](docs/magp/MAGP_2026_개발전략.md) — ★ 11/14–15 MAGP(일본 기후대) 출전 계획.
+  mocap 대신 LiDAR localization(Cartographer + PF 백업 + 스캔 LUT 전역 초기화)으로 `/mpc/state` 를 채운다**
+- [docs/magp/MAGP_4th_규정정리.md](docs/magp/MAGP_4th_규정정리.md) — 대회 규정·경기 방식·3회 결과
+- [docs/magp/UNICORN_Racing_블로그_정리.md](docs/magp/UNICORN_Racing_블로그_정리.md) — UNIST UNICORN Racing 블로그 81편 정리 + 우리 차 적용 기술
 
 > ★ **데이터는 지금부터 모으세요.** HyperPM 학습에 36분이 필요한데
 > (논문 기준), 나중에 몰아서 모으기 어렵습니다. 차를 몰 때마다
