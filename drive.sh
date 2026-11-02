@@ -271,8 +271,18 @@ start_data_logger () {
         exit 1
     fi
     log "HyperPM 학습 데이터 기록 → ${GRN}${DATA_DIR}${RST}"
-    ros2 run mlcs_mpc data_logger --ros-args \
-        -p output_dir:="$DATA_DIR" -p tag:="$tag" >/tmp/mlcs_datalog.log 2>&1 &
+    # ★ 빈 값을 넘기면 ROS 2 가 거부한다. 태그 없이 joy --log 를 쓰면
+    #   '-p tag:=' 가 되어 rcl 이 기동 중에 죽는다:
+    #
+    #     RCLError: Couldn't parse parameter override rule: '-p tag:='
+    #
+    #   로거가 떠 있는 줄 알고 한참 몰았는데 한 줄도 안 쌓인다
+    #   (2026-11-02 에 실제로 겪었다). 레포에서 track_dir / waypoints /
+    #   MLCS_SPEED 로 이미 세 번 겪은 함정이다 — 인자 자체를 빼야 한다.
+    local DL_ARGS=(-p output_dir:="$DATA_DIR")
+    [ -n "$tag" ] && DL_ARGS+=(-p tag:="$tag")
+    ros2 run mlcs_mpc data_logger --ros-args "${DL_ARGS[@]}" \
+        >/tmp/mlcs_datalog.log 2>&1 &
     PIDS="$PIDS $!"
     sleep 1
     echo
