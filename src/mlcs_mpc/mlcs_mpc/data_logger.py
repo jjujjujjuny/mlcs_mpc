@@ -45,6 +45,7 @@ data_logger — HyperPM 학습용 주행 데이터 수집.
 import csv
 import math
 import os
+import signal
 import time
 from datetime import datetime
 
@@ -211,6 +212,14 @@ class DataLogger(Node):
         self.rows += 1
 
     def _status(self):
+        # ★ 5초마다 비운다. 기본 버퍼(8KB)는 100Hz 에서 수백 행이라,
+        #   강제 종료되면 그만큼 통째로 사라진다. 36분을 모으는 중에
+        #   끝부분을 잃는 건 아프다.
+        try:
+            self.f.flush()
+            os.fsync(self.f.fileno())
+        except (ValueError, OSError):
+            pass
         if self.rows == 0:
             self.get_logger().warn(
                 '아직 한 행도 기록되지 않았습니다 — /mpc/state 가 오나요?',
@@ -238,6 +247,14 @@ class DataLogger(Node):
 
 
 def main(args=None):
+    # ★ SIGTERM 에서도 파일을 닫아야 한다. close() 가 finally 에 있는데
+    #   SIGTERM 은 파이썬을 그냥 끝내서 finally 가 돌지 않는다. drive.sh 가
+    #   종료할 때 자식을 TERM 으로 정리하므로, 이게 없으면 버퍼에 남은
+    #   마지막 수 초가 날아간다 (waypoint_logger 와 같은 문제였다).
+    def _on_term(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _on_term)
+
     rclpy.init(args=args)
     node = DataLogger()
     try:

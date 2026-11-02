@@ -766,7 +766,18 @@ log)
     DATA_DIR="${MLCS_DATA:-$HOME/mlcs_data}"
     load_ros; require_ws_pkg mlcs_mpc
     trap cleanup EXIT INT TERM
+    # ★ record 와 같은 이유로 mocap 이 있어야 한다. data_logger 는
+    #   /mpc/state 를 시간 기준으로 삼는데 그 토픽을 내는 건 mocap_bridge 다.
+    #   start_bringup 만 부르면 **한 줄도 안 쌓인다** (2026-11-02 발견).
+    start_natnet
     start_bringup
+    start_mocap_bridge
+    ensure_single_state_publisher
+    wait_for_state
+    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
+        err "기록을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
+        exit 1
+    fi
 
     log "HyperPM 학습 데이터 기록 → ${GRN}${DATA_DIR}${RST}"
     ros2 run mlcs_mpc data_logger --ros-args \
