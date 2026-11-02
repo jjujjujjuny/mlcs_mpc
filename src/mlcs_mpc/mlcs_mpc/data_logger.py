@@ -92,7 +92,22 @@ class DataLogger(Node):
         self.declare_parameter('output_dir', '~/mlcs_data')
         self.declare_parameter('tag', '')          # 파일명에 붙일 메모
         self.declare_parameter('state_topic', '/mpc/state')
-        self.declare_parameter('drive_topic', '/drive')
+        # ★ /drive 가 아니다. 실제 체인:
+        #
+        #     /teleop (조이스틱, prio 100) ─┐
+        #                                   ├→ ackermann_mux → /ackermann_cmd
+        #     /drive  (MPC, prio 10)    ────┘                        ↓
+        #                                                    ackermann_to_vesc
+        #
+        #   /drive 는 **MPC 가 쓰는 입력 한 쪽**일 뿐이라, 수동 주행에서는
+        #   영원히 빈다. 2026-11-02 에 3.7분을 모았는데 cmd_speed/cmd_steer
+        #   가 0% 였다. 로거가 원한 것은 "실제로 차에 나간 것" 이므로
+        #   mux 출력을 봐야 한다 (수동·자율 어느 쪽이든 여기로 모인다).
+        #
+        #   ※ bringup_launch 의 remappings=[('ackermann_cmd_out',
+        #     'ackermann_drive')] 는 ackermann_mux.cpp 가 쓰지 않는 이름이라
+        #     아무 효과가 없다. 실제 발행 토픽은 ackermann_cmd 다.
+        self.declare_parameter('drive_topic', '/ackermann_cmd')
         # 정지 상태가 길게 이어지면 학습에 쓸모없는 행만 쌓인다.
         # 0 이면 전부 기록.
         self.declare_parameter('min_speed_to_log', 0.0)
@@ -124,6 +139,10 @@ class DataLogger(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST, depth=1)
 
+        self.cmd_rows = 0
+        self.cmd_seen = False
+        self.warned_cmd = False
+        self.drive_topic = self.get_parameter('drive_topic').value
         self.create_subscription(
             Odometry, self.get_parameter('state_topic').value,
             self._state_cb, sensor_qos)
@@ -157,6 +176,7 @@ class DataLogger(Node):
     # ────────────────────────────────────────────────────────────────
     def _drive_cb(self, msg):
         self.cmd = (msg.drive.speed, msg.drive.steering_angle)
+        self.cmd_seen = True
 
     def _vesc_cb(self, msg):
         s = msg.state
@@ -197,6 +217,8 @@ class DataLogger(Node):
         v = self.vesc or {}
         c = self.cmd or ('', '')
 
+        if c[0] != '':
+            self.cmd_rows += 1
         self.w.writerow([
             f'{st - self.t0:.4f}', f'{dt:.4f}', f'{st:.4f}',
             f'{p.position.x:.5f}', f'{p.position.y:.5f}', f'{yaw:.5f}',
@@ -225,9 +247,21 @@ class DataLogger(Node):
                 '아직 한 행도 기록되지 않았습니다 — /mpc/state 가 오나요?',
                 throttle_duration_sec=10.0)
             return
+        # ★ 명령 열이 비어 있으면 **크게** 알린다. 시스템 동정은 입력이
+        #   있어야 성립하는데, 위치만 쌓이면 쓸 수 없는 데이터가 된다.
+        #   토픽 이름이 틀려서 3.7분을 통째로 버린 적이 있다 (2026-11-02).
+        if self.rows > 300 and self.cmd_rows == 0 and not self.warned_cmd:
+            self.warned_cmd = True
+            self.get_logger().error(
+                f'✗ 명령(cmd_speed/cmd_steer)이 한 번도 안 들어왔습니다 — '
+                f'{self.drive_topic} 를 보고 있는데 아무도 안 냅니다. '
+                '지금 멈추고  ros2 topic list | grep ackermann  로 확인하세요. '
+                '위치만 있는 데이터는 시스템 동정에 쓸 수 없습니다.')
         secs = self.rows / 100.0
+        cmd_pct = 100.0 * self.cmd_rows / max(self.rows, 1)
         self.get_logger().info(
-            f'  {self.rows}행 (~{secs:.0f}초, {secs/60:.1f}분)'
+            f'  {self.rows}행 (~{secs:.0f}초, {secs/60:.1f}분)  '
+            f'명령 {cmd_pct:.0f}%'
             + (f'  버린 프레임 {self.dropped}' if self.dropped else ''))
 
     def close(self):
