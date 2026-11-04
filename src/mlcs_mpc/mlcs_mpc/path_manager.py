@@ -206,7 +206,7 @@ class PathManager:
             self._info('속도 프로파일: CSV 3열 사용')
             return
 
-        mu = self.params.mu if self.params else 0.35
+        mu = self.params.mu if self.params else 0.43
         vmax = self.params.max_speed if self.params else self.target_speed
 
         ak = np.abs(self.kappa)

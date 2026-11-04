@@ -20,6 +20,8 @@
 #     ./drive.sh record <이름>       조이스틱으로 몰면서 웨이포인트 기록
 #     ./drive.sh laptrack <기록>     그 기록 한 바퀴 → 트랙 (★ 권장)
 #     ./drive.sh checkstate [초]     기록 전에 /mpc/state 가 멀쩡한지 점검
+#     ./drive.sh cleanlog [로그...]  주행 로그에서 mocap 불량 구간 제거 → clean/
+#     ./drive.sh hpmdata             정리된 로그 → HyperPM 학습 형식 (~/mlcs_data/hpm)
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          joy --log 과 같음 (예전 이름)
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
@@ -761,6 +763,17 @@ laptrack)
     # 수동 주행 기록 한 바퀴 → 트랙 (tools/track_from_lap.py)
     # 차가 실제로 돈 라인이라 선회반경과 경계가 자동으로 지켜진다.
     python3 "$SCRIPT_DIR/tools/track_from_lap.py" "$@"
+    ;;
+
+cleanlog)
+    # 학습 전에 mocap 끊김·튐 구간을 잘라낸다 (tools/clean_drive_log.py)
+    # ROS 도 차량도 필요 없다. 기록 중인 로그는 지정하지 말 것.
+    python3 "$SCRIPT_DIR/tools/clean_drive_log.py" "$@"
+    ;;
+
+hpmdata)
+    # cleanlog 결과 → 저자 형식 train/val/test (tools/prep_hpm_dataset.py)
+    python3 "$SCRIPT_DIR/tools/prep_hpm_dataset.py" "$@"
     ;;
 
 preview)

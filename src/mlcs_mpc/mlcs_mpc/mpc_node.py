@@ -76,7 +76,7 @@ class MPCNode(Node):
         self.declare_parameter('max_decel', 4.0)
         self.declare_parameter('max_steer', 0.40)
         self.declare_parameter('max_steer_rate', 3.2)
-        self.declare_parameter('mu', 0.35)
+        self.declare_parameter('mu', 0.43)
         # ↓ 운동학 모델은 안 쓰지만 config/vehicle.yaml 에 있는 값들.
         #   선언해 두지 않으면 ROS 2 가 "declared 되지 않은 파라미터" 로
         #   **노드 기동 자체를 실패시킨다.** 동역학 모델로 갈 때 쓴다.

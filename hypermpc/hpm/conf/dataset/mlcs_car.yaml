@@ -1,0 +1,39 @@
+# @package _global_
+
+dataset:
+  Tp: 0.01 # FIXME settings
+  wandb_project: "hpm_mlcs"
+
+  wandb_path: ""
+
+  observation_window: 25
+  prediction_horizon: ${hpm.rollout.val} # for interpolers, val>=train
+
+  observarions_channels: 5 # FIXME get from dataset
+  
+  observations_preprocessor:
+    _target_: "robot_model.car.car_observation_preprocesor.CarObservationPreprocessor"
+    max_velocity: 6.0
+    max_yaw_rate: 4.0
+    max_omega_wheels: ${dataset.observations_preprocessor.max_velocity}
+    max_delta: 0.55
+
+  train_dataset:
+    _target_: "dataset_reader.f1tenth_dataset_new.F1tenthHyperDataset2"
+    dataset_path: ${oc.env:HOME}/mlcs_data/hpm/train.csv
+    observation_window: ${dataset.observation_window}
+    prediction_horizon: ${hpm.rollout.train}
+    stride: 2
+    device: ${hpm.device}
+
+  val_dataset:
+    _target_: ${dataset.train_dataset._target_}
+    dataset_path: ${oc.env:HOME}/mlcs_data/hpm/val.csv
+    observation_window: ${dataset.observation_window}
+    prediction_horizon: ${hpm.rollout.val}
+    stride: 2
+    device: ${hpm.device}
+
+  # Dataset loader settings
+  shuffle: True
+  dataloader_workers: 0

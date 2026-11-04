@@ -59,7 +59,7 @@ class VehicleParams:
                  max_decel=4.0,
                  max_steer=0.40,     # ✅ 실측 (2026-09-30) — vehicle.yaml 과 같은 값
                  max_steer_rate=3.2, # rad/s, 서보 속도 한계
-                 mu=0.35):           # 미측정 — 노면 마찰
+                 mu=0.43):           # 2026-11-04 실측 — 노면 마찰
         self.wheelbase = wheelbase
         self.lf = lf
         self.lr = lr

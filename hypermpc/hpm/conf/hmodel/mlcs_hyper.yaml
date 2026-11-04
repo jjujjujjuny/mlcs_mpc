@@ -1,0 +1,54 @@
+# @package _global_
+hmodel:
+
+  time_series_laten_size: 16
+
+  model:
+    _partial_: True
+
+    _target_: "hyper_prediction_models.causal_hyper_model_two_layer_pos_params.CausalHyperModel2p"
+
+    # time_series_encoder from file
+
+    future_prediction_encoder:
+      _target_: "hyper_prediction_models.future_prediction_encoder.FuturePredictionEncoder"
+      channels_count: 2 # FIXME get from dataset
+      input_len: ${dataset.prediction_horizon}
+      output_ctrl_point: ${hmodel.model.param_ctrl_point} 
+      return_spline_and_error: False
+      device: ${hpm.device}
+      channel_divider: [6.0, 0.55]
+    
+    pred_noise_sigma: 0.05
+
+    # default params <- partial
+
+    activation:
+      _target_: "torch.nn.Tanh"
+    
+    hl2_size: 64
+
+    m1_feature_size: 64
+
+    param_ctrl_point: 16
+
+    max_param_scaler: 0.5
+    
+    last_ctrl_point_on_const: False
+
+    triangular_block_size: 2
+
+    # always_positive: argumement get from dmodel
+    
+    compile_model: ${hpm.compile}
+    device: ${hpm.device} 
+  
+  interpoler:
+    _target_: "hyper_prediction_models.spline_param_interpolation.SplineParamInterpolation"
+    param_ctrl_point: ${hmodel.model.param_ctrl_point}
+    prediction_horizon: ${dataset.prediction_horizon}
+    last_ctrl_point_on_const: ${hmodel.model.last_ctrl_point_on_const}
+    integration_method: ${hpm.integration_method}
+    compile_model: ${hpm.compile}
+    device: ${hpm.device} 
+  

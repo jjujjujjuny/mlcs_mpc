@@ -93,7 +93,7 @@ class StanleyNode(Node):
         self.declare_parameter('target_speed', 1.0)
         self.declare_parameter('curvature_slowdown', 1.5)
         self.declare_parameter('closed_loop', True)
-        self.declare_parameter('mu', 0.35)
+        self.declare_parameter('mu', 0.43)
 
         # ── 안전 ─────────────────────────────────────────────────────
         self.declare_parameter('state_timeout', 0.2)

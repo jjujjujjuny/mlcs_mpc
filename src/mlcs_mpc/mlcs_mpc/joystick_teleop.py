@@ -87,6 +87,7 @@ class JoystickTeleop(Node):
         self.declare_parameter('trigger_deadzone', 0.05)
         self.declare_parameter('trigger_expo', 1.0)       # 1.0 = 완전 선형
         self.declare_parameter('steer_deadzone', 0.08)
+        self.declare_parameter('steer_expo', 1.0)         # 1.0 = 완전 선형
 
         # ── 상한 ────────────────────────────────────────────────────
         self.declare_parameter('max_speed', 1.5)   # ★ 캘리브레이션 전 저속
@@ -114,6 +115,7 @@ class JoystickTeleop(Node):
         self.trig_dz = min(max(float(p('trigger_deadzone')), 0.0), 0.9)
         self.trig_expo = max(float(p('trigger_expo')), 0.1)
         self.steer_dz = min(max(float(p('steer_deadzone')), 0.0), 0.9)
+        self.steer_expo = max(float(p('steer_expo')), 0.1)
         self.max_speed = float(p('max_speed'))
         self.max_steer = float(p('max_steer'))
         self.joy_timeout = float(p('joy_timeout'))
@@ -246,7 +248,7 @@ class JoystickTeleop(Node):
         if mag <= self.steer_dz:
             return 0.0
         mag = (mag - self.steer_dz) / (1.0 - self.steer_dz)
-        return min(mag, 1.0) * (1.0 if raw > 0 else -1.0)
+        return min(mag, 1.0) ** self.steer_expo * (1.0 if raw > 0 else -1.0)
 
     # ────────────────────────────────────────────────────────────────
     def _joy_cb(self, msg: Joy):

@@ -45,7 +45,7 @@ class TrackInfo(Node):
         self.declare_parameter('target_speed', 0.7)
         self.declare_parameter('curvature_slowdown', 1.5)
         self.declare_parameter('closed_loop', True)
-        self.declare_parameter('mu', 0.35)
+        self.declare_parameter('mu', 0.43)
 
         # 차량 한계 — 못 도는 코너가 있는지 판정용
         self.declare_parameter('wheelbase', 0.33)
