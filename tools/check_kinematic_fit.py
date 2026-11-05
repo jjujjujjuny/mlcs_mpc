@@ -26,7 +26,7 @@ ap.add_argument('csv', nargs='*', default=[
 a = ap.parse_args()
 
 L = 0.33
-lr = 0.1498
+lr = 0.1537    # prep_hpm_dataset.py --lr 과 같아야 한다
 d = pd.concat([pd.read_csv(f).assign(split=f) for f in a.csv])
 d['ay']=d.v_x*d.r
 print('rows',len(d),'runs',d.groupby(['split','run_id']).ngroups)

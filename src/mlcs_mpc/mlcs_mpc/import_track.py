@@ -80,7 +80,7 @@ class ImportTrack(Node):
         self.declare_parameter('out', '')
         self.declare_parameter('wheelbase', 0.33)
         self.declare_parameter('max_steer', 0.40)
-        self.declare_parameter('mu', 0.43)
+        self.declare_parameter('mu', 0.41)
         self.declare_parameter('grip_util', 0.6)
         self.declare_parameter('target_speed', 1.0)
         # ★ 기본은 속도 열을 **쓰지 않는다**.

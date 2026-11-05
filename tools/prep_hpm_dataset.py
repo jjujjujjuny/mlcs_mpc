@@ -148,12 +148,12 @@ def main():
     p.add_argument('--out-dir', default=os.path.join(data_dir, 'hpm'))
     p.add_argument('--sg-window', type=int, default=31)
     p.add_argument('--sg-order', type=int, default=2)
-    p.add_argument('--lr', type=float, default=0.1498, help='뒤축~무게중심 [m]')
+    p.add_argument('--lr', type=float, default=0.1537, help='뒤축~무게중심 [m]')
     p.add_argument('--max-steer-rate', type=float, default=3.2)
     p.add_argument('--erpm-gain', type=float, default=4781.5,
                    help='vesc.yaml speed_to_erpm_gain')
-    p.add_argument('--friction', type=float, default=0.43,
-                   help='실측 횡방향 운동 마찰 (2026-11-04)')
+    p.add_argument('--friction', type=float, default=0.41,
+                   help='실측 횡방향 운동 마찰 (2026-11-04 측정, 3284 g 기준)')
     p.add_argument('--min-vx', type=float, default=0.25)
     p.add_argument('--min-run', type=float, default=1.5,
                    help='이보다 짧은 run 은 버린다 [s] — 윈도 1.25 s')

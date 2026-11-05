@@ -76,13 +76,13 @@ class MPCNode(Node):
         self.declare_parameter('max_decel', 4.0)
         self.declare_parameter('max_steer', 0.40)
         self.declare_parameter('max_steer_rate', 3.2)
-        self.declare_parameter('mu', 0.43)
+        self.declare_parameter('mu', 0.41)
         # ↓ 운동학 모델은 안 쓰지만 config/vehicle.yaml 에 있는 값들.
         #   선언해 두지 않으면 ROS 2 가 "declared 되지 않은 파라미터" 로
         #   **노드 기동 자체를 실패시킨다.** 동역학 모델로 갈 때 쓴다.
-        self.declare_parameter('mass', 3.097)
-        self.declare_parameter('lf', 0.1802)
-        self.declare_parameter('lr', 0.1498)
+        self.declare_parameter('mass', 3.284)
+        self.declare_parameter('lf', 0.1763)
+        self.declare_parameter('lr', 0.1537)
         # 차체 치수 — MPC 가 직접 쓰진 않지만 config 에 있으므로 선언한다
         # (선언 안 하면 ROS 2 가 노드 기동 자체를 실패시킨다)
         self.declare_parameter('track_width', 0.23)
