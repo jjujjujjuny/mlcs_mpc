@@ -10,7 +10,7 @@ HyperMPC 논문([arXiv:2508.06181](https://arxiv.org/abs/2508.06181))의 정식�
 |---|---|
 | pip + casadi (venv) | ✅ casadi 3.8.1 |
 | acados 소스 빌드 (aarch64) | ✅ 최소 OCP 0.659 ms |
-| **오프라인 OCP** | ⏳ **코드 생성·빌드까지 확인, 풀이 미검증** |
+| 오프라인 OCP | ✅ 젯슨 평균 8~12 ms, p95 13 ms 이하 (N=80, 타이어 계수 기본값, 2026-11-05) |
 | 트랙 변환 (track_5 → Frenet) | 대기 |
 | ROS 노드 | 대기 |
 | 파라미터 동정 | 대기 |
@@ -27,9 +27,8 @@ git clone https://github.com/hyper-mpc/hypermpc_code.git ~/hypermpc_code
 python3 hypermpc/offline_ocp.py --hypermpc ~/hypermpc_code
 ```
 
-**첫 빌드는 10분을 넘긴다.** Pacejka 가 들어간 9상태 모델에 `EXACT` 헤시안이라
-심볼릭 미분이 무겁다. 생성된 코드는 남으므로 두 번째부터는 빠르다.
-(2026-09-30 시도: `.so` 까지 나왔고 10분 제한에 잘렸다 — 실패가 아니라 시간 초과)
+첫 빌드는 약 20초다 (2026-11-05 측정). 생성 코드는 `~/hmpc_build/` 에 남고 다음부터 다시 쓴다.
+`python3 hypermpc/offline_ocp.py` 로 직선·곡선·트랙을 재고, `hypermpc/test_offline_model.py` 로 모델 포장을 시험한다.
 
 ## 왜 이 스크립트가 필요한가
 

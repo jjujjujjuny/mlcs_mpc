@@ -13,6 +13,30 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
   논문은 N=80 · dt=0.033 에서 10.61 ms 였다 (x86 데스크톱). 30Hz 제어면
   예산이 33 ms 다. 젯슨에서 얼마가 나오는지가 실시간 가능 여부를 정한다.
 
+■ 측정 (--scenario)
+
+    straight   곡률 0
+    curve      곡률 0.575 /m 고정 (track_5 평균, R 1.74 m)
+    track      s_track 의 곡률 κ(s) 를 예측 구간에 깔고 따라간다
+    zero       슬립이 정확히 0 인 직진 초기값 (--no-guard 로 원본 그대로 확인)
+
+  직전 해의 x[1] 을 다음 초기값으로 넘기는 폐루프다 (모델 오차 없음). 같은
+  초기값을 반복해 풀면 2회째부터 이미 수렴한 해라 시간이 짧게 나온다.
+
+■ ★ 저자 타이어 식의 0/0 (--no-guard 로 끌 수 있다)
+
+  casadi_car_model_naive.py 의 합성 슬립은 sqrt(Sx² + Alpha²) 이고 이것으로
+  나눈다. 슬립이 정확히 0 이면 0/0 이고 미분은 무한대다. 저자 파일을 고치지
+  않고, 그 모듈이 보는 casadi 의 sqrt 만 sqrt(x + 1e-12) 로 바꿔 끼운다.
+  (그 파일에서 sqrt 를 쓰는 곳은 여기 하나다. 값은 hpm/mlcs_car_model.py 와 같다)
+
+■ ★ 저자 식의 질량 5.1 kg
+
+  m 이 함수 안에 숫자로 박혀 있어 밖에서 바꿀 수 없다. 대신 m 이 들어가는 곳이
+  항력/m 과 (타이어 힘 ∝ m)/I_z 뿐이므로, k = 5.1/실제 질량 으로 Cd 와 I_z 에
+  k 를 곱해 넘기면 식이 실제 질량의 것과 정확히 같아진다 (scale_for_mass).
+  타이어 힘/m 항에서는 m 이 약분된다.
+
 ■ 원본과의 관계
 
   동역학은 hypermpc_code 의 robot_model/car/casadi_car_model_naive.py 를
@@ -44,17 +68,37 @@ from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 
 
 # ── 원본 naive 동역학을 가져온다 ────────────────────────────────────────────
-def load_naive_dynamics(hypermpc_dir):
+SLIP_EPS = 1e-12    # hpm/mlcs_car_model.py 의 SafePacejkaTireModel 과 같은 값
+MASS = 3.284        # 저울 실측 2026-11-05 (라이다 포함)
+AUTHOR_MASS = 5.1   # casadi_car_model_naive.py 하드코딩
+
+
+class SafeSqrtCasadi:
+    """casadi 그대로인데 sqrt 만 0 에서 안전하다."""
+
+    def __getattr__(self, name):
+        return getattr(cs, name)
+
+    @staticmethod
+    def sqrt(x):
+        return cs.sqrt(x + SLIP_EPS)
+
+
+def load_naive_dynamics(hypermpc_dir, guard=True):
     """robot_model/car/casadi_car_model_naive.py 의 pacejca_single_track_casadi.
 
-    원본 파일을 그대로 쓴다. 단 m(질량)은 하드코딩 5.1 이므로 아래에서
-    우리 값으로 바꿔 쓰려면 파일을 복사해 고치거나, 여기처럼 import 한 뒤
-    질량이 들어간 항을 따로 다루어야 한다.
-    ★ 지금은 원본 그대로 쓴다 — 우리 질량을 아직 안 쟀다.
+    원본 파일을 그대로 쓴다. 질량은 scale_for_mass 로 맞춘다.
     """
     sys.path.insert(0, hypermpc_dir)
-    from robot_model.car.casadi_car_model_naive import pacejca_single_track_casadi
-    return pacejca_single_track_casadi()
+    import robot_model.car.casadi_car_model_naive as naive
+    naive.casadi = SafeSqrtCasadi() if guard else cs
+    return naive.pacejca_single_track_casadi()
+
+
+def scale_for_mass(p, mass=MASS):
+    """저자 식(m=5.1)에 넘길 p. 머리말 참고. p 는 숫자 배열도 casadi 도 된다."""
+    k = AUTHOR_MASS / mass
+    return cs.vertcat(p[0] * k, p[1], p[2] * k, p[3] * k, p[4] * k, p[5:])
 
 
 def default_params():
@@ -124,7 +168,7 @@ def build_ocp(dyn_fun, N, dt, cfg):
     #   원본 naive 모델은 (vx, vy, r, friction) 만 다룬다.
     x_dyn = cs.vertcat(vx, vy, r, fric)
     u_dyn = cs.vertcat(ws, delta)          # ★ 액추에이터 '상태' 가 들어간다
-    x_dyn_dot = dyn_fun(x_dyn, u_dyn, p_dyn)
+    x_dyn_dot = dyn_fun(x_dyn, u_dyn, scale_for_mass(p_dyn))
 
     # Frenet 운동학 — 곡률 kappa 인 경로 위에서
     denom = 1.0 - n * kappa
@@ -159,15 +203,29 @@ def build_ocp(dyn_fun, N, dt, cfg):
     q_delta, q_speed = cfg['q_delta'], cfg['q_speed_diff']
     v_target = cfg['v_target']
 
-    stage = (q_n * n**2 + q_mu * mu**2
-             + q_speed * (vx - v_target)**2
-             + q_delta * delta_ref**2
-             - cfg['q_progress'] * s_dot)       # 진행은 보상
+    if cfg['cost'] == 'author':
+        # casadi_car_model.py 그대로: -s, 슬립각, 트랙 배리어, 슬립률
+        def barrier(h):
+            return cs.log(1 + cs.exp(-cfg['barrier_lambda'] * h))
+        beta_kin = cs.atan(delta * 0.15 / 0.33)
+        beta_dyn = cs.atan(vy / vx)
+        common = (-s + cfg['q_beta'] * (beta_kin - beta_dyn)**2
+                  + q_n * n**2 + q_mu * mu**2
+                  + barrier(cfg['track_width'] - n) + barrier(cfg['track_width'] + n)
+                  + cfg['q_slip'] * (ws - vx)**2)
+        stage = (common + q_speed * (ws_ref - ws)**2
+                 + q_delta * (delta_ref - delta)**2)
+        terminal = cfg['q_e_scaler'] * (common + cfg['q_mu_e'] * mu**2)
+    else:
+        stage = (q_n * n**2 + q_mu * mu**2
+                 + q_speed * (vx - v_target)**2
+                 + q_delta * delta_ref**2
+                 - cfg['q_progress'] * s_dot)       # 진행은 보상
+        terminal = cfg['q_e_scaler'] * (q_n * n**2 + cfg['q_mu_e'] * mu**2)
     ocp.cost.cost_type = 'EXTERNAL'
     ocp.cost.cost_type_e = 'EXTERNAL'
     ocp.model.cost_expr_ext_cost = stage
-    ocp.model.cost_expr_ext_cost_e = cfg['q_e_scaler'] * (
-        q_n * n**2 + cfg['q_mu_e'] * mu**2)
+    ocp.model.cost_expr_ext_cost_e = terminal
 
     ocp.constraints.x0 = np.zeros(9)
     ocp.constraints.lbu = np.array([cfg['min_ws_ref'], -cfg['max_steer_ref']])
@@ -187,13 +245,94 @@ def build_ocp(dyn_fun, N, dt, cfg):
     return ocp
 
 
+def track_kappa(path):
+    """prep_*.csv → κ(s) 함수 (닫힌 트랙)."""
+    d = np.genfromtxt(path, delimiter=',', names=True)
+    length = d['s'][-1]
+    return lambda q: np.interp(np.mod(q, length), d['s'], d['curvature'])
+
+
+def initial_state(cfg, slip=0.02):
+    """직진 1 m/s. wheel_speed 는 선속도 [m/s] 다 (base_tire_model 이 v_x 와 뺀다)."""
+    x0 = np.zeros(9)
+    x0[3] = 1.0
+    x0[6] = cfg['friction']
+    x0[7] = 1.0 + slip
+    return x0
+
+
+def restart(solver, N, x0):
+    """초기 추측을 x0 로 깐다. 0 으로 두면 v_x = 0 이라 슬립 분모가 eps 가 된다."""
+    solver.reset()
+    for k in range(N + 1):
+        solver.set(k, 'x', x0)
+    for k in range(N):
+        solver.set(k, 'u', np.array([x0[7], 0.0]))
+
+
+def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps):
+    """폐루프로 laps 번 푼다."""
+    params = default_params()
+    N = args.N
+    restart(solver, N, x0)
+    x = x0.copy()
+    times, cycles, status = [], [], []
+    first_bad = None
+    for i in range(laps):
+        t_cycle = time.perf_counter()
+        for k in range(N + 1):
+            q = x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
+            solver.set(k, 'p', np.concatenate([params, [kappa_of_s(q)]]))
+        solver.set(0, 'lbx', x)
+        solver.set(0, 'ubx', x)
+        t0 = time.perf_counter()
+        st = solver.solve()
+        t1 = time.perf_counter()
+        x_next = solver.get(1, 'x')
+        u0 = solver.get(0, 'u')
+        cycles.append((time.perf_counter() - t_cycle) * 1000)
+        times.append((t1 - t0) * 1000)
+        status.append(st)
+        finite = np.all(np.isfinite(x_next)) and np.all(np.isfinite(u0))
+        if st != 0 and first_bad is None:
+            first_bad = i
+        if not finite:
+            print(f'  ✗ {name}: {i} 번째 풀이에서 NaN/inf (status {st})')
+            break
+        x = x_next
+
+    ts = np.array(times[1:]) if len(times) > 1 else np.array(times)
+    codes, counts = np.unique(status, return_counts=True)
+    budget = args.dt * 1000
+    print(f'\n■ {name}  ({len(times)}회, 첫 풀이 {times[0]:.1f} ms 는 통계에서 뺌)')
+    print(f'  status      {dict(zip(codes.tolist(), counts.tolist()))}'
+          + (f'  첫 비정상 {first_bad} 번째' if first_bad is not None else ''))
+    print(f'  풀이 시간   평균 {ts.mean():7.2f}  p95 {np.percentile(ts, 95):7.2f}  '
+          f'최대 {ts.max():7.2f} ms   (예산 {budget:.1f} ms, 초과 {(ts > budget).mean() * 100:.1f}%)')
+    print(f'  주기 전체   평균 {np.mean(cycles[1:] or cycles):7.2f} ms  (곡률 갱신 포함)')
+    print(f'  마지막 상태 vx {x[3]:.3f}  vy {x[4]:.3f}  r {x[5]:.3f}  n {x[1]:.3f}  '
+          f'ws {x[7]:.3f}  delta {x[8]:.3f}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--hypermpc', default=os.path.expanduser('~/hypermpc_code'),
                     help='hypermpc_code 저장소 경로')
     ap.add_argument('--N', type=int, default=80)
     ap.add_argument('--dt', type=float, default=0.033)
-    ap.add_argument('--laps', type=int, default=200, help='풀이 반복 횟수')
+    ap.add_argument('--laps', type=int, default=1000, help='시나리오별 풀이 횟수')
+    ap.add_argument('--cost', choices=('offline', 'author'), default='author',
+                    help='author = 저자 casadi_car_model.py 의 비용. offline = 예전 간이 비용')
+    ap.add_argument('--no-guard', action='store_true', help='0/0 방어를 끈다')
+    ap.add_argument('--scenario', nargs='+',
+                    choices=('straight', 'curve', 'track', 'zero', 'zero-guess'),
+                    default=('straight', 'curve', 'track'))
+    ap.add_argument('--track', default=os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        '../lab_map/data/tracks/s_track/prep_s_track.csv'))
+    ap.add_argument('--build-only', action='store_true', help='빌드만 하고 끝낸다')
+    ap.add_argument('--build-dir', default=os.path.expanduser('~/hmpc_build'),
+                    help='생성 코드 위치. 있으면 다시 빌드하지 않는다')
     args = ap.parse_args()
 
     if not os.path.isdir(args.hypermpc):
@@ -207,62 +346,61 @@ def main():
         steering_tau=0.0436734693877551,
         q_n=0.02, q_mu=0.002, q_delta=2.0, q_speed_diff=2.0,
         q_e_scaler=1.0, q_mu_e=5.0,
+        q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=0.25,
         q_progress=1.0,
         min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
         # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
         v_target=1.2,
+        # 실측 횡방향 운동 마찰. 상태라서 0 으로 두면 타이어 힘이 통째로 사라진다
+        friction=0.41,
+        cost=args.cost,
     )
 
-    print(f'\n■ 정식화  N={args.N}  dt={args.dt}  '
-          f'예측구간 {args.N*args.dt:.2f}초')
-    dyn_fun, _ = load_naive_dynamics(args.hypermpc)
-    print(f'  동역학 로드: {dyn_fun}')
+    print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
+          f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}')
+    print(f'  ★ 타이어 계수는 아직 저자 기본값이다 (질량 {MASS}, I_z, lr 만 우리 차). '
+          '동정값이 나오면 다시 잴 것.')
+    dyn_fun, _ = load_naive_dynamics(args.hypermpc, guard=not args.no_guard)
 
+    tag = f'N{args.N}_{args.cost}_{"noguard" if args.no_guard else "guard"}'
+    build = os.path.join(args.build_dir, tag)
+    os.makedirs(build, exist_ok=True)
     ocp = build_ocp(dyn_fun, args.N, args.dt, cfg)
-    print('\n■ 코드 생성 + 빌드 중... (첫 실행은 수 분 걸립니다)', flush=True)
+    ocp.code_export_directory = os.path.join(build, 'c_generated_code')
+    json_file = os.path.join(build, 'ocp.json')
+    reuse = os.path.exists(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_hmpc_car.so'))
+    print(f'\n■ {"이전 빌드 사용" if reuse else "코드 생성 + 빌드 중"}: {build}', flush=True)
     t0 = time.perf_counter()
-    solver = AcadosOcpSolver(ocp, verbose=False)
-    print(f'  ✓ 빌드 완료 ({time.perf_counter()-t0:.1f}초)')
+    solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
+                             generate=not reuse, verbose=False)
+    print(f'  ✓ {time.perf_counter()-t0:.1f}초')
 
-    # ── 한 바퀴 도는 상황을 흉내 ────────────────────────────────────────
-    #   track_5 의 평균 곡률 0.575 /m 를 모든 스텝에 넣는다.
-    par = np.concatenate([default_params(), [0.575]])
-    for k in range(args.N + 1):
-        solver.set(k, 'p', par)
+    if args.build_only:
+        return 0
 
-    x0 = np.zeros(9)
-    x0[3] = 1.0      # vx  — 정지에서 풀면 타이어 모델이 특이해진다
-    x0[7] = 1.0/0.05 # wheel_speed ≈ vx / R
-    solver.set(0, 'lbx', x0)
-    solver.set(0, 'ubx', x0)
-
-    ts, bad = [], 0
-    for _ in range(args.laps):
-        t0 = time.perf_counter()
-        st = solver.solve()
-        ts.append((time.perf_counter() - t0) * 1000)
-        if st != 0:
-            bad += 1
-
-    ts = np.array(ts)
-    print(f'\n■ 결과  ({args.laps}회 반복)\n')
-    print(f'  status != 0 : {bad} 회  {"← 모두 정상" if bad == 0 else "← 확인 필요"}')
-    print(f'  풀이 시간   중앙 {np.median(ts):7.2f} ms')
-    print(f'              95%  {np.percentile(ts, 95):7.2f} ms')
-    print(f'              최대 {ts.max():7.2f} ms')
-    print(f'\n  u0 = {solver.get(0, "u")}   (wheel_speed_ref, delta_ref)')
-
-    budget = args.dt * 1000
-    print(f'\n■ 실시간 판정  (한 주기 예산 {budget:.1f} ms)\n')
-    p95 = np.percentile(ts, 95)
-    if p95 < budget * 0.5:
-        print(f'  ✓ 여유 있음 — 95% 가 예산의 {p95/budget*100:.0f}%')
-    elif p95 < budget:
-        print(f'  △ 빠듯함 — 95% 가 예산의 {p95/budget*100:.0f}%. N 을 줄이는 것 검토')
-    else:
-        print(f'  ✗ 초과 — 95% 가 예산의 {p95/budget*100:.0f}%.')
-        print(f'    N 을 줄이거나 제어 주기를 낮춰야 한다.')
-    print(f'\n  참고: 논문 10.61 ms (N=80, x86 데스크톱)\n')
+    kappa_track = None
+    for name in args.scenario:
+        x0 = initial_state(cfg)
+        kappa = lambda q: 0.0  # noqa: E731
+        if name == 'curve':
+            kappa = lambda q: 0.575  # noqa: E731
+        elif name == 'track':
+            kappa_track = kappa_track or track_kappa(args.track)
+            kappa = kappa_track
+        elif name == 'zero':
+            x0 = initial_state(cfg, slip=0.0)
+        elif name == 'zero-guess':
+            # 초기 추측을 안 깐 예전 방식. 내부 스테이지가 전부 0 이라 역시 0/0 이다.
+            x0 = initial_state(cfg, slip=0.0)
+            solver.reset()
+            solver.set(0, 'lbx', x0)
+            solver.set(0, 'ubx', x0)
+            for k in range(args.N + 1):
+                solver.set(k, 'p', np.concatenate([default_params(), [0.0]]))
+            st = solver.solve()
+            print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
+            continue
+        run_scenario(solver, args, cfg, name, kappa, x0, args.laps)
     return 0
 
 
