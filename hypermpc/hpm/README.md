@@ -17,7 +17,7 @@ python3 -m venv ~/hpm-venv
 ~/hpm-venv/bin/pip install "numpy<2" pandas scipy matplotlib torch hydra-core \
     hydra-joblib-launcher wandb torch-interpol tqdm
 mkdir -p ~/mlcs_data/hpm
-tar -xzf hypermpc/hpm/data/hpm_data_20261104.tar.gz -C ~/mlcs_data/hpm
+tar -xzf hypermpc/hpm/data/hpm_data_20261105.tar.gz -C ~/mlcs_data/hpm
 ```
 
 ## 실행
@@ -51,6 +51,23 @@ hypermpc/hpm/train.sh hpm.train.epoch=1 hpm.device=cuda hpm.compile=false
 ★ `train.sh` 의 `WANDB_MODE=disabled` 를 빼지 말 것. 저자 `main.py` 에 저자 계정
 API 키가 들어 있어서, 켜면 우리 로그와 모델이 그 계정으로 올라간다.
 
+## 고정 파라미터 동정 (신경망 없이 상수만)
+
+약 1시간 설정이다. 윈도 간격을 8 로 넓혀 메인 PC 기준 에폭당 약 2.5분(추정)으로 맞췄다.
+저자 학습률 5e-4 로는 이 스텝 수에서 파라미터가 많아야 2배쯤 움직이므로 올린다.
+
+```bash
+tar -xzf hypermpc/hpm/data/hpm_data_20261105.tar.gz -C ~/mlcs_data/hpm   # 기존 csv 를 덮어쓴다
+hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
+    hpm.train.epoch=25 hpm.optimizer.lr=0.002 hpm.wandb.send_interval=5 \
+    dataset.train_dataset.stride=8 dataset.val_dataset.stride=8
+```
+
+- 결과 파라미터는 로그의 `p_const` (에폭마다 출력). 순서는 `I_z, lr, Cd0, Cd2, Cd1, I_e, K_fi, b1, b0, R`, 앞 타이어 10개, 뒤 타이어 10개다.
+- 모델은 `~/mlcs_data/hpm/runs/data/models/<실행이름>/`.
+- `val_dataset.stride` 는 100 이하여야 한다 (`main.py` 가 `100 // stride` 로 슬라이스).
+- 젯슨 CPU 에서 배치 32, 2 에폭으로 `main.py` 끝까지 정상 종료를 확인했다. 전체 설정은 아직 안 돌렸다.
+
 ## 데이터 만들기 (젯슨)
 
 ```bash
@@ -59,6 +76,12 @@ API 키가 들어 있어서, 켜면 우리 로그와 모델이 그 계정으로 
 ```
 
 변환 내용은 `tools/prep_hpm_dataset.py` 머리말 참고.
+
+## 데이터 (hpm_data_20261105)
+
+11-03 ~ 11-05 로그, 전진만 33분 (train 23.0 / val 6.6 / test 3.5). 오프셋 변경 전 로그는 조향과 yaw 를
+보정했고, 전 로그에 조향 맵을 적용했다 (`tools/prep_hpm_dataset.py`). 보정 후 `|ay|` < 2 에서 좌우 모두
+실제/모델 곡률 약 1.00~1.02. 원선회와 계단이 많아 11-04 데이터와 분포가 다르다.
 
 ## 아직 안 정한 것
 

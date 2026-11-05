@@ -25,10 +25,18 @@ prep_hpm_dataset.py — 정리된 주행 로그를 HyperPM 학습 형식으로 �
      양 끝은 SG 가 부정확하니 창 절반씩 버린다.
   ③ /mpc/state 는 **뒤축** 기준이다. 모델은 무게중심 기준이므로
      v_y += lr · r. (v_x 는 같다)
-  ④ delta 는 측정값이 없어서 명령으로 만든다. 실제 한계 ±0.40 으로 자르고
+  ④ delta 는 측정값이 없어서 명령으로 만든다. 원선회로 잰 조향 맵을 지나
      서보 속도 3.2 rad/s 로 제한한다 (config/vehicle.yaml).
   ⑤ 전진만 남긴다. 저자 데이터도 v_x ≥ 0.25 이다 — 후진·정지에서는 슬립률의
      분모가 0 근처라 타이어 모델이 터진다.
+
+■ 로그 시점별 보정 (2026-11-05 원선회 측정)
+
+  설정을 고치기 전에 쌓은 로그는 그 오차가 그대로 들어 있어서 여기서 뺀다.
+  파일 이름의 시각으로 가른다.
+
+    조향 중립 +0.0183 rad   servo offset 0.5077 이전 로그
+    yaw -0.014 rad          mocap.yaml yaw_offset 적용 이전 로그
 
 ■ 분할
 
@@ -46,6 +54,25 @@ from scipy.signal import savgol_filter
 
 DT = 0.01
 
+# 명령 크기 → 실제 조향 (좌우 평균, 1 m/s 원선회 2026-11-05). 0.40 에서 포화한다.
+STEER_MAP_CMD = (0.0, 0.2, 0.3, 0.4)
+STEER_MAP_ACT = (0.0, 0.2021, 0.2972, 0.3776)
+STEER_BIAS = 0.0183
+STEER_BIAS_BEFORE = '20261105_163000'   # 파일 이름 시각. 이전이면 보정
+YAW_FIX = -0.014
+YAW_FIX_BEFORE = '20261105_174000'
+
+
+def log_stamp(path):
+    """drive_20261105_161520_rally_clean.csv → 20261105_161520"""
+    return '_'.join(os.path.basename(path).split('_')[1:3])
+
+
+def steer_from_cmd(cmd, stamp):
+    """명령 → 실제 조향."""
+    act = np.sign(cmd) * np.interp(np.abs(cmd), STEER_MAP_CMD, STEER_MAP_ACT)
+    return act + STEER_BIAS if stamp < STEER_BIAS_BEFORE else act
+
 
 def rate_limit(u, max_rate, dt=DT):
     """서보처럼 일정 속도 이상으로는 못 따라가게 한다."""
@@ -57,7 +84,7 @@ def rate_limit(u, max_rate, dt=DT):
     return out
 
 
-def convert_segment(s, a):
+def convert_segment(s, a, stamp):
     """clean 로그의 segment 하나 → 저자 형식 DataFrame."""
     t = np.arange(s['time'].iloc[0], s['time'].iloc[-1], DT)
     if len(t) <= a.sg_window:
@@ -67,6 +94,8 @@ def convert_segment(s, a):
     grid = lambda v: np.interp(t, src, v)  # noqa: E731
     x, y = grid(s['x'].to_numpy()), grid(s['y'].to_numpy())
     yaw = grid(np.unwrap(s['yaw'].to_numpy()))
+    if stamp < YAW_FIX_BEFORE:
+        yaw = yaw + YAW_FIX
 
     sg = lambda v, d=0: savgol_filter(  # noqa: E731
         v, a.sg_window, a.sg_order, deriv=d, delta=DT)
@@ -75,8 +104,8 @@ def convert_segment(s, a):
     v_x = dx * np.cos(yaw_s) + dy * np.sin(yaw_s)
     v_y = -dx * np.sin(yaw_s) + dy * np.cos(yaw_s) + a.lr * r
 
-    delta = rate_limit(np.clip(grid(s['cmd_steer'].to_numpy()),
-                               -a.max_steer, a.max_steer), a.max_steer_rate)
+    delta = rate_limit(steer_from_cmd(grid(s['cmd_steer'].to_numpy()), stamp),
+                       a.max_steer_rate)
 
     out = pd.DataFrame({
         'time': t, 'x': x, 'y': y, 'yaw': yaw_s,
@@ -120,7 +149,6 @@ def main():
     p.add_argument('--sg-window', type=int, default=31)
     p.add_argument('--sg-order', type=int, default=2)
     p.add_argument('--lr', type=float, default=0.1498, help='뒤축~무게중심 [m]')
-    p.add_argument('--max-steer', type=float, default=0.40)
     p.add_argument('--max-steer-rate', type=float, default=3.2)
     p.add_argument('--erpm-gain', type=float, default=4781.5,
                    help='vesc.yaml speed_to_erpm_gain')
@@ -142,7 +170,7 @@ def main():
         df = pd.read_csv(f)
         before = len(runs)
         for _, s in df.groupby('segment'):
-            conv = convert_segment(s, a)
+            conv = convert_segment(s, a, log_stamp(f))
             if conv is not None:
                 runs += forward_runs(conv, a)
         got = sum(len(r) for r in runs[before:]) * DT
