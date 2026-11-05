@@ -37,6 +37,14 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
   k 를 곱해 넘기면 식이 실제 질량의 것과 정확히 같아진다 (scale_for_mass).
   타이어 힘/m 항에서는 m 이 약분된다.
 
+■ ★ 저속에서 RK4 한 번으로는 적분이 발산한다 (--rk-steps)
+
+  슬립률 분모가 v_x 라 타이어 강성이 v_x 에 반비례해 커진다. 기본 계수·마찰 0.41 이면
+  v_x 방향 고유값이 약 157/v_x 1/s 로, dt 0.033 에서 RK4 안정 한계(2.78)를 v_x 약 1.9 m/s
+  아래에서 넘는다. 실제로 RK4 1회면 0.7 m/s 이하에서 QP 실패가 대부분이고 0.25 m/s 에서는
+  solve 가 돌아오지 않았다. 구간당 3회면 0.25~1 m/s 모두 정상이었다 (2026-11-05).
+  저자 계수가 바뀌면 이 숫자도 바뀌니 동정값으로 다시 볼 것.
+
 ■ 원본과의 관계
 
   동역학은 hypermpc_code 의 robot_model/car/casadi_car_model_naive.py 를
@@ -58,6 +66,8 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
 """
 
 import argparse
+import glob
+import hashlib
 import os
 import sys
 import time
@@ -71,6 +81,7 @@ from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 SLIP_EPS = 1e-12    # hpm/mlcs_car_model.py 의 SafePacejkaTireModel 과 같은 값
 MASS = 3.284        # 저울 실측 2026-11-05 (라이다 포함)
 AUTHOR_MASS = 5.1   # casadi_car_model_naive.py 하드코딩
+RK_STEPS = 3        # 구간당 RK4 횟수. 머리말 참고
 
 
 class SafeSqrtCasadi:
@@ -241,8 +252,53 @@ def build_ocp(dyn_fun, N, dt, cfg):
     ocp.solver_options.regularize_method = 'PROJECT'
     ocp.solver_options.globalization = 'MERIT_BACKTRACKING'
     ocp.solver_options.integrator_type = 'ERK'
+    ocp.solver_options.sim_method_num_stages = 4
+    ocp.solver_options.sim_method_num_steps = cfg['rk_steps']
     ocp.solver_options.nlp_solver_type = 'SQP_RTI'
     return ocp
+
+
+def make_cfg(cost='author', rk_steps=RK_STEPS):
+    """OCP 설정. 값은 저자 config_car.yaml 이 기준이다."""
+    return dict(
+        wheel_speed_tau=0.046122448979591835,
+        steering_tau=0.0436734693877551,
+        q_n=0.02, q_mu=0.002, q_delta=2.0, q_speed_diff=2.0,
+        q_e_scaler=1.0, q_mu_e=5.0,
+        q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=0.25,
+        q_progress=1.0,
+        min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
+        # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
+        v_target=1.2,
+        # 실측 횡방향 운동 마찰. 상태라서 0 으로 두면 타이어 힘이 통째로 사라진다
+        friction=0.41,
+        cost=cost,
+        rk_steps=rk_steps,
+    )
+
+
+def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
+    """생성 코드가 있으면 다시 쓰고, 없으면 빌드한다."""
+    tag = f'N{N}_{cfg["cost"]}_{"guard" if guard else "noguard"}_rk{cfg["rk_steps"]}'
+    build = os.path.join(build_dir, tag)
+    os.makedirs(build, exist_ok=True)
+    ocp = build_ocp(dyn_fun, N, dt, cfg)
+    ocp.code_export_directory = os.path.join(build, 'c_generated_code')
+    json_file = os.path.join(build, 'ocp.json')
+    # 라이브러리 이름에 해시가 붙으므로 이 파일과 dt 가 같을 때만 다시 쓴다.
+    with open(__file__, 'rb') as f:
+        stamp = hashlib.md5(f.read() + repr(dt).encode()).hexdigest()
+    stamp_file = os.path.join(build, 'source.md5')
+    reuse = (os.path.exists(stamp_file) and open(stamp_file).read() == stamp
+             and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
+    print(f'■ {"이전 빌드 사용" if reuse else "코드 생성 + 빌드 중"}: {build}', flush=True)
+    t0 = time.perf_counter()
+    solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
+                             generate=not reuse, verbose=False)
+    with open(stamp_file, 'w') as f:
+        f.write(stamp)
+    print(f'  ✓ {time.perf_counter()-t0:.1f}초', flush=True)
+    return solver
 
 
 def track_kappa(path):
@@ -324,6 +380,8 @@ def main():
     ap.add_argument('--cost', choices=('offline', 'author'), default='author',
                     help='author = 저자 casadi_car_model.py 의 비용. offline = 예전 간이 비용')
     ap.add_argument('--no-guard', action='store_true', help='0/0 방어를 끈다')
+    ap.add_argument('--rk-steps', type=int, default=RK_STEPS, help='구간당 RK4 횟수')
+    ap.add_argument('--v-max', type=float, default=None, help='입력 속도 상한. 없으면 7 m/s')
     ap.add_argument('--scenario', nargs='+',
                     choices=('straight', 'curve', 'track', 'zero', 'zero-guess'),
                     default=('straight', 'curve', 'track'))
@@ -340,43 +398,21 @@ def main():
         print('  git clone https://github.com/hyper-mpc/hypermpc_code.git ~/hypermpc_code')
         return 1
 
-    cfg = dict(
-        # 원본 config_car.yaml
-        wheel_speed_tau=0.046122448979591835,
-        steering_tau=0.0436734693877551,
-        q_n=0.02, q_mu=0.002, q_delta=2.0, q_speed_diff=2.0,
-        q_e_scaler=1.0, q_mu_e=5.0,
-        q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=0.25,
-        q_progress=1.0,
-        min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
-        # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
-        v_target=1.2,
-        # 실측 횡방향 운동 마찰. 상태라서 0 으로 두면 타이어 힘이 통째로 사라진다
-        friction=0.41,
-        cost=args.cost,
-    )
+    cfg = make_cfg(args.cost, args.rk_steps)
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
-          f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}')
+          f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
     print(f'  ★ 타이어 계수는 아직 저자 기본값이다 (질량 {MASS}, I_z, lr 만 우리 차). '
           '동정값이 나오면 다시 잴 것.')
     dyn_fun, _ = load_naive_dynamics(args.hypermpc, guard=not args.no_guard)
 
-    tag = f'N{args.N}_{args.cost}_{"noguard" if args.no_guard else "guard"}'
-    build = os.path.join(args.build_dir, tag)
-    os.makedirs(build, exist_ok=True)
-    ocp = build_ocp(dyn_fun, args.N, args.dt, cfg)
-    ocp.code_export_directory = os.path.join(build, 'c_generated_code')
-    json_file = os.path.join(build, 'ocp.json')
-    reuse = os.path.exists(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_hmpc_car.so'))
-    print(f'\n■ {"이전 빌드 사용" if reuse else "코드 생성 + 빌드 중"}: {build}', flush=True)
-    t0 = time.perf_counter()
-    solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
-                             generate=not reuse, verbose=False)
-    print(f'  ✓ {time.perf_counter()-t0:.1f}초')
+    solver = make_solver(dyn_fun, args.N, args.dt, cfg, args.build_dir, not args.no_guard)
 
     if args.build_only:
         return 0
+    if args.v_max is not None:
+        for k in range(args.N):
+            solver.constraints_set(k, 'ubu', np.array([args.v_max, cfg['max_steer_ref']]))
 
     kappa_track = None
     for name in args.scenario:

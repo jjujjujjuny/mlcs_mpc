@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'mpc_node        = mlcs_mpc.mpc_node:main',
             'stanley_node    = mlcs_mpc.stanley_node:main',
+            'hmpc_node       = mlcs_mpc.hmpc_node:main',
             'import_track    = mlcs_mpc.import_track:main',
             'track_viz       = mlcs_mpc.track_viz:main',
             'track_info      = mlcs_mpc.track_info:main',

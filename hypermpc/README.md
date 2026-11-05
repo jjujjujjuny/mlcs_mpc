@@ -10,9 +10,9 @@ HyperMPC 논문([arXiv:2508.06181](https://arxiv.org/abs/2508.06181))의 정식�
 |---|---|
 | pip + casadi (venv) | ✅ casadi 3.8.1 |
 | acados 소스 빌드 (aarch64) | ✅ 최소 OCP 0.659 ms |
-| 오프라인 OCP | ✅ 젯슨 평균 8~12 ms, p95 13 ms 이하 (N=80, 타이어 계수 기본값, 2026-11-05) |
+| 오프라인 OCP | ✅ 젯슨 평균 18~22 ms, p95 25 ms 이하 (N=80, 구간당 RK4 3회, 타이어 계수 기본값, 2026-11-05) |
 | 트랙 변환 (track_5 → Frenet) | 대기 |
-| ROS 노드 | 대기 |
+| ROS 노드 | ⏳ `hmpc_node` + `ocp_worker`. 안전 시험 통과, 실차·거치대 확인 전 (`./drive.sh hmpc`, `tools/test_hmpc_node.py`) |
 | 파라미터 동정 | 대기 |
 | HyperPM (torch + l4casadi) | 대기 |
 

@@ -14,6 +14,7 @@
 #                                    인자 없으면 config/track.yaml 을 따른다
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
+#     ./drive.sh hmpc                HyperMPC OCP 노드. 기본은 거치대용 (속도 항상 0)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
@@ -895,6 +896,34 @@ stanley)
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true
+    ;;
+
+hmpc)
+    # OCP 는 hypermpc/ocp_worker.py 가 따로 풀고 hmpc_node 가 감시한다.
+    # ★ 기본은 bench 다. 달리려면 MLCS_HMPC_DRIVE=1 을 직접 줘야 한다.
+    load_ros; require_ws_pkg mlcs_mpc
+    arm_cleanup
+    start_natnet
+    start_bringup
+    HM_BENCH=true
+    if [ "${MLCS_HMPC_DRIVE:-0}" = "1" ]; then
+        HM_BENCH=false
+        warn "${RED}${BLD}MLCS_HMPC_DRIVE=1 — 차가 실제로 움직입니다.${RST} 상한은 config/hmpc.yaml 의 v_max"
+    else
+        warn "bench — 속도는 항상 0 입니다. ${BLD}바퀴를 띄우고${RST} 조향만 확인하세요."
+    fi
+    ros2 launch mlcs_mpc hmpc.launch.py bench:="$HM_BENCH" >"$(run_log hmpc)" 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 2
+    echo
+    warn "준비되면 다른 창에서:  ./drive.sh go   /  정지  ./drive.sh halt"
+    log "로그: tail -f /tmp/mlcs_hmpc.log    워커: /tmp/mlcs_hmpc_worker.log"
+    log "상태: ros2 topic echo /hmpc/status   풀이 시간: ros2 topic echo /mpc/solve_time"
+    echo
+    JOYARG="$(decide_joyarg)"
+    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
+    ros2 launch mlcs_mpc joystick.launch.py \
+        joy:="$JOYARG" max_speed:=1.0 allow_toggle:=true
     ;;
 
 mpc)
