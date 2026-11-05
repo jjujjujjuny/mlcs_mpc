@@ -22,10 +22,11 @@ hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 아직 상수 
   솔버 준비 안 됨, 솔버 고장. 비정상 해(status≠0, NaN)는 내보내지 않고,
   max_bad_solves 번 이어지면 래치한다.
 
-■ 아직 모델에 없는 것
+■ 실제 조향과 서보 명령
 
-  조향 지연(약 0.08 s), 속도 응답(시정수 약 0.5 s). 액추에이터 시정수는 저자 값(0.044,
-  0.046 s) 그대로다. 저속 첫 주행에서 보고 정한다.
+  모델의 delta 는 실제 조향이다. 원선회로 잰 맵으로 명령으로 바꿔 내보낸다
+  (최대 명령 0.40 이 실제 0.378). 조향 시정수는 계단 응답에 맞췄고 순수 지연은 따로
+  넣지 않았다. 바퀴 시정수는 저자 값이다 (config/hmpc.yaml 참고).
 """
 import json
 import math
@@ -133,11 +134,15 @@ class HmpcNode(Node):
         d('N', 80)
         d('dt', 0.033)
         d('rk_steps', 3)
+        d('steering_tau', 0.13)
+        d('wheel_speed_tau', 0.0461)
         d('control_rate', 30.0)
         d('solve_timeout', 0.1)
         d('max_bad_solves', 3)
         d('v_max', 0.7)
         d('max_steer', 0.40)
+        d('steer_map_cmd', [0.0, 0.2, 0.3, 0.4])
+        d('steer_map_act', [0.0, 0.2021, 0.2972, 0.3776])
         d('max_steer_rate', 3.2)
         d('v_floor', 0.25)
         d('reverse_limit', -0.2)
@@ -159,6 +164,8 @@ class HmpcNode(Node):
         self.N, self.dt = int(gp('N')), float(gp('dt'))
         self.v_max = float(gp('v_max'))
         self.max_steer = float(gp('max_steer'))
+        self.map_cmd = list(gp('steer_map_cmd'))
+        self.map_act = list(gp('steer_map_act'))
         self.period = 1.0 / float(gp('control_rate'))
         self.max_dsteer = float(gp('max_steer_rate')) * self.period
         self.lr = list(gp('vehicle_params'))[1]
@@ -177,8 +184,10 @@ class HmpcNode(Node):
         params = list(gp('vehicle_params')) + list(gp('tire_front')) + list(gp('tire_rear'))
         self.worker_args = dict(
             python=gp('worker_python'), script=rel(gp('worker_script')),
-            config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), mass=float(gp('mass')), v_max=self.v_max,
-                        max_steer=self.max_steer, params=params, core=int(gp('solver_core'))),
+            config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), steering_tau=float(gp('steering_tau')),
+                        wheel_speed_tau=float(gp('wheel_speed_tau')),
+                        mass=float(gp('mass')), v_max=self.v_max,
+                        max_steer=self.map_act[-1], params=params, core=int(gp('solver_core'))),
             extra=[a for a in gp('worker_extra_args') if a], N=self.N)
         self.log_file = open(gp('worker_log'), 'ab')
 
@@ -290,8 +299,8 @@ class HmpcNode(Node):
             self.delta = float(x1[8])
             if self._blocked() is not None:
                 return      # 답을 기다리는 사이에 정지 조건이 걸렸다
-            speed, steer = to_command(u, self.v_max, self.max_steer,
-                                      self.cmd_steer, self.max_dsteer)
+            speed, steer = to_command(u, self.v_max, self.max_steer, self.cmd_steer,
+                                      self.max_dsteer, self.map_cmd, self.map_act)
             self.cmd_steer = steer
             self._publish(speed, steer)
 

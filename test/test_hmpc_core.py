@@ -9,7 +9,7 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'src/mlcs_mpc'))
-from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, to_command  # noqa: E402
+from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, steer_to_command, to_command  # noqa: E402
 
 
 def circle(R=2.0, n=100):
@@ -77,11 +77,22 @@ def test_solution_ok():
     assert not solution_ok(0, np.ones(2), np.array([np.inf] * 9))
 
 
+MAP = ([0.0, 0.2, 0.3, 0.4], [0.0, 0.2021, 0.2972, 0.3776])
+
+
 def test_command_limits():
-    assert to_command([9.0, 0.0], 0.7, 0.4, 0.0, 0.1)[0] == 0.7
-    assert to_command([-1.0, 0.0], 0.7, 0.4, 0.0, 0.1)[0] == 0.0
-    assert to_command([0.5, 0.5], 0.7, 0.4, 0.0, 0.1)[1] == 0.1     # 변화율
-    assert to_command([0.5, 0.5], 0.7, 0.4, 0.38, 0.1)[1] == 0.4    # 한계
+    assert to_command([9.0, 0.0], 0.7, 0.4, 0.0, 0.1, *MAP)[0] == 0.7
+    assert to_command([-1.0, 0.0], 0.7, 0.4, 0.0, 0.1, *MAP)[0] == 0.0
+    assert to_command([0.5, 0.3], 0.7, 0.4, 0.0, 0.1, *MAP)[1] == 0.1     # 변화율
+    assert to_command([0.5, 0.5], 0.7, 0.4, 0.38, 0.1, *MAP)[1] == 0.4    # 한계
+
+
+def test_steer_map():
+    assert abs(steer_to_command(0.3776, *MAP) - 0.4) < 1e-12
+    assert abs(steer_to_command(-0.3776, *MAP) + 0.4) < 1e-12
+    assert steer_to_command(0.0, *MAP) == 0.0
+    assert abs(steer_to_command(0.2972, *MAP) - 0.3) < 1e-12
+    assert steer_to_command(0.5, *MAP) == 0.4       # 맵 밖은 끝값
 
 
 if __name__ == '__main__':

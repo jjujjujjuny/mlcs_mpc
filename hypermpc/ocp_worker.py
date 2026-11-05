@@ -47,7 +47,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--fd-in', type=int, required=True)
     ap.add_argument('--fd-out', type=int, required=True)
-    ap.add_argument('--config', required=True, help='JSON: N dt mass v_max max_steer params core')
+    ap.add_argument('--config', required=True, help='JSON: N dt rk_steps steering_tau wheel_speed_tau mass v_max max_steer params core')
     ap.add_argument('--hypermpc', default=os.path.expanduser('~/hypermpc_code'))
     ap.add_argument('--build-dir', default=os.path.expanduser('~/hmpc_build'))
     ap.add_argument('--no-guard', action='store_true', help='시험 전용. 슬립 0 에서 solve 가 멈춘다')
@@ -62,7 +62,7 @@ def main():
         os.sched_setaffinity(0, {c['core']})
 
     N = c['N']
-    cfg = oo.make_cfg('author', c.get('rk_steps', oo.RK_STEPS))
+    cfg = oo.make_cfg('author', c['rk_steps'], c['steering_tau'], c['wheel_speed_tau'])
     dyn_fun, _ = oo.load_naive_dynamics(a.hypermpc, guard=not a.no_guard)
     solver = oo.make_solver(dyn_fun, N, c['dt'], cfg, a.build_dir, guard=not a.no_guard)
     params = np.array(c['params'], dtype=float)

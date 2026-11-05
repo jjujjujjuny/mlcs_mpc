@@ -258,11 +258,12 @@ def build_ocp(dyn_fun, N, dt, cfg):
     return ocp
 
 
-def make_cfg(cost='author', rk_steps=RK_STEPS):
-    """OCP 설정. 값은 저자 config_car.yaml 이 기준이다."""
+def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
+             wheel_speed_tau=0.046122448979591835):
+    """OCP 설정. 기본값은 저자 config_car.yaml 이다. 우리 차 시정수는 config/hmpc.yaml."""
     return dict(
-        wheel_speed_tau=0.046122448979591835,
-        steering_tau=0.0436734693877551,
+        wheel_speed_tau=wheel_speed_tau,
+        steering_tau=steering_tau,
         q_n=0.02, q_mu=0.002, q_delta=2.0, q_speed_diff=2.0,
         q_e_scaler=1.0, q_mu_e=5.0,
         q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=0.25,
@@ -285,9 +286,9 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     ocp = build_ocp(dyn_fun, N, dt, cfg)
     ocp.code_export_directory = os.path.join(build, 'c_generated_code')
     json_file = os.path.join(build, 'ocp.json')
-    # 라이브러리 이름에 해시가 붙으므로 이 파일과 dt 가 같을 때만 다시 쓴다.
+    # 라이브러리 이름에 해시가 붙으므로 이 파일과 dt, 설정이 같을 때만 다시 쓴다.
     with open(__file__, 'rb') as f:
-        stamp = hashlib.md5(f.read() + repr(dt).encode()).hexdigest()
+        stamp = hashlib.md5(f.read() + repr((dt, sorted(cfg.items()))).encode()).hexdigest()
     stamp_file = os.path.join(build, 'source.md5')
     reuse = (os.path.exists(stamp_file) and open(stamp_file).read() == stamp
              and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
@@ -382,6 +383,9 @@ def main():
     ap.add_argument('--no-guard', action='store_true', help='0/0 방어를 끈다')
     ap.add_argument('--rk-steps', type=int, default=RK_STEPS, help='구간당 RK4 횟수')
     ap.add_argument('--v-max', type=float, default=None, help='입력 속도 상한. 없으면 7 m/s')
+    ap.add_argument('--max-steer', type=float, default=0.378, help='--v-max 와 함께 쓰는 실제 조향 상한')
+    ap.add_argument('--steering-tau', type=float, default=0.0436734693877551)
+    ap.add_argument('--wheel-speed-tau', type=float, default=0.046122448979591835)
     ap.add_argument('--scenario', nargs='+',
                     choices=('straight', 'curve', 'track', 'zero', 'zero-guess'),
                     default=('straight', 'curve', 'track'))
@@ -398,7 +402,7 @@ def main():
         print('  git clone https://github.com/hyper-mpc/hypermpc_code.git ~/hypermpc_code')
         return 1
 
-    cfg = make_cfg(args.cost, args.rk_steps)
+    cfg = make_cfg(args.cost, args.rk_steps, args.steering_tau, args.wheel_speed_tau)
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
@@ -412,7 +416,8 @@ def main():
         return 0
     if args.v_max is not None:
         for k in range(args.N):
-            solver.constraints_set(k, 'ubu', np.array([args.v_max, cfg['max_steer_ref']]))
+            solver.constraints_set(k, 'lbu', np.array([cfg['min_ws_ref'], -args.max_steer]))
+            solver.constraints_set(k, 'ubu', np.array([args.v_max, args.max_steer]))
 
     kappa_track = None
     for name in args.scenario:

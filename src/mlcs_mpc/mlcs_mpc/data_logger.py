@@ -55,7 +55,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 from ackermann_msgs.msg import AckermannDriveStamped
 
 # VESC 상태는 선택적 — 패키지가 없어도 로거는 돌아야 한다
@@ -82,6 +82,8 @@ COLUMNS = [
     'duty_cycle',
     'voltage',
     'servo_position',  # 조향 서보 지령 (0~1)
+    # ── 제어기 ──────────────────────────────────────────────────────────
+    'solve_ms',        # /mpc/solve_time 최신값. 최근 0.5초에 없으면 빈칸
 ]
 
 
@@ -126,6 +128,8 @@ class DataLogger(Node):
         self.cmd = None          # (speed, steer)
         self.vesc = None         # dict
         self.servo = None
+        self.solve_ms = None
+        self.solve_t = 0.0
 
         self.t0 = None
         self.last_stamp = None
@@ -161,6 +165,8 @@ class DataLogger(Node):
                 'vesc_msgs 를 못 찾았습니다 — 모터 RPM/전류 열이 빈칸이 됩니다.\n'
                 '  (위치·명령은 정상 기록됩니다)')
 
+        self.create_subscription(Float32, '/mpc/solve_time', self._solve_cb, 10)
+
         # 서보 지령은 Float64 — f1tenth_stack 이 /commands/servo/position 으로 낸다
         try:
             from std_msgs.msg import Float64
@@ -190,6 +196,10 @@ class DataLogger(Node):
             'duty_cycle': s.duty_cycle,
             'voltage': s.voltage_input,
         }
+
+    def _solve_cb(self, msg: Float32):
+        self.solve_ms = msg.data
+        self.solve_t = time.monotonic()
 
     def _state_cb(self, msg: Odometry):
         """mocap 틱마다 한 행. 이게 로그의 시간축이다."""
@@ -233,6 +243,8 @@ class DataLogger(Node):
             v.get('motor_current', ''), v.get('duty_cycle', ''),
             v.get('voltage', ''),
             '' if self.servo is None else f'{self.servo:.4f}',
+            '' if self.solve_ms is None or time.monotonic() - self.solve_t > 0.5
+            else f'{self.solve_ms:.2f}',
         ])
         self.rows += 1
 

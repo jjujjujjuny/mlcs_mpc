@@ -91,8 +91,17 @@ def solution_ok(status, u, x1):
     return int(status) == 0 and bool(np.all(np.isfinite(u))) and bool(np.all(np.isfinite(x1)))
 
 
-def to_command(u, v_max, max_steer, prev_steer, max_dsteer):
-    """해 → (속도, 조향). 솔버 경계와 별개로 여기서 다시 묶는다."""
+def steer_to_command(actual, map_cmd, map_act):
+    """실제 조향 → 서보 명령. 맵은 원선회로 잰 좌우 평균이다 (0 에서 시작)."""
+    return math.copysign(float(np.interp(abs(actual), map_act, map_cmd)), actual)
+
+
+def to_command(u, v_max, max_steer, prev_steer, max_dsteer, map_cmd, map_act):
+    """해 → (속도, 조향 명령). 솔버 경계와 별개로 여기서 다시 묶는다.
+
+    u[1] 은 모델의 실제 조향이다. max_steer, 변화율, prev_steer 는 명령 단위다.
+    """
     speed = float(np.clip(u[0], 0.0, v_max))
-    steer = float(np.clip(u[1], prev_steer - max_dsteer, prev_steer + max_dsteer))
+    cmd = steer_to_command(u[1], map_cmd, map_act)
+    steer = float(np.clip(cmd, prev_steer - max_dsteer, prev_steer + max_dsteer))
     return speed, float(np.clip(steer, -max_steer, max_steer))
