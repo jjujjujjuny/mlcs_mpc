@@ -96,4 +96,7 @@
     #
     #   지그가 정말 대칭인지 재려면 ./drive.sh mocapcal 을 쓸 것.
     offset_y: 0.0
-    yaw_offset: 0.0     # ./drive.sh mocapcal straight 로 확인
+    # ✅ 2026-11-05 원선회 측정 — 1.0~2.6 m/s, 명령 ±0.30.
+    #   뒤축 옆 미끄러짐의 좌우 평균이 속도와 상관없이 -0.80° (표준편차 0.05°).
+    #   yaw = raw + yaw_offset 이므로 -0.0139 rad.
+    yaw_offset: -0.014

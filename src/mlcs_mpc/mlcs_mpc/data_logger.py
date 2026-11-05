@@ -143,6 +143,8 @@ class DataLogger(Node):
         self.cmd_rows = 0
         self.cmd_seen = False
         self.warned_cmd = False
+        self.rows_at_status = 0
+        self.warned_stall = False
         self.drive_topic = self.get_parameter('drive_topic').value
         self.create_subscription(
             Odometry, self.get_parameter('state_topic').value,
@@ -248,6 +250,18 @@ class DataLogger(Node):
                 '아직 한 행도 기록되지 않았습니다 — /mpc/state 가 오나요?',
                 throttle_duration_sec=10.0)
             return
+        # ★ 행이 안 늘면 바로 알린다. 시간축이 mocap 이라 mocap 이 끊기면 아무것도
+        #   안 쌓이는데, 차는 멀쩡히 움직여서 끝날 때까지 모른다.
+        #   6.5분을 통째로 날린 적이 있다 (2026-11-05).
+        stalled = self.rows == self.rows_at_status
+        self.rows_at_status = self.rows
+        if stalled and not self.warned_stall:
+            self.get_logger().error(
+                f'✗ 기록이 멈췄습니다 ({self.rows}행에서) — /mpc/state 가 안 옵니다. '
+                '지금 주행은 저장되지 않습니다. Motive 를 확인하세요.')
+        elif self.warned_stall and not stalled:
+            self.get_logger().warn('✓ 기록이 다시 시작됐습니다 (mocap 복구).')
+        self.warned_stall = stalled
         # ★ 명령 열이 비어 있으면 **크게** 알린다. 시스템 동정은 입력이
         #   있어야 성립하는데, 위치만 쌓이면 쓸 수 없는 데이터가 된다.
         #   토픽 이름이 틀려서 3.7분을 통째로 버린 적이 있다 (2026-11-02).

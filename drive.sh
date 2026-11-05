@@ -284,6 +284,9 @@ start_data_logger () {
     ros2 run mlcs_mpc data_logger --ros-args "${DL_ARGS[@]}" \
         >/tmp/mlcs_datalog.log 2>&1 &
     PIDS="$PIDS $!"
+    # 로그는 파일로만 가니, ✗ ✓ 경고는 터미널에도 띄운다. 안 보이면 다 몰고 나서야 안다.
+    ( tail -n 0 -F /tmp/mlcs_datalog.log 2>/dev/null | grep --line-buffered -E '✗|✓' ) &
+    PIDS="$PIDS $!"
     sleep 1
     echo
     warn "운용 영역 전체를 덮도록 모으세요 — 한 바퀴만 돌면 좁은 영역만 쌓입니다."

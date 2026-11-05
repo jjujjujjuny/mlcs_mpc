@@ -1,8 +1,8 @@
 diff --git a/f1tenth_stack/config/vesc.yaml b/f1tenth_stack/config/vesc.yaml
-index 5531a64..95c24f5 100755
+index 5531a64..57e506f 100755
 --- a/f1tenth_stack/config/vesc.yaml
 +++ b/f1tenth_stack/config/vesc.yaml
-@@ -2,12 +2,44 @@
+@@ -2,12 +2,49 @@
    # general parameters shared by all vesc-related nodes
    ros__parameters:
      # erpm (electrical rpm) = speed_to_erpm_gain * speed (meters / second) + speed_to_erpm_offset
@@ -46,7 +46,27 @@ index 5531a64..95c24f5 100755
 +    #         -2.36° → -5.35°  (선회반경 8.49m → 3.52m)
 +    #     두 점으로 외삽해 실제 0 이 되는 값을 구했다:
 +    #         기울기 -1.0440 rad/servo →  offset 0.4909
-+    steering_angle_to_servo_offset: 0.4909
++    #
++    # ✅ 재보정 (2026-11-05) — ./drive.sh rally 원선회 ±0.20/±0.30/±0.40, 1 m/s
++    #   좌우 평균이 조향 크기와 상관없이 +0.016~+0.021 rad → 왼쪽으로 +1.05° 치우침.
++    #   실제 조향을 서보 값에 직선으로 맞춰 δ=0 인 값을 구했다 (기울기 -1.094 rad/servo).
++    #   ※ 다시 쟀을 때 ±0.20 좌우 반경으로 확인할 것 (이전 값 0.4909).
++    steering_angle_to_servo_offset: 0.5077
  
      port: /dev/sensors/vesc
      duty_cycle_min: 0.0
+@@ -20,8 +57,12 @@
+     speed_max: 23250.0
+     position_min: 0.0
+     position_max: 0.0
+-    servo_min: 0.15
+-    servo_max: 0.85
++    # ✅ 기계 한계 실측 (2026-09-30) — ./drive.sh servo (거치대)
++    #   좌 0.060 (δ≈+0.487)  우 0.890 (δ≈-0.451) 에서 바퀴가 더 안 따라온다.
++    #   한계에서 0.02 안쪽으로 잡는다 → 좌 δ≈+0.465  우 δ≈-0.429
++    #   (δ 는 ±0.2 gain 외삽값 — 끝단 실측 전)
++    servo_min: 0.08
++    servo_max: 0.87
+ 
+ # No longer needed, all parameters are shared
+ # ackermann_to_vesc_node:
