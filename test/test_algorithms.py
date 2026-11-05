@@ -24,6 +24,7 @@ from mlcs_mpc.vehicle_model import (          # noqa: E402
     VehicleParams, step_rk4, dynamics, normalize_angle, NX, NU)
 from mlcs_mpc.mpc_solver import MPCSolver, MPCConfig    # noqa: E402
 from mlcs_mpc.path_manager import PathManager          # noqa: E402
+from mlcs_mpc.rally_limits import RallyLimits, circle_estimate  # noqa: E402
 
 RESULTS = []
 
@@ -274,6 +275,42 @@ def test_stanley():
           f'평균 {errs.mean()*100:.2f}cm 최대 {errs.max()*100:.2f}cm')
 
 
+def test_rally():
+    """랠리 모드 십자키 — 한 번 누르면 한 칸, 한도 밖으로는 못 나간다."""
+    print('\n■ 랠리 모드')
+    r = RallyLimits(1.0, 0.20, 0.05, 0.01, 1.1, 0.22)
+
+    for _ in range(10):     # autorepeat 로 같은 값이 계속 온다
+        r.update(0.0, 1.0)
+    check('계속 누르고 있어도 한 칸', r.speed == 1.05, f'{r.speed}')
+    r.update(0.0, 0.0)
+    r.update(0.0, 1.0)
+    check('떼고 다시 누르면 한 칸 더', r.speed == 1.1, f'{r.speed}')
+    r.update(0.0, 0.0)
+    r.update(0.0, 1.0)
+    check('속도 한도를 못 넘는다', r.speed == 1.1, f'{r.speed}')
+
+    r.update(1.0, 0.0)
+    r.update(0.0, 0.0)
+    check('오른쪽 = 최대 조향 증가, 속도 유지',
+          r.steer == 0.21 and r.speed == 1.1, f'{r.steer}, {r.speed}')
+    r.update(-1.0, 0.0)
+    check('왼쪽 = 최대 조향 감소', r.steer == 0.20, f'{r.steer}')
+
+    z = RallyLimits(0.05, 0.01, 0.05, 0.01, 3.0, 0.40)
+    z.update(-1.0, -1.0)
+    z.update(0.0, 0.0)
+    z.update(-1.0, -1.0)
+    check('0 밑으로 안 내려간다', z.speed == 0.0 and z.steer == 0.0)
+
+    big = RallyLimits(9.0, 9.0, 0.05, 0.01, 3.0, 0.40)
+    check('시작값도 한도로 잘린다', big.speed == 3.0 and big.steer == 0.40)
+
+    radius, ay = circle_estimate(1.0, 0.40, 0.33)
+    check('최대 조향 반경 = 축거/tan', abs(radius - 0.78) < 0.01, f'R={radius:.3f}')
+    check('횡가속도 = v²/R', abs(ay - 1.0 / radius) < 1e-9, f'{ay:.3f}')
+
+
 def test_packaging():
     """ROS 패키지 구성 — 빌드는 되는데 런치가 실패하는 경우를 잡는다.
 
@@ -316,6 +353,7 @@ def main():
     print('=' * 60)
 
     test_packaging()
+    test_rally()
     test_jacobian()
     test_stanley()
     test_angle()

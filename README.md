@@ -94,6 +94,7 @@ MLCS_SPEED=2.0 ./drive.sh joy  # 속도 상한 조절
 | 명령 | 하는 일 |
 |---|---|
 | `./drive.sh joy` | 브링업 + 조이스틱 수동 조종 |
+| `./drive.sh rally [태그]` | 원선회용 수동 조종 + 기록 — 십자키로 최대 속도·조향 조절 |
 | `./drive.sh bench` | 거치대 모드 — 속도 0 고정, 조향만 |
 | `./drive.sh mpc <csv>` | MPC 자율주행 + 조이스틱 (LB 로 전환) |
 | `./drive.sh stanley <csv>` | **Stanley 자율주행** (배관 검증용) |

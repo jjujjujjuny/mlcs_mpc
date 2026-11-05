@@ -13,6 +13,11 @@ joystick_teleop — 로지텍 F710 조이스틱 수동 조종.
     LB                수동 ↔ 자율 토글
     START(버튼 7)     비상 정지 — 자율 해제 + 속도 0
 
+  랠리 모드(./drive.sh rally)에서는 십자키로 상한을 조절한다 (rally_limits.py):
+
+    십자키 위/아래    최대 속도 +/-
+    십자키 오른/왼    최대 조향 +/-
+
 ■ ★ "안 보내는 것" 으로는 차가 서지 않는다
 
   이 노드에서 가장 중요한 부분은 워치독이다. 26-jetson 저장소는 2026-08-17
@@ -58,6 +63,8 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool
 from ackermann_msgs.msg import AckermannDriveStamped
 
+from mlcs_mpc.rally_limits import RallyLimits, circle_estimate
+
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
@@ -93,6 +100,19 @@ class JoystickTeleop(Node):
         self.declare_parameter('max_speed', 1.5)   # ★ 캘리브레이션 전 저속
         self.declare_parameter('max_steer', 0.40)
 
+        # ── 랠리 모드 (원선회용) ─────────────────────────────────────
+        # 켜면 max_speed / max_steer 대신 아래 값에서 시작해 십자키로 옮긴다.
+        self.declare_parameter('rally', False)
+        self.declare_parameter('axis_dpad_x', 6)      # 왼쪽 = +1
+        self.declare_parameter('axis_dpad_y', 7)      # 위 = +1
+        self.declare_parameter('rally_start_speed', 1.0)
+        self.declare_parameter('rally_start_steer', 0.20)
+        self.declare_parameter('rally_speed_step', 0.05)
+        self.declare_parameter('rally_steer_step', 0.01)
+        self.declare_parameter('rally_speed_limit', 3.0)
+        self.declare_parameter('rally_steer_limit', 0.40)
+        self.declare_parameter('wheelbase', 0.33)     # 반경·횡가속도 표시용
+
         # ── 안전 ────────────────────────────────────────────────────
         # 0.3s = joy 20~50Hz 기준 6~15 프레임. 무선 순간 끊김에는 안 걸리고
         # 진짜 단절에는 확실히 걸리는 값.
@@ -120,6 +140,18 @@ class JoystickTeleop(Node):
         self.max_steer = float(p('max_steer'))
         self.joy_timeout = float(p('joy_timeout'))
         self.debug = bool(p('debug'))
+
+        self.rally = None
+        if bool(p('rally')):
+            self.rally = RallyLimits(
+                p('rally_start_speed'), p('rally_start_steer'),
+                p('rally_speed_step'), p('rally_steer_step'),
+                p('rally_speed_limit'), p('rally_steer_limit'))
+            self.max_speed = self.rally.speed
+            self.max_steer = self.rally.steer
+        self.ax_dpad_x = int(p('axis_dpad_x'))
+        self.ax_dpad_y = int(p('axis_dpad_y'))
+        self.wheelbase = float(p('wheelbase'))
 
         # 트리거 양 끝점 — 아래 자동 캘리로 덮인다
         self.trig_neutral = 1.0 if self.inv_trigger else -1.0
@@ -176,6 +208,14 @@ class JoystickTeleop(Node):
             + f'  START(버튼{self.btn_estop})   → 비상 정지\n'
             f'  max_speed={self.max_speed} m/s  max_steer={self.max_steer} rad\n'
             '  ★ 트리거 자동 캘리 중 — RT 에서 손 떼고 가만히 두세요')
+        if self.rally:
+            self.get_logger().info(
+                '랠리 모드 — RT 끝까지 = 최대 속도, 스틱 끝까지 = 최대 조향\n'
+                f'  십자키 위/아래 → 최대 속도 ±{self.rally.speed_step} m/s'
+                f' (한도 {self.rally.speed_limit})\n'
+                f'  십자키 오른/왼 → 최대 조향 ±{self.rally.steer_step} rad'
+                f' (한도 {self.rally.steer_limit})\n  '
+                + self._rally_status())
 
     # ────────────────────────────────────────────────────────────────
     def _drive_cb(self, msg):
@@ -199,6 +239,30 @@ class JoystickTeleop(Node):
             '    ros2 topic hz /drive\n'
             '    ros2 node list | grep mpc',
             throttle_duration_sec=5.0)
+
+    # ── 랠리 모드 십자키 ────────────────────────────────────────────
+    def _rally_status(self):
+        radius, ay = circle_estimate(
+            self.max_speed, self.max_steer, self.wheelbase)
+        return (f'최대 속도 {self.max_speed:.2f} m/s, '
+                f'최대 조향 {self.max_steer:.2f} rad'
+                f' → 예상 반경 {radius:.2f} m, 횡가속도 {ay:.2f} m/s²')
+
+    def _rally_dpad(self, msg):
+        need = max(self.ax_dpad_x, self.ax_dpad_y)
+        if len(msg.axes) <= need:
+            # 조용히 안 먹으면 상한이 그대로인 줄 모르고 달리게 된다
+            self.get_logger().error(
+                f'/joy 축이 {len(msg.axes)}개뿐이라 십자키(축 {need})를 못 읽습니다. '
+                '조이스틱 Mode 스위치를 확인하세요: ros2 topic echo /joy',
+                throttle_duration_sec=5.0)
+            return
+        # /joy 는 왼쪽이 + 다. 오른쪽이 + 가 되게 뒤집어 넘긴다
+        if self.rally.update(-msg.axes[self.ax_dpad_x],
+                             msg.axes[self.ax_dpad_y]):
+            self.max_speed = self.rally.speed
+            self.max_steer = self.rally.steer
+            self.get_logger().info(self._rally_status())
 
     # ── 트리거 휴지값 자동 캘리 ──────────────────────────────────────
     def _calibrate_rest(self, raw):
@@ -288,6 +352,9 @@ class JoystickTeleop(Node):
                         '모드 전환 → [수동]  MPC 정지, 사람이 조종합니다')
                     self._publish(0.0, 0.0)
         self.prev_lb = lb
+
+        if self.rally:
+            self._rally_dpad(msg)
 
         # 자율 모드에서는 /teleop 을 안 낸다 → mux 가 /drive 채널을 통과시킨다
         if self.auto_mode:

@@ -5,6 +5,8 @@
 #  사용법:
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
 #                       --log        몰면서 HyperPM 학습 데이터도 쌓는다
+#     ./drive.sh rally [태그]        원선회용 수동 조종 — 십자키로 최대 속도·조향 조절
+#                                    (기록 포함, 태그 기본값 rally)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
@@ -310,11 +312,20 @@ joy_session () {
 
     local note=""
     [ "$LOGDATA" = 1 ] && note="  ${YLW}+ 학습 데이터 수집${RST}"
-    log "조이스틱 수동 조종  ${GRN}max_speed=${SPEED} m/s${RST}${note}"
+    if [ "$RALLY" = 1 ]; then
+        # 상한은 config/joystick.yaml 의 rally_* 에서 시작한다. MLCS_SPEED 는 안 쓴다
+        log "랠리 모드 수동 조종${note}"
+    else
+        log "조이스틱 수동 조종  ${GRN}max_speed=${SPEED} m/s${RST}${note}"
+    fi
     echo
     echo "    RT 당김        전진 (놓으면 즉시 정지)"
     echo "    RB + RT        후진"
     echo "    L스틱          조향"
+    if [ "$RALLY" = 1 ]; then
+        echo "    십자키 위/아래  최대 속도 +/- 0.05 m/s  (RT 끝까지 = 이 값)"
+        echo "    십자키 오른/왼  최대 조향 +/- 0.01 rad  (스틱 끝까지 = 이 값)"
+    fi
     echo "    START          비상 정지"
     echo
     warn "기동 직후 RT 에서 손을 떼세요 — 트리거 휴지값을 자동으로 잽니다"
@@ -325,6 +336,7 @@ joy_session () {
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false \
+        rally:="$([ "$RALLY" = 1 ] && echo true || echo false)" \
         debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
 
     [ "$LOGDATA" = 1 ] && { sleep 1; report_data_total; }
@@ -713,6 +725,7 @@ shift 2>/dev/null || true
 #     ./drive.sh stanley other.csv --bag
 BAG=0
 LOGDATA=0
+RALLY=0
 _ARGS=()
 for a in "$@"; do
     case "$a" in
@@ -731,6 +744,16 @@ joy)
     load_ros; require_ws_pkg mlcs_mpc
     arm_cleanup
     joy_session "${1:-}"
+    ;;
+
+rally)
+    # ./drive.sh rally          원선회. 십자키로 최대 속도·조향을 옮긴다
+    # ./drive.sh rally <태그>    파일명에 태그를 붙인다 (기본 rally)
+    load_ros; require_ws_pkg mlcs_mpc
+    arm_cleanup
+    RALLY=1
+    LOGDATA=1
+    joy_session "${1:-rally}"
     ;;
 
 bench)

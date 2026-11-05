@@ -65,6 +65,9 @@ def generate_launch_description():
             'allow_toggle', default_value='true',
             description='LB 로 수동↔자율 토글. 수동 전용이면 false'),
         DeclareLaunchArgument(
+            'rally', default_value='false',
+            description='랠리 모드 — 십자키로 최대 속도·조향 조절'),
+        DeclareLaunchArgument(
             'debug', default_value='false',
             description='트리거/조향 값을 0.5초마다 출력'),
     ]
@@ -93,6 +96,7 @@ def generate_launch_description():
         parameters=[joy_cfg, {
             'max_speed': LaunchConfiguration('max_speed'),
             'allow_toggle': LaunchConfiguration('allow_toggle'),
+            'rally': LaunchConfiguration('rally'),
             'debug': LaunchConfiguration('debug'),
         }])
 

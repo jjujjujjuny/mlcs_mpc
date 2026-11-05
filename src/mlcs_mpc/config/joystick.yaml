@@ -51,6 +51,19 @@
     max_speed: 1.5
     max_steer: 0.42       # 우측 기계 한계(servo_max 0.87 ≈ 0.429) 안쪽. 좌우 대칭
 
+    # ── 랠리 모드 (./drive.sh rally) ────────────────────────────────
+    # 켜면 max_speed / max_steer 대신 아래 값에서 시작해 십자키로 옮긴다.
+    # 한도는 실행 중 넘을 수 없다. 조향 한도는 실측 max_steer 0.40 이다.
+    axis_dpad_x: 6            # 왼쪽 = +1
+    axis_dpad_y: 7            # 위 = +1
+    rally_start_speed: 1.0
+    rally_start_steer: 0.20
+    rally_speed_step:  0.05
+    rally_steer_step:  0.01
+    rally_speed_limit: 3.0
+    rally_steer_limit: 0.40
+    wheelbase: 0.33           # 반경·횡가속도 표시용
+
     # ── 안전 ────────────────────────────────────────────────────────
     # /joy 가 이만큼 끊기면 속도 0 을 20Hz 로 강제 발행한다 (0 = 끔).
     # ★ 끄지 마세요. VESC 는 새 명령이 없으면 마지막 속도를 유지하므로,
