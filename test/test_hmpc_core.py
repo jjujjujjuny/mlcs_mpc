@@ -36,6 +36,25 @@ def test_frenet_sign_and_lap():
     assert abs(last - 3 * 2 * np.pi * R) < 0.2
 
 
+def test_mu_smooth_between_points():
+    # 점 간격 12.6 cm, R 2 m. 트랙 위를 접선 방향으로 달리면 mu 는 어디서나 0 이어야 한다.
+    t, R = circle()
+    for a in np.arange(0, 2 * np.pi, 0.013):
+        _, n, mu = t.frenet(R * math.cos(a), R * math.sin(a), a + np.pi / 2)
+        assert abs(mu) < 1e-3 and abs(n) < 2e-3, (a, n, mu)
+
+
+def test_closing_point_dropped():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, 'prep.csv')
+    a = np.linspace(0, 2 * np.pi, 21)
+    np.savetxt(p, np.c_[2 * a, 2 * np.cos(a), 2 * np.sin(a), a + np.pi / 2, 0 * a + 0.5, 0 * a + 0.5],
+               delimiter=',', header='s,x,y,heading,curvature,track_width', comments='')
+    t = Track(p)
+    assert t.n == 20 and abs(t.length - 4 * np.pi) < 1e-9
+    assert np.all(np.diff(np.r_[t.s, t.length]) > 0)
+
+
 def test_kappa_wraps():
     t, R = circle()
     assert abs(t.kappa_at(np.array([0.0, t.length * 5 + 1.0]))[1] - 1 / R) < 1e-9

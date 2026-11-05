@@ -15,6 +15,7 @@
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
 #     ./drive.sh hmpc                HyperMPC OCP 노드. 기본은 거치대용 (속도 항상 0)
+#                       --log [태그]  주행 데이터도 기록 (태그 기본값 hmpc)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
@@ -915,6 +916,14 @@ hmpc)
     ros2 launch mlcs_mpc hmpc.launch.py bench:="$HM_BENCH" >"$(run_log hmpc)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
+    if [ "$LOGDATA" = 1 ]; then
+        # 브릿지는 위 런치가 띄운다. 로거가 먼저 보면 하나 더 띄우므로 기다린다.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            mocap_bridge_running && break
+            sleep 0.5
+        done
+        start_data_logger "${1:-hmpc}"
+    fi
     echo
     warn "준비되면 다른 창에서:  ./drive.sh go   /  정지  ./drive.sh halt"
     log "로그: tail -f /tmp/mlcs_hmpc.log    워커: /tmp/mlcs_hmpc_worker.log"
@@ -924,6 +933,7 @@ hmpc)
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=1.0 allow_toggle:=true
+    [ "$LOGDATA" = 1 ] && { sleep 1; report_data_total; }
     ;;
 
 mpc)

@@ -21,10 +21,12 @@ class Track:
         d = np.genfromtxt(path, delimiter=',', names=True)
         self.s, self.x, self.y = d['s'], d['x'], d['y']
         self.heading, self.kappa = d['heading'], d['curvature']
-        n = len(self.s)
         close = math.hypot(self.x[0] - self.x[-1], self.y[0] - self.y[-1])
         self.length = float(self.s[-1] + close)
-        self.n = n
+        if close < 1e-6:    # 저자 전처리는 끝점을 시작점과 겹쳐 둔다
+            self.s, self.x, self.y = self.s[:-1], self.x[:-1], self.y[:-1]
+            self.heading, self.kappa = self.heading[:-1], self.kappa[:-1]
+        self.n = len(self.s)
         self.last = None
         self.s_cont = None
 
@@ -44,9 +46,17 @@ class Track:
 
     def frenet(self, x, y, yaw):
         """(s_연속, n, mu). n 은 왼쪽이 +. s 는 랩을 넘어도 끊기지 않는다."""
+        # ★ 점 간격이 20 cm 라 가장 가까운 점의 heading 을 그대로 쓰면 곡선에서 mu 가 점을
+        #   지날 때마다 약 0.2 rad 씩 튄다. 이웃 점과 보간한다.
         i = self._nearest(x, y)
-        h = self.heading[i]
         dx, dy = x - self.x[i], y - self.y[i]
+        h = self.heading[i]
+        along = math.cos(h) * dx + math.sin(h) * dy
+        j = (i + 1) % self.n if along >= 0 else (i - 1) % self.n
+        gap = abs(self.length - abs(self.s[j] - self.s[i])) if abs(j - i) > 1 \
+            else abs(self.s[j] - self.s[i])
+        frac = min(abs(along) / max(gap, 1e-6), 1.0)
+        h = h + frac * wrap(self.heading[j] - h)
         s = self.s[i] + math.cos(h) * dx + math.sin(h) * dy
         n = -math.sin(h) * dx + math.cos(h) * dy
         if self.s_cont is None:
