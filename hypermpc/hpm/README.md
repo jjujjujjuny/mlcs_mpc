@@ -6,7 +6,7 @@
 |---|---|
 | `train.sh` | 실행. 뒤 인자는 hydra 로 넘어간다 |
 | `run_main.py` | 저장소에 없는 `robot_model.acrobot` import 를 빈 모듈로 채워 `main.py` 실행 |
-| `mlcs_car_model.py` | 질량 3.097, I_z 0.084, lr 0.1498 |
+| `mlcs_car_model.py` | 질량 3.284, I_z 0.089, lr 0.1537, NaN 방지 타이어 식, `lr` 고정 상수 모델 |
 | `conf/` | 데이터 경로(`~/mlcs_data/hpm`), 모델, 신경망 설정 |
 
 ## 메인 PC 준비
@@ -63,6 +63,7 @@ hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
     dataset.train_dataset.stride=8 dataset.val_dataset.stride=8
 ```
 
+- `lr` 을 저울 실측값으로 묶으려면 `hmodel=const` 대신 `hmodel=const_fixed_lr` 를 쓴다.
 - 결과 파라미터는 로그의 `p_const` (에폭마다 출력). 순서는 `I_z, lr, Cd0, Cd2, Cd1, I_e, K_fi, b1, b0, R`, 앞 타이어 10개, 뒤 타이어 10개다.
 - 모델은 `~/mlcs_data/hpm/runs/data/models/<실행이름>/`.
 - `val_dataset.stride` 는 100 이하여야 한다 (`main.py` 가 `100 // stride` 로 슬라이스).
@@ -82,6 +83,9 @@ hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
 11-03 ~ 11-05 로그, 전진만 33분 (train 23.0 / val 6.6 / test 3.5). 오프셋 변경 전 로그는 조향과 yaw 를
 보정했고, 전 로그에 조향 맵을 적용했다 (`tools/prep_hpm_dataset.py`). 보정 후 `|ay|` < 2 에서 좌우 모두
 실제/모델 곡률 약 1.00~1.02. 원선회와 계단이 많아 11-04 데이터와 분포가 다르다.
+
+★ 위 데이터는 `lr` 0.1498, 마찰 0.43 으로 만들었다. 지금 기본값은 0.1537, 0.41 이다 (2026-11-05 재측정).
+`./drive.sh hpmdata` 로 다시 만들어야 값이 맞는다.
 
 ## 아직 안 정한 것
 

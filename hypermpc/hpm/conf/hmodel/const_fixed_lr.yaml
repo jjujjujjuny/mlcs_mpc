@@ -1,0 +1,17 @@
+# @package _global_
+# 저자 hmodel/const 와 같고, lr 만 mlcs_car_model.LR 로 묶는다.
+hmodel:
+
+  time_series_laten_size: 8
+
+  model:
+    _partial_: True
+    _target_: "mlcs_car_model.ConstParamFixedLr"
+    device: ${hpm.device}
+
+  interpoler:
+    _target_: "hyper_prediction_models.const_param_interpolation.ConstParamInterpolation"
+    param_ctrl_point: 1
+    prediction_horizon: ${dataset.prediction_horizon}
+    integration_method: ${hpm.integration_method}
+    device: ${hpm.device}
