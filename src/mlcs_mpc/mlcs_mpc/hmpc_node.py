@@ -133,7 +133,7 @@ class HmpcNode(Node):
         d('track_csv', 'lab_map/data/tracks/s_track/prep_s_track.csv')
         d('N', 80)
         d('dt', 0.033)
-        d('rk_steps', 3)
+        d('rk_steps', 4)
         d('steering_tau', 0.13)
         d('wheel_speed_tau', 0.0461)
         d('control_rate', 30.0)

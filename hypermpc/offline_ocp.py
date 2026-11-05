@@ -42,8 +42,9 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
   슬립률 분모가 v_x 라 타이어 강성이 v_x 에 반비례해 커진다. 기본 계수·마찰 0.41 이면
   v_x 방향 고유값이 약 157/v_x 1/s 로, dt 0.033 에서 RK4 안정 한계(2.78)를 v_x 약 1.9 m/s
   아래에서 넘는다. 실제로 RK4 1회면 0.7 m/s 이하에서 QP 실패가 대부분이고 0.25 m/s 에서는
-  solve 가 돌아오지 않았다. 구간당 3회면 0.25~1 m/s 모두 정상이었다 (2026-11-05).
-  저자 계수가 바뀌면 이 숫자도 바뀌니 동정값으로 다시 볼 것.
+  solve 가 돌아오지 않았다. 구간당 3회면 0.25~1 m/s 모두 정상이었지만, 동정값은 뒤 타이어
+  Bx 가 커서 3회로는 0.25 m/s 출발에서 QP 실패가 대부분이고 4회면 정상이다 (2026-11-05).
+  계수가 바뀌면 다시 볼 것.
 
 ■ 원본과의 관계
 
@@ -74,6 +75,7 @@ import time
 
 import numpy as np
 import casadi as cs
+import yaml
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 
 
@@ -81,7 +83,7 @@ from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 SLIP_EPS = 1e-12    # hpm/mlcs_car_model.py 의 SafePacejkaTireModel 과 같은 값
 MASS = 3.284        # 저울 실측 2026-11-05 (라이다 포함)
 AUTHOR_MASS = 5.1   # casadi_car_model_naive.py 하드코딩
-RK_STEPS = 3        # 구간당 RK4 횟수. 머리말 참고
+RK_STEPS = 4        # 구간당 RK4 횟수. 머리말 참고
 
 
 class SafeSqrtCasadi:
@@ -327,9 +329,15 @@ def restart(solver, N, x0):
         solver.set(k, 'u', np.array([x0[7], 0.0]))
 
 
-def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps):
+def load_params(path):
+    """config/hmpc.yaml 의 차량·타이어 값 → p[30]."""
+    with open(path, encoding='utf8') as f:
+        d = yaml.safe_load(f)['/**']['ros__parameters']
+    return np.array(d['vehicle_params'] + d['tire_front'] + d['tire_rear'], dtype=float)
+
+
+def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params):
     """폐루프로 laps 번 푼다."""
-    params = default_params()
     N = args.N
     restart(solver, N, x0)
     x = x0.copy()
@@ -383,6 +391,9 @@ def main():
     ap.add_argument('--no-guard', action='store_true', help='0/0 방어를 끈다')
     ap.add_argument('--rk-steps', type=int, default=RK_STEPS, help='구간당 RK4 횟수')
     ap.add_argument('--v-max', type=float, default=None, help='입력 속도 상한. 없으면 7 m/s')
+    ap.add_argument('--params-yaml', default=None,
+                    help='차량·타이어 값 파일 (config/hmpc.yaml). 없으면 저자 기본값')
+    ap.add_argument('--start-v', type=float, default=1.0, help='초기 v_x [m/s]')
     ap.add_argument('--max-steer', type=float, default=0.378, help='--v-max 와 함께 쓰는 실제 조향 상한')
     ap.add_argument('--steering-tau', type=float, default=0.0436734693877551)
     ap.add_argument('--wheel-speed-tau', type=float, default=0.046122448979591835)
@@ -419,9 +430,11 @@ def main():
             solver.constraints_set(k, 'lbu', np.array([cfg['min_ws_ref'], -args.max_steer]))
             solver.constraints_set(k, 'ubu', np.array([args.v_max, args.max_steer]))
 
+    params = load_params(args.params_yaml) if args.params_yaml else default_params()
     kappa_track = None
     for name in args.scenario:
         x0 = initial_state(cfg)
+        x0[3], x0[7] = args.start_v, args.start_v + 0.02
         kappa = lambda q: 0.0  # noqa: E731
         if name == 'curve':
             kappa = lambda q: 0.575  # noqa: E731
@@ -430,6 +443,7 @@ def main():
             kappa = kappa_track
         elif name == 'zero':
             x0 = initial_state(cfg, slip=0.0)
+            x0[3], x0[7] = args.start_v, args.start_v
         elif name == 'zero-guess':
             # 초기 추측을 안 깐 예전 방식. 내부 스테이지가 전부 0 이라 역시 0/0 이다.
             x0 = initial_state(cfg, slip=0.0)
@@ -437,11 +451,11 @@ def main():
             solver.set(0, 'lbx', x0)
             solver.set(0, 'ubx', x0)
             for k in range(args.N + 1):
-                solver.set(k, 'p', np.concatenate([default_params(), [0.0]]))
+                solver.set(k, 'p', np.concatenate([params, [0.0]]))
             st = solver.solve()
             print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
             continue
-        run_scenario(solver, args, cfg, name, kappa, x0, args.laps)
+        run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params)
     return 0
 
 
