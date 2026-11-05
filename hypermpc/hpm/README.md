@@ -29,6 +29,25 @@ hypermpc/hpm/train.sh hpm.device=cuda                     # 저자 설정 2000 �
 
 결과는 `~/mlcs_data/hpm/runs/` 아래 `data/models/` 와 `outputs/`.
 
+### 현재 메인 PC (Ubuntu 20.04, RTX 3080, 드라이버 470)
+
+위 명령 그대로는 안 된다. 2026-11-04 에 이렇게 1 에폭을 끝까지 돌렸다.
+
+```bash
+# python3-venv 가 없으면 conda 로 같은 경로에 만든다
+conda create -y -p ~/hpm-venv python=3.10 pip
+# 드라이버 470 은 CUDA 11.x 까지라 cu118 빌드를 쓴다 (torch 2.7.1+cu118 확인)
+~/hpm-venv/bin/pip install --index-url https://download.pytorch.org/whl/cu118 torch
+~/hpm-venv/bin/pip install "numpy<2" pandas scipy matplotlib hydra-core \
+    hydra-joblib-launcher wandb torch-interpol tqdm
+# compile 을 켜면 Triton Error: device kernel image is invalid
+hypermpc/hpm/train.sh hpm.train.epoch=1 hpm.device=cuda hpm.compile=false
+```
+
+- 1 에폭 182 s. 저자 설정 2000 에폭이면 약 4.2 일이다.
+- 중간 저장은 `hpm.wandb.send_interval` 마다다 (기본 200). 짧게 돌릴 때는 줄인다.
+- 미래 입력 경로는 **에폭 1부터** 켜진다. 1 에폭 실행으로는 이 경로를 검증하지 못한다.
+
 ★ `train.sh` 의 `WANDB_MODE=disabled` 를 빼지 말 것. 저자 `main.py` 에 저자 계정
 API 키가 들어 있어서, 켜면 우리 로그와 모델이 그 계정으로 올라간다.
 
