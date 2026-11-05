@@ -19,7 +19,7 @@ hmodel:
       device: ${hpm.device}
       channel_divider: [6.0, 0.55]
     
-    pred_noise_sigma: 0.05
+    pred_noise_sigma: 0.5    # 저자 "8 ctrl points 0.5 sigma l 0.2 THE USED ONE" (config_car.yaml)
 
     # default params <- partial
 
@@ -30,7 +30,7 @@ hmodel:
 
     m1_feature_size: 64
 
-    param_ctrl_point: 16
+    param_ctrl_point: 8
 
     max_param_scaler: 0.5
     

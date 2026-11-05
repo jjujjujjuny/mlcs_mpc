@@ -23,9 +23,12 @@ tar -xzf hypermpc/hpm/data/hpm_data_20261105.tar.gz -C ~/mlcs_data/hpm
 ## 실행
 
 ```bash
-hypermpc/hpm/train.sh hpm.train.epoch=1 hpm.device=cuda   # 먼저 1 에폭
-hypermpc/hpm/train.sh hpm.device=cuda                     # 저자 설정 2000 에폭
+hypermpc/hpm/train.sh hpm.train.delta_p_L2_loss=0.2 hpm.train.epoch=1 hpm.device=cuda   # 먼저 1 에폭
+hypermpc/hpm/train.sh hpm.train.delta_p_L2_loss=0.2 hpm.device=cuda                     # 2000 에폭
 ```
+
+신경망 설정은 저자 `conf_mpc/config_car.yaml:60` 의 `8 ctrl points 0.5 sigma l 0.2 THE USED ONE` 에 맞췄다.
+제어점 8, `pred_noise_sigma` 0.5 는 `conf/hmodel/mlcs_hyper.yaml` 에 있고 `delta_p_L2_loss` 0.2 는 위 인자로 준다.
 
 결과는 `~/mlcs_data/hpm/runs/` 아래 `data/models/` 와 `outputs/`.
 
@@ -41,7 +44,7 @@ conda create -y -p ~/hpm-venv python=3.10 pip
 ~/hpm-venv/bin/pip install "numpy<2" pandas scipy matplotlib hydra-core \
     hydra-joblib-launcher wandb torch-interpol tqdm
 # compile 을 켜면 Triton Error: device kernel image is invalid
-hypermpc/hpm/train.sh hpm.train.epoch=1 hpm.device=cuda hpm.compile=false
+hypermpc/hpm/train.sh hpm.train.delta_p_L2_loss=0.2 hpm.train.epoch=1 hpm.device=cuda hpm.compile=false
 ```
 
 - 1 에폭 182 s. 저자 설정 2000 에폭이면 약 4.2 일이다.
@@ -68,6 +71,8 @@ hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
 - 모델은 `~/mlcs_data/hpm/runs/data/models/<실행이름>/`.
 - `val_dataset.stride` 는 100 이하여야 한다 (`main.py` 가 `100 // stride` 로 슬라이스).
 - 젯슨 CPU 에서 배치 32, 2 에폭으로 `main.py` 끝까지 정상 종료를 확인했다. 전체 설정은 아직 안 돌렸다.
+- 이 실행은 HyperPM 기본값을 얻는 용도다. `stride` 와 학습률을 바꿨으니 논문의 `const_l` 기준선으로는 쓰지 말고, 기준선은 HyperPM 과 같은 조건으로 다시 돌린다.
+- 결과를 HyperPM 에 넘길 때 `pretrain_init_model_path` 는 쓰지 않는다 (wandb 아티팩트가 필요하고 `free_params` 를 안 넘긴다). `mlcs_car_model.py` 기본값에 직접 넣는다.
 
 ## 데이터 만들기 (젯슨)
 
@@ -80,12 +85,9 @@ hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
 
 ## 데이터 (hpm_data_20261105)
 
-11-03 ~ 11-05 로그, 전진만 33분 (train 23.0 / val 6.6 / test 3.5). 오프셋 변경 전 로그는 조향과 yaw 를
+11-03 ~ 11-05 로그, 전진만 33분 (train 23.0 / val 6.6 / test 3.5). `lr` 0.1537, 마찰 0.41 (라이다 포함 재측정 값). 같은 이름의 이전 묶음(`lr` 0.1498, 마찰 0.43)을 대체했고, 바뀐 것은 `v_y` 가 `(0.1537-0.1498)*r` 만큼과 `friction` 뿐이다. 오프셋 변경 전 로그는 조향과 yaw 를
 보정했고, 전 로그에 조향 맵을 적용했다 (`tools/prep_hpm_dataset.py`). 보정 후 `|ay|` < 2 에서 좌우 모두
 실제/모델 곡률 약 1.00~1.02. 원선회와 계단이 많아 11-04 데이터와 분포가 다르다.
-
-★ 위 데이터는 `lr` 0.1498, 마찰 0.43 으로 만들었다. 지금 기본값은 0.1537, 0.41 이다 (2026-11-05 재측정).
-`./drive.sh hpmdata` 로 다시 만들어야 값이 맞는다.
 
 ## 아직 안 정한 것
 
