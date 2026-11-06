@@ -22,6 +22,10 @@ hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 아직 상수 
   솔버 준비 안 됨, 솔버 고장. 비정상 해(status≠0, NaN)는 내보내지 않고,
   max_bad_solves 번 이어지면 래치한다.
 
+  달리던 중 mocap 이 불량이면 복구돼도 **혼자 다시 출발하지 않는다.** 그동안 차가 어디로
+  갔는지 모르고, 복구 직후 pose·속도도 믿기 어렵다. LB 를 두 번 누르거나 (수동 → 자율)
+  /mpc/enabled 를 false → true 로 다시 줘야 한다.
+
 ■ 실제 조향과 서보 명령
 
   모델의 delta 는 실제 조향이다. 원선회로 잰 맵으로 명령으로 바꿔 내보낸다
@@ -137,7 +141,8 @@ class HmpcNode(Node):
         d('steering_tau', 0.13)
         d('wheel_speed_tau', 0.0461)
         d('control_rate', 30.0)
-        d('solve_timeout', 0.1)
+        d('solve_timeout', 0.15)
+        d('restart_timeout', 0.5)
         d('max_bad_solves', 3)
         d('v_max', 0.7)
         d('max_steer', 0.40)
@@ -176,6 +181,9 @@ class HmpcNode(Node):
         self.state_timeout = float(gp('state_timeout'))
         self.vesc_timeout = float(gp('vesc_timeout'))
         self.solve_timeout = float(gp('solve_timeout'))
+        # 초기 추측을 다시 까는 첫 요청은 평소보다 오래 걸린다. 이때 차는 서 있다.
+        self.restart_timeout = float(gp('restart_timeout'))
+        self.limit = self.solve_timeout
         self.max_bad = int(gp('max_bad_solves'))
         self.bench = bool(gp('bench'))
         self.require_enable = bool(gp('require_enable'))
@@ -199,6 +207,7 @@ class HmpcNode(Node):
         self.enabled = not self.require_enable
         self.manual = False
         self.fault = None       # 래치된 솔버 고장
+        self.mocap_lost = False # 달리던 중 mocap 불량. 사람이 다시 넘겨야 풀린다
         self.bad = 0
         self.rid = 0.0
         self.pending_t = None   # 답을 기다리는 요청 시각
@@ -241,7 +250,10 @@ class HmpcNode(Node):
         self.mocap_valid = bool(m.data)
 
     def _manual_cb(self, m):
-        self.manual = bool(m.data)
+        with self.lock:
+            if m.data and not self.manual:
+                self.mocap_lost = False
+            self.manual = bool(m.data)
 
     def _vesc_cb(self, m):
         self.ws = m.state.speed / self.erpm_gain
@@ -250,6 +262,8 @@ class HmpcNode(Node):
     def _enable_cb(self, m):
         with self.lock:
             was, self.enabled = self.enabled, bool(m.data)
+            if self.enabled and not was:
+                self.mocap_lost = False
             if was and not self.enabled and self.fault:
                 self.get_logger().warn('고장 래치 해제 대기 — 다시 true 를 주면 재개합니다')
             if self.enabled and not was and self.fault:
@@ -314,15 +328,23 @@ class HmpcNode(Node):
             return '솔버 프로세스 없음'
         if self.pose is None:
             return '상태 수신 전'
-        if not self.mocap_valid:
-            return 'mocap 무효'
         now = self._now()
-        if now - self.t_state > self.state_timeout:
-            return f'상태 오래됨 ({now - self.t_state:.2f}s)'
+        mocap = None
+        if not self.mocap_valid:
+            mocap = 'mocap 무효'
+        elif now - self.t_state > self.state_timeout:
+            mocap = '상태 오래됨'
+        elif not all(math.isfinite(v) for v in self.pose + self.twist):
+            mocap = '상태값 비정상'
+        if mocap is not None:
+            # 끊긴 동안 LB 를 눌러 자율로 넘겨도 풀리지 않는다. 복구를 보고 다시 넘겨야 한다.
+            if self.enabled and not self.manual:
+                self.mocap_lost = True
+            return mocap
+        if self.mocap_lost:
+            return 'mocap 불량 뒤 대기 — LB 두 번 또는 go 다시'
         if self.t_vesc is None or now - self.t_vesc > self.vesc_timeout:
             return 'VESC 끊김'
-        if not all(math.isfinite(v) for v in self.pose + self.twist):
-            return '상태값 비정상'
         if self.twist[0] < self.reverse_limit:
             return '후진 중'
         if self.manual:
@@ -335,7 +357,7 @@ class HmpcNode(Node):
     def _control_loop(self):
         with self.lock:
             now = self._now()
-            if self.pending_t is not None and now - self.pending_t > self.solve_timeout:
+            if self.pending_t is not None and now - self.pending_t > self.limit:
                 self._trip(f'{(now - self.pending_t) * 1000:.0f} ms 동안 답이 없음')
             if self.worker is not None and self.worker.ready and not self.worker.alive \
                     and not self.fault:
@@ -369,6 +391,7 @@ class HmpcNode(Node):
             kappa = self.track.kappa_at(s)
             self.rid += 1.0
             cmd = 0.0 if self.running else 1.0
+            self.limit = self.solve_timeout if self.running else self.restart_timeout
             try:
                 ok = self.worker.send(self.rid, cmd, x, kappa)
             except OSError:
@@ -395,6 +418,9 @@ def main(args=None):
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RuntimeError as e:
+        # 종료 신호가 메시지 변환 중에 오면 이렇게 올라온다. 어느 쪽이든 아래에서 세운다.
+        node.get_logger().warn(f'spin 종료: {e}')
     finally:
         try:
             node._publish(0.0, 0.0)

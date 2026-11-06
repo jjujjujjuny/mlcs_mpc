@@ -221,7 +221,30 @@ def test_gates():
         t = time.monotonic()
         on()
         car.spin(1.5)
-        r &= check(f'{name}: 복귀', any(e[1] > 0 for e in car.since(t)))
+        moved = any(e[1] > 0 for e in car.since(t))
+        if name in ('mocap 무효', '상태 끊김', '상태 NaN'):
+            # 달리던 중 mocap 불량은 혼자 다시 출발하지 않는다.
+            r &= check(f'{name}: 복구돼도 혼자 출발 안 함', not moved)
+            if name == 'mocap 무효':
+                # 끊긴 동안 LB 를 두 번 눌러도 복구 후 혼자 출발하면 안 된다.
+                off()
+                car.spin(0.3)
+                car.ma.publish(Bool(data=True))
+                car.spin(0.2)
+                car.ma.publish(Bool(data=False))
+                car.spin(0.3)
+                t = time.monotonic()
+                on()
+                car.spin(1.5)
+                r &= check('끊긴 동안 LB 두 번: 복구돼도 출발 안 함',
+                           not any(e[1] > 0 for e in car.since(t)))
+            car.ma.publish(Bool(data=True))
+            car.spin(0.2)
+            car.ma.publish(Bool(data=False))
+            t = time.monotonic()
+            car.spin(1.5)
+            moved = any(e[1] > 0 for e in car.since(t))
+        r &= check(f'{name}: 복귀', moved)
     n.close()
     return r
 
@@ -321,12 +344,58 @@ def test_bench():
     return r
 
 
+def test_bridge_frozen_pose():
+    # 진짜 mocap_bridge 에 가짜 /car/pose. 마커를 가렸을 때처럼 pose 만 멈춘다.
+    from geometry_msgs.msg import PoseStamped
+    from rclpy.qos import ReliabilityPolicy
+    exe = EXE.replace('hmpc_node', 'mocap_bridge')
+    log = open('/tmp/mlcs_hmpc_test_node.log', 'ab')
+    proc = subprocess.Popen([exe, '--ros-args', '--params-file',
+                             os.path.join(ROOT, 'src/mlcs_mpc/config/mocap.yaml')],
+                            stdout=log, stderr=log, start_new_session=True)
+    n = rclpy.create_node('fake_natnet')
+    qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+    pub = n.create_publisher(PoseStamped, '/car/pose', qos)
+    valid = []
+    n.create_subscription(Bool, '/mocap/valid', lambda m: valid.append((time.monotonic(), m.data)), 50)
+    rng = np.random.default_rng(0)
+
+    def feed(secs, frozen=None):
+        end = time.monotonic() + secs
+        while time.monotonic() < end:
+            m = PoseStamped()
+            m.header.stamp = n.get_clock().now().to_msg()
+            m.pose.position.x = frozen if frozen is not None else float(rng.normal(0, 2e-5))
+            m.pose.orientation.w = 1.0
+            pub.publish(m)
+            rclpy.spin_once(n, timeout_sec=0.01)
+    try:
+        feed(5.0)
+        r = check('정상 pose: valid', bool(valid) and valid[-1][1], f'{len(valid)}개')
+        t = time.monotonic()
+        feed(1.0, frozen=0.0)
+        first = next((e[0] for e in valid if e[0] >= t and not e[1]), None)
+        r &= check('멈춘 pose: 무효', first is not None, f'{(first - t) * 1000:.0f} ms' if first else '')
+        r &= check('멈춘 동안 계속 무효', not any(e[1] for e in valid if first and e[0] > first))
+        t = time.monotonic()
+        feed(1.0)
+        back = next((e[0] for e in valid if e[0] >= t and e[1]), None)
+        r &= check('복구는 0.3 s 뒤', back is not None and back - t > 0.25,
+                   f'{(back - t) * 1000:.0f} ms' if back else '')
+    finally:
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.wait(timeout=5)
+        n.destroy_node()
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--only')
     a = ap.parse_args()
     rclpy.init()
-    tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench]
+    tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench,
+             test_bridge_frozen_pose]
     bad = []
     for f in tests:
         if a.only and a.only != f.__name__:

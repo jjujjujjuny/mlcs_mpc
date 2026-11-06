@@ -28,6 +28,10 @@ mocap_bridge — OptiTrack Motive(NatNet) pose → 컨트롤러용 상태 추정
   로 예측하고 측정으로 보정하므로, 같은 노이즈 억제를 훨씬 적은 지연으로
   얻는다.
 
+■ ★ 멈춘 pose, 튄 pose 도 끊김으로 본다 (mocap_health.py)
+
+  마커를 가리면 메시지는 계속 오는데 pose 만 멈춘다. timeout 으로는 안 잡힌다.
+
 ■ ★ mocap 끊김 = 즉시 정지
 
   이 구성에서 mocap 이 끊기면 차는 자기 위치를 **전혀** 모른다 (라이다도
@@ -49,6 +53,8 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TransformS
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
+
+from mlcs_mpc.mocap_health import PoseHealth
 
 
 def yaw_from_quat(q):
@@ -115,6 +121,10 @@ class MocapBridge(Node):
         # ── 안전 ──────────────────────────────────────────────────────
         # 100Hz 스트림 기준. 0.2초면 20프레임을 연속으로 놓친 것이다.
         self.declare_parameter('timeout', 0.2)
+        self.declare_parameter('freeze_frames', 5)
+        self.declare_parameter('max_step_speed', 6.0)
+        self.declare_parameter('max_step_yaw_rate', 15.0)
+        self.declare_parameter('recover_time', 0.3)
 
         # ── 필터 ──────────────────────────────────────────────────────
         self.declare_parameter('q_pos', 0.01)
@@ -140,6 +150,13 @@ class MocapBridge(Node):
         self.kf_x = PoseKF(q_pos, q_vel, r_meas)
         self.kf_y = PoseKF(q_pos, q_vel, r_meas)
         self.kf_yaw = PoseKF(q_pos, q_vel, r_meas)
+
+        self.health = PoseHealth(
+            int(self.get_parameter('freeze_frames').value),
+            float(self.get_parameter('max_step_speed').value),
+            float(self.get_parameter('max_step_yaw_rate').value),
+            float(self.get_parameter('recover_time').value))
+        self.bad_pose = False
 
         self.last_stamp = None
         self.last_rx = None
@@ -198,6 +215,19 @@ class MocapBridge(Node):
         raw_y = msg.pose.position.y
         raw_yaw = yaw_from_quat(msg.pose.orientation)
 
+        q = msg.pose.orientation
+        good, why = self.health.update(stamp, raw_x, raw_y, msg.pose.position.z,
+                                       q.x, q.y, q.z, q.w)
+        if why:
+            self.get_logger().error(f'✗ mocap 불량 ({why}) — 컨트롤러 정지 신호 발행')
+        if self.bad_pose and good:
+            # 나쁜 프레임을 삼킨 필터는 속도가 튀어 있다. 처음부터 다시 잡는다.
+            self.get_logger().info('✓ mocap 복구')
+            self.kf_x.init = self.kf_y.init = self.kf_yaw.init = False
+            self.prev_yaw_raw = None
+            dt = 0.01
+        self.bad_pose = not good
+
         # 강체 원점 → 차량 기준점 보정
         yaw = raw_yaw + self.yaw_off
         px = raw_x + math.cos(yaw) * self.off_x - math.sin(yaw) * self.off_y
@@ -228,7 +258,7 @@ class MocapBridge(Node):
 
         self._publish(msg.header.stamp, fx, fy, fyaw,
                       speed, lateral, yaw_rate)
-        self.valid_pub.publish(Bool(data=True))
+        self.valid_pub.publish(Bool(data=good))
         self.warned = False
 
     # ────────────────────────────────────────────────────────────────
