@@ -143,6 +143,7 @@ class HmpcNode(Node):
         d('control_rate', 30.0)
         d('solve_timeout', 0.15)
         d('restart_timeout', 0.5)
+        d('slow_speed', 0.4)
         d('max_bad_solves', 3)
         d('v_max', 0.7)
         d('max_steer', 0.40)
@@ -183,6 +184,7 @@ class HmpcNode(Node):
         self.solve_timeout = float(gp('solve_timeout'))
         # 초기 추측을 다시 까는 첫 요청은 평소보다 오래 걸린다. 이때 차는 서 있다.
         self.restart_timeout = float(gp('restart_timeout'))
+        self.slow_speed = float(gp('slow_speed'))
         self.limit = self.solve_timeout
         self.max_bad = int(gp('max_bad_solves'))
         self.bench = bool(gp('bench'))
@@ -391,7 +393,9 @@ class HmpcNode(Node):
             kappa = self.track.kappa_at(s)
             self.rid += 1.0
             cmd = 0.0 if self.running else 1.0
-            self.limit = self.solve_timeout if self.running else self.restart_timeout
+            # 저속에서는 풀이가 110 ms 까지 간다 (실측). 느리니 더 기다려도 멀리 못 간다.
+            slow = self.twist[0] < self.slow_speed
+            self.limit = self.restart_timeout if not self.running or slow else self.solve_timeout
             try:
                 ok = self.worker.send(self.rid, cmd, x, kappa)
             except OSError:

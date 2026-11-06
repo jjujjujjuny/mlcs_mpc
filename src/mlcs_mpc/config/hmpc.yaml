@@ -51,7 +51,9 @@
     # 평상시 최대 약 26 ms, 코어를 다 채우면 약 82 ms 까지 봤다 (2026-11-05).
     # 복귀 직후 과도 구간에서 풀이가 70 ms 까지 갔다 (N=80, RK4 4회). 판정 주기 33 ms 를 더해 본다.
     solve_timeout: 0.15
-    restart_timeout: 0.5   # 초기 추측을 다시 까는 첫 풀이. 차가 서 있을 때만 일어난다
+    # 재시작 첫 풀이와 slow_speed 아래에서의 제한. 출발 직후 풀이가 최대 약 110 ms 까지 갔다 (실측).
+    restart_timeout: 0.5
+    slow_speed: 0.4
     max_bad_solves: 3
     state_timeout: 0.2
     vesc_timeout: 0.3
