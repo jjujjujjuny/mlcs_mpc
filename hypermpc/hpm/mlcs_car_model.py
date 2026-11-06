@@ -99,3 +99,17 @@ class MlcsSingleTrack(PacejkaTiresSingleTrack):
         # main.py 가 요구한다. 저자 차 모델에는 없다. None 을 넘기면 2p 모델이
         # 파라미터 전체를 신경망 출력으로 덮어쓰므로 빈 텐서를 준다.
         return torch.tensor([], dtype=torch.long)
+
+
+class RearSlipFixedTireModel(SafePacejkaTireModel):
+    """뒷바퀴 슬립각의 lf 를 lr 로 고친 모델 (저자 FIXME). 저자 식과 비교하는 시험용."""
+
+    @staticmethod
+    def slip_angle_rear_func(wx, wp):
+        return torch.atan((wx.v_y - wp.lr * wx.r) / (wx.v_x + wp.eps))
+
+
+class MlcsSingleTrackRearFix(MlcsSingleTrack):
+    def __init__(self, init_params=None) -> None:
+        super().__init__(init_params=init_params)
+        self.tire_model = RearSlipFixedTireModel()

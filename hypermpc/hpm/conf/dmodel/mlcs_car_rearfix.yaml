@@ -1,0 +1,9 @@
+# @package _global_
+# mlcs_car 와 같고, 뒷바퀴 슬립각의 lf 만 lr 로 고쳤다 (비교 시험용).
+dmodel:
+
+  pretrain_init_model_path: ""
+
+  model:
+    _partial_: True
+    _target_: "mlcs_car_model.MlcsSingleTrackRearFix"
