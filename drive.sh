@@ -31,6 +31,9 @@
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
 #     ./drive.sh mocapcal [spin|straight]  마커 오프셋 측정
 #     ./drive.sh rviz                RViz 시각화 (젯슨에서 — NoMachine 으로 본다)
+#     ./drive.sh lidar [--norviz]    라이다만 띄워서 확인 (RViz + 주기, 차 브링업 없음)
+#     ./drive.sh mapping             라이다 맵핑 (Cartographer + RViz, 조이스틱으로 몬다)
+#     ./drive.sh savemap [이름]      맵 저장 — mapping 중 다른 터미널에서 (maps/<이름>.*)
 #     ./drive.sh natnet              mocap 드라이버만 (보통 자동으로 뜬다)
 #     ./drive.sh go                  ★ 출발 — /mpc/enabled=true
 #     ./drive.sh halt                ★ 정지 — /mpc/enabled=false (노드는 유지)
@@ -687,6 +690,8 @@ start_bringup () {
     #
     #   joy 를 Ctrl+C 로 내려도 ros2 launch 만 죽고 자식 노드는 고아로
     #   남아서, 겉보기엔 아무것도 안 도는데 실제로는 살아 있었다.
+    # 이 실행이 방금 띄운 것이면 조용히 넘어간다 (mapping → joy_session 이 두 번 부른다)
+    [ -n "${BRINGUP_PID:-}" ] && return
     if bringup_running; then
         log "브링업이 이미 떠 있습니다 — 그대로 씁니다"
         warn "  다른 창의 drive.sh 를 아직 안 내렸다면 먼저 내리세요."
@@ -711,6 +716,38 @@ start_bringup () {
     PIDS="$PIDS $!"
     sleep 3
     BRINGUP_PGID="$(ps -o pgid= -p "$BRINGUP_PID" 2>/dev/null | tr -d ' ')"
+}
+
+# ── 라이다 (Hokuyo UST-10LX) ─────────────────────────────────────────────────
+#   bringup_launch.py 에서는 주석 처리돼 있다 (mocap 운용 때문). 필요한 모드만 띄운다.
+#   이미 떠 있으면 그대로 쓴다 — 그 경우 PIDS 에 안 넣으므로 이 창이 내려도 안 죽는다.
+#   네트워크: 유선 enP8p1s0 에 nmcli 프로파일 'hokuyo' (192.168.0.15/24)
+lidar_running () {
+    pgrep -f '/lib/urg_node/urg_node_driver' >/dev/null 2>&1
+}
+
+start_lidar () {
+    if lidar_running; then
+        log "라이다 드라이버가 이미 떠 있습니다 — 그대로 씁니다"
+    else
+        log "라이다 (Hokuyo UST-10LX, 192.168.0.10)..."
+        local yaml
+        yaml="$(ros2 pkg prefix f1tenth_stack)/share/f1tenth_stack/config/sensors.yaml"
+        ros2 run urg_node urg_node_driver --ros-args --params-file "$yaml" \
+            >"$(run_log lidar)" 2>&1 &
+        PIDS="$PIDS $!"
+    fi
+    local ok=0 _
+    for _ in 1 2 3; do
+        timeout 5 ros2 topic echo /scan --once >/dev/null 2>&1 && { ok=1; break; }
+    done
+    if [ "$ok" != 1 ]; then
+        err "/scan 이 오지 않습니다. 확인:"
+        err "  ping 192.168.0.10            (안 되면  nmcli con up hokuyo)"
+        err "  tail -f /tmp/mlcs_lidar.log"
+        exit 1
+    fi
+    log "  ✓ /scan 확인"
 }
 
 require_ws_pkg () {
@@ -1345,6 +1382,153 @@ trackinfo)
     ros2 run mlcs_mpc track_info --ros-args "${TI_ARGS[@]}"
     ;;
 
+lidar)
+    # ./drive.sh lidar          라이다만 띄워서 확인 — 차 브링업 없음(모터 안 돈다)
+    # ./drive.sh lidar --norviz  RViz 없이 정보·주기만
+    #   RViz 는 Fixed Frame=laser 라 TF 없이도 보인다. Ctrl+C 로 종료.
+    load_ros
+    ros2 pkg prefix urg_node >/dev/null 2>&1 || {
+        err "urg_node 가 없습니다:  sudo apt install -y ros-humble-urg-node"
+        exit 1
+    }
+    arm_cleanup
+    start_lidar
+    echo
+    log "스캔 정보 (/scan, 배열 생략)"
+    timeout 5 ros2 topic echo --once --no-arr /scan 2>/dev/null \
+        | grep -E 'frame_id|angle_min|angle_max|angle_increment|scan_time|range_min|range_max' \
+        | sed 's/^/    /'
+    if [ "${1:-}" != "--norviz" ] && [ -n "${DISPLAY:-}" ]; then
+        rviz2 -d "$SCRIPT_DIR/src/mlcs_mpc/config/lidar.rviz" >/tmp/mlcs_rviz.log 2>&1 &
+        PIDS="$PIDS $!"
+        log "RViz — Fixed Frame=laser, 격자 1 m"
+    elif [ -z "${DISPLAY:-}" ]; then
+        warn "DISPLAY 가 없어 RViz 는 생략합니다 (NoMachine 화면에서 실행하세요)"
+    fi
+    echo
+    log "주기 측정 — 정상은 약 40 Hz  (Ctrl+C 로 종료)"
+    ros2 topic hz /scan
+    ;;
+
+mapping)
+    # ./drive.sh mapping      라이다 + Cartographer 맵핑. 조이스틱으로 트랙을 돈다
+    #   저장은 다른 터미널에서  ./drive.sh savemap [이름]
+    #
+    #   설정: src/mlcs_mpc/config/cartographer/mapping_2d.lua (UNICORN 기반 — 파일 주석 참고)
+    #   ★ 경로를 소스에서 바로 읽는다 — lua/rviz 를 고쳐도 colcon build 가 필요 없다.
+    load_ros; require_ws_pkg mlcs_mpc
+    CARTO_DIR="$SCRIPT_DIR/src/mlcs_mpc/config/cartographer"
+    for p in cartographer_ros urg_node; do
+        ros2 pkg prefix "$p" >/dev/null 2>&1 || {
+            err "패키지 '$p' 가 없습니다:"
+            err "  sudo apt install -y ros-humble-cartographer-ros ros-humble-urg-node"
+            exit 1
+        }
+    done
+    # ★ mocap_bridge 는 map→base_link TF 를 낸다. Cartographer 의 map→odom 과
+    #   같이 있으면 base_link 의 부모가 둘이 되어 TF 가 뒤죽박죽이 된다.
+    if mocap_bridge_running; then
+        err "mocap_bridge 가 떠 있습니다 — map 프레임 TF 가 Cartographer 와 겹칩니다."
+        err "  ./drive.sh stop 으로 내린 뒤 다시 실행하세요."
+        exit 1
+    fi
+    if pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 이미 떠 있습니다 (다른 창의 mapping?) — ./drive.sh stop"
+        exit 1
+    fi
+    arm_cleanup
+    # 라이다만으로 따라가므로 천천히 — 명시하지 않았으면 1.5 m/s
+    [ "$SPEED_SET" = 0 ] && SPEED="1.5"
+
+    start_bringup              # base_link→laser static TF, odom→base_link 가 여기서 나온다
+
+    start_lidar
+
+    log "Cartographer 맵핑 (mapping_2d.lua)..."
+    ros2 run cartographer_ros cartographer_node \
+        -configuration_directory "$CARTO_DIR" \
+        -configuration_basename mapping_2d.lua \
+        >"$(run_log cartographer)" 2>&1 &
+    PIDS="$PIDS $!"
+    ros2 run cartographer_ros cartographer_occupancy_grid_node \
+        -resolution 0.05 -publish_period_sec 1.0 \
+        >/tmp/mlcs_cartogrid.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 2
+    if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 기동 직후 죽었습니다 — tail -50 /tmp/mlcs_cartographer.log"
+        exit 1
+    fi
+
+    if [ -n "${DISPLAY:-}" ]; then
+        rviz2 -d "$CARTO_DIR/mapping.rviz" >/tmp/mlcs_rviz.log 2>&1 &
+        PIDS="$PIDS $!"
+    else
+        warn "DISPLAY 가 없어 RViz 는 생략합니다 (NoMachine 화면에서 실행하세요)"
+    fi
+
+    echo
+    log "${GRN}맵핑 중${RST} — 천천히 트랙을 1~2바퀴 도세요"
+    echo "    · 출발점으로 돌아와 같은 구간을 한 번 더 지나가야 루프가 닫힌다"
+    echo "    · 제자리 급회전 금지 — IMU·오도메트리 없이 스캔만으로 따라간다"
+    echo "    · 다 돌았으면 ${BLD}다른 터미널에서${RST}:  ./drive.sh savemap <이름>"
+    echo "    · 로그: tail -f /tmp/mlcs_cartographer.log"
+    echo
+    joy_session
+    ;;
+
+savemap)
+    # ./drive.sh savemap [이름]    mapping 이 도는 중에 다른 터미널에서
+    #   → maps/<이름>.pbstream   Cartographer 원본 (pure localization 에 쓴다)
+    #     maps/<이름>.pgm/.yaml  2D 점유격자 (파티클필터·RViz·경로 그리기용)
+    #
+    #   ★ 궤적을 끝낸(finish) 뒤 저장한다. 공식 절차가 finish → write_state 다.
+    #     끝낸 궤적은 더 자라지 않으므로 저장 후에는 mapping 창을 Ctrl+C 로 닫는다.
+    load_ros
+    if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 안 떠 있습니다 — 다른 터미널에서 ./drive.sh mapping 중이어야 합니다."
+        exit 1
+    fi
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    NAME="${1:-map_$(date +%Y%m%d_%H%M%S)}"
+    OUT="$MAP_DIR/$NAME"
+    mkdir -p "$MAP_DIR"
+    if [ -e "$OUT.pbstream" ]; then
+        err "이미 있습니다: $OUT.pbstream — 다른 이름을 주세요"
+        exit 1
+    fi
+
+    log "궤적 마무리 (finish_trajectory)..."
+    # 이미 끝낸 궤적이면 실패 응답이 오는데, 저장은 그대로 하면 된다
+    timeout 60 ros2 service call /finish_trajectory \
+        cartographer_ros_msgs/srv/FinishTrajectory "{trajectory_id: 0}" \
+        | grep -o 'message=[^)]*' || warn "finish 응답 없음 — 저장은 계속합니다"
+
+    log "pbstream 저장..."
+    timeout 120 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
+        "{filename: '$OUT.pbstream', include_unfinished_submaps: true}" \
+        | grep -o 'message=[^)]*' || true
+    if [ ! -s "$OUT.pbstream" ]; then
+        err "pbstream 이 안 써졌습니다: $OUT.pbstream  (tail /tmp/mlcs_cartographer.log)"
+        exit 1
+    fi
+
+    log "pgm/yaml 변환..."
+    ros2 run cartographer_ros cartographer_pbstream_to_ros_map \
+        -pbstream_filename "$OUT.pbstream" -map_filestem "$OUT" -resolution 0.05 \
+        >/tmp/mlcs_savemap.log 2>&1 \
+        || warn "pgm 변환 실패 — tail /tmp/mlcs_savemap.log  (pbstream 은 저장됨)"
+    # ★ yaml 의 image: 가 절대경로로 써진다. 폴더째 옮기거나 다른 PC 로 복사하면
+    #   map_server 가 pgm 을 못 찾는다 — 같은 폴더 기준 파일명으로 바꾼다.
+    [ -f "$OUT.yaml" ] && sed -i "s|^image: .*|image: $NAME.pgm|" "$OUT.yaml"
+
+    echo
+    log "${GRN}저장 완료${RST}"
+    ls -l "$OUT".* 2>/dev/null | awk '{print "    " $5 "\t" $NF}'
+    echo
+    echo "    이제 mapping 창을 Ctrl+C 로 닫으세요."
+    ;;
+
 stop)
     load_ros
     log "${RED}비상 정지${RST}"
@@ -1370,6 +1554,9 @@ stop)
     kill_matching '/lib/vesc_driver/'
     kill_matching '/lib/vesc_ackermann/'
     kill_matching '/lib/ackermann_mux/'
+    # mapping 모드가 띄우는 것들
+    kill_matching '/lib/urg_node/'
+    kill_matching '/lib/cartographer_ros/'
     kill_matching '[j]oy_teleop' -9
     sleep 1
     kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/' -9
@@ -1379,8 +1566,8 @@ stop)
     ;;
 
 help|--help|-h|*)
-    # ★ 범위는 '사용법:' 부터 마지막 모드까지. 모드를 추가하면 같이 늘린다
-    #   (안 늘리면 새 모드가 help 에 안 보인다 — 2026-10-01 에 실제로 겪었다)
-    sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'
+    # ★ 범위는 '사용법:' 부터 'drive.sh stop' 줄까지 — stop 을 목록 맨 끝에 둔다.
+    #   (예전엔 '3,32p' 고정이라 모드를 늘릴 때마다 잘렸다 — 2026-10-01, 11-07)
+    sed -n '3,/drive\.sh stop /p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
