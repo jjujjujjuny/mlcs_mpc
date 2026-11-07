@@ -17,7 +17,7 @@ python3 -m venv ~/hpm-venv
 ~/hpm-venv/bin/pip install "numpy<2" pandas scipy matplotlib torch hydra-core \
     hydra-joblib-launcher wandb torch-interpol tqdm
 mkdir -p ~/mlcs_data/hpm
-tar -xzf hypermpc/hpm/data/hpm_data_20261105.tar.gz -C ~/mlcs_data/hpm
+tar -xzf hypermpc/hpm/data/hpm_data_20261107.tar.gz -C ~/mlcs_data/hpm
 ```
 
 ## 실행
@@ -60,7 +60,7 @@ API 키가 들어 있어서, 켜면 우리 로그와 모델이 그 계정으로 
 저자 학습률 5e-4 로는 이 스텝 수에서 파라미터가 많아야 2배쯤 움직이므로 올린다.
 
 ```bash
-tar -xzf hypermpc/hpm/data/hpm_data_20261105.tar.gz -C ~/mlcs_data/hpm   # 기존 csv 를 덮어쓴다
+tar -xzf hypermpc/hpm/data/hpm_data_20261107.tar.gz -C ~/mlcs_data/hpm   # 기존 csv 를 덮어쓴다
 hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
     hpm.train.epoch=25 hpm.optimizer.lr=0.002 hpm.wandb.send_interval=5 \
     dataset.train_dataset.stride=8 dataset.val_dataset.stride=8
@@ -83,11 +83,15 @@ hypermpc/hpm/train.sh hmodel=const hpm.device=cuda hpm.compile=false \
 
 변환 내용은 `tools/prep_hpm_dataset.py` 머리말 참고.
 
-## 데이터 (hpm_data_20261105)
+## 데이터 (hpm_data_20261107)
 
-11-03 ~ 11-05 로그, 전진만 33분 (train 23.0 / val 6.6 / test 3.5). `lr` 0.1537, 마찰 0.41 (라이다 포함 재측정 값). 같은 이름의 이전 묶음(`lr` 0.1498, 마찰 0.43)을 대체했고, 바뀐 것은 `v_y` 가 `(0.1537-0.1498)*r` 만큼과 `friction` 뿐이다. 오프셋 변경 전 로그는 조향과 yaw 를
-보정했고, 전 로그에 조향 맵을 적용했다 (`tools/prep_hpm_dataset.py`). 보정 후 `|ay|` < 2 에서 좌우 모두
-실제/모델 곡률 약 1.00~1.02. 원선회와 계단이 많아 11-04 데이터와 분포가 다르다.
+전진만 44분 (train 30.5 / val 8.7 / test 4.8).
+
+- `run_id` < 10000: 이전 `hpm_data_20261105` 그대로 (11-03~11-05 사람 주행, 33분). 이전 수치와 비교하려면 이것만 쓴다
+- `run_id` ≥ 10000: 새로 더한 10.8분. 11-07 저속 원선회 (0.6, 0.7, 0.8 m/s × 조향 ±0.20, ±0.30, ±0.38, 조향 계단 약 10회)와 `hmpc` 자율주행 4개 (11-05 `202948`, 11-06 `161526`, `162811`, `172147`). 같은 규칙으로 따로 나눠 붙였다 (seed 7)
+- 0.5~0.8 m/s 비율이 2.7% → 25.8% 가 됐다. MPC 가 0.7 m/s 로 달리는 구간이다
+
+`lr` 0.1537, 마찰 0.41. 오프셋 변경 전 로그는 조향과 yaw 를 보정했고, 전 로그에 조향 맵을 적용했다 (`tools/prep_hpm_dataset.py`).
 
 ## 아직 안 정한 것
 
