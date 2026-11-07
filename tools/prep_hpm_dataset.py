@@ -38,6 +38,8 @@ prep_hpm_dataset.py — 정리된 주행 로그를 HyperPM 학습 형식으로 �
     조향 중립 +0.0183 rad   servo offset 0.5077 이전 로그
     yaw -0.014 rad          mocap.yaml yaw_offset 적용 이전 로그
 
+  SKIP_LOGS 는 아예 안 쓴다 (마커를 옮긴 뒤 보정 전).
+
 ■ 분할
 
   **run 통째로** train/val/test 에 나눈다. 시간으로 이어진 구간을 쪼개면
@@ -61,6 +63,8 @@ STEER_BIAS = 0.0183
 STEER_BIAS_BEFORE = '20261105_163000'   # 파일 이름 시각. 이전이면 보정
 YAW_FIX = -0.014
 YAW_FIX_BEFORE = '20261105_174000'
+# 마커를 옮긴 뒤 mocap 보정을 맞추기 전 로그 (2026-11-07). 위치와 yaw 가 틀려 학습에 안 쓴다.
+SKIP_LOGS = {'20261107_202337', '20261107_203921'}
 
 
 def log_stamp(path):
@@ -167,6 +171,9 @@ def main():
 
     runs = []
     for f in files:
+        if log_stamp(f) in SKIP_LOGS:
+            print(f'{os.path.basename(f)}: mocap 보정 전 로그라 뺌')
+            continue
         df = pd.read_csv(f)
         before = len(runs)
         for _, s in df.groupby('segment'):
