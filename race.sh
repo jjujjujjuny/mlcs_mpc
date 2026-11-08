@@ -31,8 +31,18 @@ for k, v in h.items():
     if type(known[k]) is float and isinstance(v, int) and not isinstance(v, bool):
         h[k] = float(v)          # 1 이라고 써도 ROS 가 float 로 받게
 v_max = float(h.get('v_max', known['v_max']))
-if not 0.0 < v_max <= 3.0:
-    err(f'v_max {v_max} 는 0~3 m/s 범위여야 합니다')
+# 상한은 차가 실제로 낼 수 있는 속도: vesc_driver 가 speed_max (ERPM) 에서 자른다.
+# 젯슨의 vesc.yaml 을 읽고, 없으면 (메인 PC) 패치 값 23250 / 4781.5 = 4.86 m/s.
+vy_path = os.path.expanduser('~/f1tenth_ws/src/f1tenth_system/f1tenth_stack/config/vesc.yaml')
+erpm_max, gain = 23250.0, 4781.5
+try:
+    vp = next(iter(yaml.safe_load(open(vy_path)).values()))['ros__parameters']
+    erpm_max, gain = float(vp['speed_max']), float(vp['speed_to_erpm_gain'])
+except Exception:
+    pass
+v_motor = erpm_max / gain
+if not 0.0 < v_max <= v_motor:
+    err(f'v_max {v_max} 는 0~{v_motor:.2f} m/s 범위여야 합니다 (vesc.yaml speed_max {erpm_max:.0f} ERPM / {gain:g})')
 
 t = str(c.get('track') or '')
 if not t:
@@ -42,7 +52,9 @@ if not os.path.isfile(path):
     err(f'트랙을 못 찾았습니다: {t}')
 d = np.genfromtxt(path, delimiter=',', names=True)
 r_min = 1.0 / max(np.abs(d['curvature']).max(), 1e-9)
-ay = v_max ** 2 / r_min
+# 가장 좁은 코너에서 접지력만으로 돌 수 있는 속도 (마찰 × g). MPC 가 이 아래로 알아서 감속한다
+fric = float(h.get('friction', known['friction']))
+v_corner = (fric * 9.81 * r_min) ** 0.5
 
 yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 drive = bool(c.get('drive', False))
@@ -72,12 +84,10 @@ print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'트랙   {t}  (길이 {d["s"][-1]:.1f} m, 최소 반경 {r_min:.2f} m)',
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
-         f'속도   v_max {v_max:.2f} m/s → 최소 반경 코너 횡가속도 {ay:.2f} m/s²']
+         f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속']
 lines += [f'       {k} = {v}' for k, v in h.items() if k != 'v_max']
-if ay > 2.0:
-    lines.append('⚠ 횡가속도 2 m/s² 초과 — 운동학 근사가 안 맞기 시작한다. 코너에서 밀릴 수 있다')
-if ay > 4.0:
-    lines.append('⚠ 4 m/s² 초과 — 실측 타이어 한계(약 0.41 g) 근처다')
+if v_max > 3.0:
+    lines.append('⚠ v_max 3 m/s 초과 — 동정 데이터는 3 m/s 까지다. 모델 밖이니 offline_ocp 로 먼저 확인하고 조금씩 올릴 것')
 print('RACE_SUMMARY=' + shlex.quote('\n'.join(lines)))
 PY
 )"
