@@ -28,4 +28,6 @@ apply_one () {
 apply_one natnet_ros2     "$HERE/natnet_ros2-bitstream-version.patch"
 apply_one f1tenth_system  "$HERE/f1tenth_system-no-joy-nodes.patch"
 apply_one f1tenth_system  "$HERE/f1tenth_system-servo-offset.patch"
+apply_one f1tenth_system  "$HERE/f1tenth_system-stop-brake.patch"   # servo-offset 다음에 (같은 vesc.yaml)
+apply_one f1tenth_system/vesc "$HERE/vesc-stop-brake.patch"
 exit $rc

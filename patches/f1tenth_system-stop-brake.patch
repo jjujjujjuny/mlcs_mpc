@@ -1,0 +1,23 @@
+--- a/f1tenth_stack/config/vesc.yaml	2026-11-08 20:18:30.823681833 +0900
++++ b/f1tenth_stack/config/vesc.yaml	2026-11-08 20:23:24.997514538 +0900
+@@ -82,6 +82,20 @@
+ # vesc_driver:
+ #   ros__parameters:
+ 
++# ★ 정지 명령(|speed| < brake_speed_threshold m/s)이면 속도 0 대신 제동 전류(A)를 보낸다
++#   (vesc_ackermann 패치, mlcs_mpc/patches/vesc-stop-brake.patch, 2026-11-08).
++#   VESC 속도 PID 제동을 켠 뒤 멈출 때 앞으로 한 번 튀었다 (감속 → 부스터 → 감속).
++#   제동 전류 모드는 세우기만 하고 구동하지 않아서 튀거나 뒤로 굴러가지 않는다.
++#   처음 버전은 항상 제동 전류였는데 강한 제동이 없어져서, 빠를 때는 VESC 제동을 쓰게 바꿨다.
++#   0 이면 끔 (원래대로 속도 0 명령). 세게 서면 낮추고, 밀리면 올린다.
++ackermann_to_vesc_node:
++  ros__parameters:
++    brake_current: 10.0
++    brake_speed_threshold: 0.05
++    # 바퀴가 이보다 빠르면 속도 0 명령 (VESC PID 의 강한 반대 전류 제동, 원래 느낌).
++    #   이 아래로 내려오면 제동 전류로 넘긴다 (튀는 현상은 저속에서만 생긴다). 0 이면 처음부터 제동 전류
++    brake_handoff_speed: 0.5
++
+ throttle_interpolator:
+   ros__parameters:
+     rpm_input_topic: commands/motor/unsmoothed_speed

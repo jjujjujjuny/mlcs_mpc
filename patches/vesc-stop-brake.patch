@@ -1,0 +1,114 @@
+diff --git a/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp b/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
+index b646c36..84c2aa5 100644
+--- a/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
++++ b/vesc_ackermann/include/vesc_ackermann/ackermann_to_vesc.hpp
+@@ -34,12 +34,14 @@
+ #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
+ #include <rclcpp/rclcpp.hpp>
+ #include <std_msgs/msg/float64.hpp>
++#include <vesc_msgs/msg/vesc_state_stamped.hpp>
+ 
+ namespace vesc_ackermann
+ {
+ 
+ using ackermann_msgs::msg::AckermannDriveStamped;
+ using std_msgs::msg::Float64;
++using vesc_msgs::msg::VescStateStamped;
+ 
+ class AckermannToVesc : public rclcpp::Node
+ {
+@@ -51,16 +53,30 @@ private:
+   // conversion gain and offset
+   double speed_to_erpm_gain_, speed_to_erpm_offset_;
+   double steering_to_servo_gain_, steering_to_servo_offset_;
++  // ★ 정지 명령(|speed| < brake_speed_threshold)이면 속도 0 대신 제동 전류를 보낸다 (mlcs, 2026-11-08).
++  //   VESC 속도 PID 는 센서리스 저속에서 속도를 못 봐서, 0 을 목표로 잡으면 멈추면서 앞으로 한 번
++  //   튀거나(램프 + 강한 제동) 뒤로 굴러갔다. 제동 전류 모드는 세우기만 하고 구동하지 않는다.
++  //   brake_current <= 0 이면 원래 동작 (항상 속도 명령).
++  //   ★ 빠를 때는 속도 0 명령(VESC PID 의 강한 제동)을 그대로 쓰고, 실제 바퀴 속도가
++  //   brake_handoff_speed 아래로 내려오면 그때 제동 전류로 넘긴다. 튀는 현상은 저속에서만 생긴다.
++  //   brake_handoff_speed <= 0 이면 처음부터 제동 전류. VESC 상태가 끊기면 제동 전류 (안전한 쪽).
++  double brake_current_, brake_speed_threshold_, brake_handoff_speed_;
++  double wheel_speed_ = 0.0;          // m/s, sensors/core 에서
++  rclcpp::Time last_state_time_{0, 0, RCL_ROS_TIME};
++  bool braking_ = false;              // 한 번 제동 전류로 넘어가면 출발 명령 전까지 유지
+ 
+   /** @todo consider also providing an interpolated look-up table conversion */
+ 
+   // ROS services
+   rclcpp::Publisher<Float64>::SharedPtr erpm_pub_;
++  rclcpp::Publisher<Float64>::SharedPtr brake_pub_;
+   rclcpp::Publisher<Float64>::SharedPtr servo_pub_;
+   rclcpp::Subscription<AckermannDriveStamped>::SharedPtr ackermann_sub_;
++  rclcpp::Subscription<VescStateStamped>::SharedPtr state_sub_;
+ 
+   // ROS callbacks
+   void ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd);
++  void stateCallback(const VescStateStamped::SharedPtr state);
+ };
+ 
+ }  // namespace vesc_ackermann
+diff --git a/vesc_ackermann/src/ackermann_to_vesc.cpp b/vesc_ackermann/src/ackermann_to_vesc.cpp
+index 79863f8..b914c38 100644
+--- a/vesc_ackermann/src/ackermann_to_vesc.cpp
++++ b/vesc_ackermann/src/ackermann_to_vesc.cpp
+@@ -55,10 +55,24 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
+   steering_to_servo_offset_ =
+     declare_parameter<double>("steering_angle_to_servo_offset");
+ 
++  // 정지 명령일 때 제동 전류 (헤더 주석). 0 이면 끔
++  brake_current_ = declare_parameter<double>("brake_current", 0.0);
++  brake_speed_threshold_ = declare_parameter<double>("brake_speed_threshold", 0.05);
++  brake_handoff_speed_ = declare_parameter<double>("brake_handoff_speed", 0.5);
++
+   // create publishers to vesc electric-RPM (speed) and servo commands
+   erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
++  brake_pub_ = create_publisher<Float64>("commands/motor/brake", 10);
++  if (brake_current_ > 0.0) {
++    RCLCPP_INFO(
++      get_logger(), "정지 명령(|speed| < %.3f m/s): 바퀴 %.2f m/s 위에서는 속도 0 (VESC 제동), "
++      "아래에서는 제동 전류 %.1f A", brake_speed_threshold_, brake_handoff_speed_, brake_current_);
++  }
+   servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
+ 
++  state_sub_ = create_subscription<VescStateStamped>(
++    "sensors/core", 10, std::bind(&AckermannToVesc::stateCallback, this, _1));
++
+   // subscribe to ackermann topic
+   ackermann_sub_ = create_subscription<AckermannDriveStamped>(
+     "ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
+@@ -76,11 +90,33 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
+ 
+   // publish
+   if (rclcpp::ok()) {
+-    erpm_pub_->publish(erpm_msg);
++    const bool stop = brake_current_ > 0.0 && std::fabs(cmd->drive.speed) < brake_speed_threshold_;
++    if (!stop) {
++      braking_ = false;
++    } else if (!braking_) {
++      const bool fresh = (now() - last_state_time_).seconds() < 0.2;
++      // 빠르면 VESC PID 제동 (강하다). 느리거나 상태를 모르면 제동 전류로 넘긴다
++      if (brake_handoff_speed_ <= 0.0 || !fresh || std::fabs(wheel_speed_) < brake_handoff_speed_) {
++        braking_ = true;
++      }
++    }
++    if (stop && braking_) {
++      Float64 brake_msg;
++      brake_msg.data = brake_current_;
++      brake_pub_->publish(brake_msg);
++    } else {
++      erpm_pub_->publish(erpm_msg);
++    }
+     servo_pub_->publish(servo_msg);
+   }
+ }
+ 
++void AckermannToVesc::stateCallback(const VescStateStamped::SharedPtr state)
++{
++  wheel_speed_ = (state->state.speed - speed_to_erpm_offset_) / speed_to_erpm_gain_;
++  last_state_time_ = now();
++}
++
+ }  // namespace vesc_ackermann
+ 
+ #include "rclcpp_components/register_node_macro.hpp"  // NOLINT

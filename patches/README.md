@@ -87,3 +87,31 @@ remote 가 **우리 fork 가 아니라 upstream 원본**이다. push 할 수 없
 ### ② urg_node 를 뺀다
 
 라이다가 없다. 위치추정은 mocap 으로 한다.
+
+## vesc-stop-brake.patch + f1tenth_system-stop-brake.patch
+
+**대상** `f1tenth_system/vesc` (vesc_ackermann) 와 `f1tenth_stack/config/vesc.yaml`.
+yaml 패치는 servo-offset 패치를 적용한 뒤에 들어간다 (apply.sh 순서).
+
+**증상** (2026-11-08) — VESC 속도 PID 제동(`s_pid_allow_braking`)을 켠 뒤, 멈출 때
+"감속 → 앞으로 한 번 튐 → 감속". 그 전에는 정지하면 뒤로 굴러가기도 했다.
+
+**원인** — 센서리스 모터라 0 근처에서 VESC 가 속도를 못 본다. 속도 0 을 목표로 잡으면
+목표 램프(`s_pid_ramp_erpms_s`)와 강한 제동, 개루프 전환이 얽혀 PID 가 다시 밀거나
+제동 토크가 후진 토크가 된다.
+
+**수정** — `ackermann_to_vesc` 가 정지 명령(`|speed| < brake_speed_threshold`, 0.05 m/s)을 받으면
+`sensors/core` 의 실제 바퀴 속도를 본다.
+
+- 바퀴가 `brake_handoff_speed` (0.5 m/s) 보다 빠르면 지금처럼 속도 0 → VESC PID 의 강한 반대 전류 제동
+- 그 아래로 내려오면 `commands/motor/brake` 로 `brake_current` (A). 출발 명령이 올 때까지 유지
+- VESC 상태가 0.2 s 넘게 안 오면 바로 제동 전류 (안전한 쪽)
+
+제동 전류 모드는 세우기만 하고 구동하지 않는다. VESC 설정은 건드리지 않는다.
+처음에는 항상 제동 전류였는데 "트리거를 놓으면 딱 잡던" 강한 제동이 없어져서 나눴다.
+
+    brake_current: 10.0          # 0 이면 끔 (원래 동작)
+    brake_speed_threshold: 0.05
+    brake_handoff_speed: 0.5     # 0 이면 처음부터 제동 전류
+
+조이스틱 정지·워치독 0, hmpc 정지·차단 모두 이 경로로 선다. 0 이 아닌 감속 명령은 그대로 속도 PID.
