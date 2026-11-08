@@ -16,6 +16,9 @@
 #                                    (횡오차·상태·명령 — 나중에 분석용)
 #     ./drive.sh hmpc                HyperMPC OCP 노드. 기본은 거치대용 (속도 항상 0)
 #                       --log [태그]  주행 데이터도 기록 (태그 기본값 hmpc)
+#                       MLCS_HMPC_TRACK=<트랙>  트랙 지정 (이름 또는 prep csv)
+#                       MLCS_HMPC_VMAX=1.0      속도 상한 (기본 config/hmpc.yaml 의 v_max)
+#                       MLCS_HMPC_SOURCE=lidar MLCS_HMPC_MAP=<맵>  라이다 위치추정으로 (mocap 없이)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
@@ -39,7 +42,8 @@
 #   ── 라이다 맵 → 트랙 (대회: 라이다만, mocap 없음) ──
 #     ./drive.sh mapping             ① 맵핑 (위에 있음)
 #     ./drive.sh savemap <맵>        ② 저장 (위에 있음)
-#     ./drive.sh maptrack [맵] [트랙] ③ 맵 → 트랙 + 전처리 + 프리뷰 한 번에
+#     ./drive.sh racereport          라이다 주행을 mocap 정답으로 채점 (race.sh 가 자동으로)
+#     ./drive.sh maptrack [맵] [트랙] ③ 맵 → 트랙 + prep + 프리뷰 한 번에 (최소 곡률선)
 #                                    맵 생략 = 가장 최근 맵, 트랙 생략 = <맵>_track
 #     ./drive.sh localize [맵]       저장한 맵으로 위치추정만 (맵은 안 바뀜)
 #
@@ -282,8 +286,10 @@ start_data_logger () {
     DATA_DIR="${MLCS_DATA:-$HOME/mlcs_data}"
     # ★ data_logger 는 /mpc/state 를 시간 기준으로 삼는다. mocap 이 없으면
     #   한 줄도 안 쌓인다. 36분을 모으기 전에 여기서 막는다.
-    start_natnet
-    start_mocap_bridge
+    if [ "${STATE_SOURCE:-mocap}" != lidar ]; then
+        start_natnet
+        start_mocap_bridge
+    fi
     ensure_single_state_publisher
     wait_for_state
     if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
@@ -737,11 +743,90 @@ start_bringup () {
 #   bringup_launch.py 에서는 주석 처리돼 있다 (mocap 운용 때문). 필요한 모드만 띄운다.
 #   이미 떠 있으면 그대로 쓴다 — 그 경우 PIDS 에 안 넣으므로 이 창이 내려도 안 죽는다.
 #   네트워크: 유선 enP8p1s0 에 nmcli 프로파일 'hokuyo' (192.168.0.15/24)
+# Cartographer 위치추정 (맵 고정). $1 = pbstream. localize, hmpc(라이다) 가 쓴다.
+# ★ 코어 5 를 솔버 혼자 쓰게 한다.
+#   이 스크립트(와 앞으로 띄울 자식들)는 0-4 로, 이미 떠 있는 내 프로세스(VS Code 등)도 0-4 로 옮긴다.
+#   솔버 워커만 스스로 5 로 간다 (ocp_worker sched_setaffinity). 되돌리려면 재부팅하거나 taskset -a -cp 0-5 <pid>.
+isolate_solver_core () {
+    local n=0 p
+    taskset -cp 0-4 $$ >/dev/null 2>&1
+    for p in $(pgrep -u "$(id -u)"); do
+        taskset -a -cp 0-4 "$p" >/dev/null 2>&1 && n=$((n + 1))
+    done
+    log "코어 배치: 솔버 5 전용, hmpc_node 4, Cartographer·RViz 0-3, 나머지 0-4  (옮긴 프로세스 $n 개)"
+}
+
+start_localization () {
+    local pb="$1" base
+    base="$(basename "${pb%.pbstream}")"
+    log "Cartographer 위치추정 — 맵 $base  (코어 0-3)"
+    # ★ 코어 0-3 에 묶는다. 안 묶으면 2 코어 넘게 쓰면서 솔버 코어(5)를 빼앗는다 —
+    #   2026-11-08 라이다 주행에서 풀이 시간 22 → 31~35 ms (p95 47~62) 로 주기를 넘겼다.
+    taskset -c 0-3 ros2 run cartographer_ros cartographer_node \
+        -configuration_directory "$SCRIPT_DIR/src/mlcs_mpc/config/cartographer" \
+        -configuration_basename localization_2d.lua \
+        -load_state_filename "$pb" -load_frozen_state=true \
+        >"$(run_log cartographer)" 2>&1 &
+    PIDS="$PIDS $!"
+    taskset -c 0-3 ros2 run cartographer_ros cartographer_occupancy_grid_node \
+        -resolution 0.05 -publish_period_sec 1.0 \
+        >/tmp/mlcs_cartogrid.log 2>&1 &
+    PIDS="$PIDS $!"
+    # 시작 위치: RViz 2D Pose Estimate / 조이스틱 LT → 스캔 매칭 → 궤적 다시 시작
+    taskset -c 0-3 ros2 run mlcs_mpc relocalize --ros-args \
+        -p configuration_directory:="$SCRIPT_DIR/src/mlcs_mpc/config/cartographer" \
+        -p configuration_basename:=localization_2d.lua \
+        >"$(run_log relocalize)" 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 3
+    if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 기동 직후 죽었습니다 — tail -50 /tmp/mlcs_cartographer.log"
+        exit 1
+    fi
+    echo "localize $base" > /tmp/mlcs_carto_mode
+}
+
 lidar_running () {
     pgrep -f '/lib/urg_node/urg_node_driver' >/dev/null 2>&1
 }
 
+# 라이다 관련 프로세스를 **확실히** 내린다 (stop, start_lidar 가 쓴다)
+#
+#   ★ 2026-11-08: 이전 실행의 urg_node 가 남아서 다음 주행 때 /scan 이 안 오는
+#     일이 종종 있었다. 원인 두 가지:
+#       · SIGTERM 만 보냈다. TCP 읽기에서 막힌 드라이버는 그걸로 안 죽는다.
+#       · 'ros2 run urg_node ...' 래퍼는 '/lib/urg_node/' 패턴에 안 걸린다.
+#     UST-10LX 는 **TCP 접속을 하나만** 받는다. 남은 드라이버가 접속을 쥐고
+#     있으면 새 드라이버는 연결이 안 돼서 /scan 이 0 이 된다.
+#   그래서 TERM → 최대 3초 대기 → KILL, 마지막에 라이다와의 TCP 접속이
+#   남았는지까지 본다. (defunct 좀비는 부모가 죽으면 init 이 거둬 간다)
+kill_lidar () {
+    local pats=('/lib/urg_node/' 'ros2 run urg_node' 'ros2 topic hz /scan') p _
+    for p in "${pats[@]}"; do kill_matching "$p"; done
+    for _ in $(seq 1 30); do
+        lidar_running || break
+        sleep 0.1
+    done
+    for p in "${pats[@]}"; do kill_matching "$p" -9; done
+    sleep 0.3
+    if lidar_running; then
+        err "라이다 드라이버가 KILL 로도 안 죽습니다:"
+        pgrep -af '/lib/urg_node/' | sed 's/^/    /' >&2
+        return 1
+    fi
+    if ss -tn state established dst 192.168.0.10 2>/dev/null | grep -q 192.168.0.10; then
+        warn "라이다와의 TCP 접속이 아직 남아 있습니다 — 몇 초 뒤 풀립니다"
+    fi
+    return 0
+}
+
 start_lidar () {
+    # 떠 있는데 /scan 이 안 오면 멈춘 좀비다 — 재사용하지 말고 내린 뒤 새로 띄운다
+    if lidar_running && ! timeout 5 ros2 topic echo /scan --once >/dev/null 2>&1; then
+        warn "라이다 드라이버가 떠 있는데 /scan 이 안 옵니다 — 내리고 다시 띄웁니다"
+        kill_lidar || exit 1
+        sleep 1
+    fi
     if lidar_running; then
         log "라이다 드라이버가 이미 떠 있습니다 — 그대로 씁니다"
     else
@@ -752,9 +837,12 @@ start_lidar () {
             >"$(run_log lidar)" 2>&1 &
         PIDS="$PIDS $!"
     fi
-    local ok=0 _
-    for _ in 1 2 3; do
+    # ★ 시간으로 기다린다. 'echo --once' 는 토픽이 아직 광고되지 않았으면 1초 안에 바로 실패한다 —
+    #   예전의 '3번 시도' 는 드라이버 접속이 늦으면 접속 전에 다 써 버렸다 (2026-11-08).
+    local ok=0 end=$((SECONDS + 20))
+    while [ $SECONDS -lt $end ]; do
         timeout 5 ros2 topic echo /scan --once >/dev/null 2>&1 && { ok=1; break; }
+        sleep 0.5
     done
     if [ "$ok" != 1 ]; then
         err "/scan 이 오지 않습니다. 확인:"
@@ -955,9 +1043,47 @@ hmpc)
     # OCP 는 hypermpc/ocp_worker.py 가 따로 풀고 hmpc_node 가 감시한다.
     # ★ 기본은 bench 다. 달리려면 MLCS_HMPC_DRIVE=1 을 직접 줘야 한다.
     load_ros; require_ws_pkg mlcs_mpc
+    # 위치 출처: MLCS_HMPC_SOURCE=lidar 면 Cartographer 위치추정 (맵 MLCS_HMPC_MAP),
+    #   아니면 mocap. 라이다면 트랙도 같은 맵의 map 프레임 트랙이어야 한다 (*_mocap 아님).
+    STATE_SOURCE="${MLCS_HMPC_SOURCE:-mocap}"
+    if [ "$STATE_SOURCE" = lidar ]; then
+        MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+        PB="$MAP_DIR/${MLCS_HMPC_MAP:-}.pbstream"
+        [ -n "${MLCS_HMPC_MAP:-}" ] && [ -f "$PB" ] \
+            || { err "라이다로 달리려면 맵이 필요합니다: MLCS_HMPC_MAP=<맵> (maps/<맵>.pbstream)"; exit 1; }
+        if mocap_bridge_running; then
+            err "mocap_bridge 가 떠 있습니다 — map 프레임 TF 가 Cartographer 와 겹칩니다. ./drive.sh stop"
+            exit 1
+        fi
+        if pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+            err "Cartographer 가 이미 떠 있습니다 — ./drive.sh stop"
+            exit 1
+        fi
+        case "${MLCS_HMPC_TRACK:-}" in
+            *_mocap*) err "라이다 주행인데 mocap 프레임 트랙입니다: $MLCS_HMPC_TRACK"; exit 1 ;;
+        esac
+    fi
     arm_cleanup
-    start_natnet
-    start_bringup
+    isolate_solver_core
+    if [ "$STATE_SOURCE" = lidar ]; then
+        start_bringup
+        start_lidar
+        start_localization "$PB"
+        if [ -n "${DISPLAY:-}" ]; then
+            taskset -c 0-3 rviz2 -d "$SCRIPT_DIR/src/mlcs_mpc/config/cartographer/localization.rviz" \
+                >/tmp/mlcs_rviz.log 2>&1 &
+            PIDS="$PIDS $!"
+        else
+            warn "DISPLAY 가 없어 RViz 를 못 띄웁니다 — NoMachine 화면의 터미널에서 실행하세요"
+        fi
+        log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_HMPC_MAP})"
+        warn "${BLD}RViz 상단 '2D Pose Estimate' 로 차 위치·방향을 찍으세요${RST} — 찍기 전에는 B 를 눌러도 출발 안 함"
+        echo "    LT 끝까지 = 지금 위치 근처에서 맵에 다시 맞춤 (차가 멈춰 있을 때)"
+    else
+        start_natnet
+        start_bringup
+        log "위치: mocap"
+    fi
     HM_BENCH=true
     if [ "${MLCS_HMPC_DRIVE:-0}" = "1" ]; then
         HM_BENCH=false
@@ -965,26 +1091,59 @@ hmpc)
     else
         warn "bench — 속도는 항상 0 입니다. ${BLD}바퀴를 띄우고${RST} 조향만 확인하세요."
     fi
-    ros2 launch mlcs_mpc hmpc.launch.py bench:="$HM_BENCH" >"$(run_log hmpc)" 2>&1 &
+    # 트랙: MLCS_HMPC_TRACK=<prep csv 경로 또는 트랙 이름>. 없으면 config/hmpc.yaml
+    HM_ARGS=(bench:="$HM_BENCH" source:="$STATE_SOURCE")
+    if [ -n "${MLCS_HMPC_TRACK:-}" ]; then
+        HT="$MLCS_HMPC_TRACK"
+        [ -f "$HT" ] || HT="$SCRIPT_DIR/lab_map/data/tracks/$HT/prep_$HT.csv"
+        [ -f "$HT" ] || { err "트랙을 못 찾았습니다: $MLCS_HMPC_TRACK"; exit 1; }
+        HT="$(cd "$(dirname "$HT")" && pwd)/$(basename "$HT")"
+        log "트랙: ${GRN}$HT${RST}"
+        HM_ARGS+=(track_csv:="$HT")
+    fi
+    if [ -n "${MLCS_HMPC_PARAMS:-}" ]; then
+        HM_ARGS+=(extra_params:="$MLCS_HMPC_PARAMS")
+    fi
+    if [ -n "${MLCS_HMPC_VMAX:-}" ]; then
+        log "속도 상한: ${GRN}${MLCS_HMPC_VMAX} m/s${RST} (MLCS_HMPC_VMAX)"
+        HM_ARGS+=(v_max:="$MLCS_HMPC_VMAX")
+    fi
+    # hmpc_node·브릿지는 코어 4, 솔버 워커는 스스로 코어 5 (config/hmpc.yaml solver_core)
+    taskset -c 4 ros2 launch mlcs_mpc hmpc.launch.py "${HM_ARGS[@]}" >"$(run_log hmpc)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
     if [ "$LOGDATA" = 1 ]; then
         # 브릿지는 위 런치가 띄운다. 로거가 먼저 보면 하나 더 띄우므로 기다린다.
         for _ in 1 2 3 4 5 6 7 8 9 10; do
-            mocap_bridge_running && break
+            pgrep -f '/lib/mlcs_mpc/(mocap|lidar)_bridge' >/dev/null 2>&1 && break
             sleep 0.5
         done
         start_data_logger "${1:-hmpc}"
+        if [ "$STATE_SOURCE" = lidar ]; then
+            # mocap 을 정답으로 같이 기록한다 (브릿지는 안 띄운다 — TF 가 겹친다)
+            start_natnet
+            ALIGN_LOG="$HOME/mlcs_data/align/${MLCS_HMPC_MAP}_$(date +%Y%m%d_%H%M%S)_race.csv"
+            mkdir -p "$(dirname "$ALIGN_LOG")"
+            python3 "$SCRIPT_DIR/tools/map_mocap_align.py" record "$ALIGN_LOG" \
+                >/tmp/mlcs_race_align.log 2>&1 &
+            PIDS="$PIDS $!"
+            printf 'MAP=%q\nTRACK=%q\nALIGN=%q\nSTART=%q\n' "$MLCS_HMPC_MAP" "$HT" \
+                "$ALIGN_LOG" "$(date +%s)" > /tmp/mlcs_race_last
+            log "정답 기록 (mocap + 라이다): $ALIGN_LOG"
+            echo "    끝나면  ./drive.sh racereport  (./race.sh 는 자동으로 돈다)"
+        fi
     fi
     echo
-    warn "준비되면 다른 창에서:  ./drive.sh go   /  정지  ./drive.sh halt"
+    warn "${BLD}자율 모드로 시작합니다 — 조이스틱 B 를 누르면 출발${RST} (그 전에는 정지)"
+    echo "    LB     → 수동 (비상정지, 사람이 조종)   LB 다시 → 바로 자율 재개 (B 불필요)"
+    echo "    START  → 비상정지 (수동)                B      → mocap 끊김·솔버 고장 뒤 재출발"
     log "로그: tail -f /tmp/mlcs_hmpc.log    워커: /tmp/mlcs_hmpc_worker.log"
     log "상태: ros2 topic echo /hmpc/status   풀이 시간: ros2 topic echo /mpc/solve_time"
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
-        joy:="$JOYARG" max_speed:=1.0 allow_toggle:=true
+        joy:="$JOYARG" max_speed:=1.0 allow_toggle:=true start_auto:=true
     [ "$LOGDATA" = 1 ] && { sleep 1; report_data_total; }
     ;;
 
@@ -1546,12 +1705,31 @@ savemap)
     echo "    다음:  ./drive.sh maptrack $NAME          (맵 → 트랙)"
     ;;
 
+racereport)
+    # ./drive.sh racereport     가장 최근 라이다 주행을 mocap 정답으로 채점 (tools/race_report.py)
+    [ -f /tmp/mlcs_race_last ] || { err "라이다 주행 기록이 없습니다 — ./race.sh (source: lidar, log 켬)"; exit 1; }
+    # shellcheck disable=SC1091
+    . /tmp/mlcs_race_last
+    DRV="$(find "${MLCS_DATA:-$HOME/mlcs_data}" -maxdepth 1 -name 'drive_*.csv' -newermt "@$START" 2>/dev/null \
+           | sort | tail -1)"
+    [ -n "$DRV" ] || { err "그 주행의 data_logger 기록을 못 찾았습니다"; exit 1; }
+    [ -s "$ALIGN" ] || { err "정답 기록이 비었습니다: $ALIGN  (Motive 가 켜져 있었나요?)"; exit 1; }
+    log "주행 $DRV"
+    log "정답 $ALIGN"
+    python3 "$SCRIPT_DIR/tools/race_report.py" --drive "$DRV" --align "$ALIGN" \
+        --map "$MAP" --track "$TRACK"
+    ;;
+
 maptrack)
     # ./drive.sh maptrack [맵] [트랙이름] [옵션...]
-    #   라이다 맵 → 중심선 트랙 → 저자 전처리(prep_*.csv) → 프리뷰를 한 번에
-    #   (tools/track_from_map.py → prep_track.py → preview_track.py)
+    #   라이다 맵 → 트랙 → prep_*.csv → 프리뷰를 한 번에
+    #   (tools/track_from_map.py → preview_track.py)
     #   맵을 안 주면 maps/ 에서 가장 최근 맵. 트랙 이름 기본 <맵>_track.
     #   옵션은 이름 뒤에 — 예:  ./drive.sh maptrack comp1 comp1_track --reverse
+    #
+    #   ★ 기본은 최소 곡률선 + 저자 전처리 없음 (2026-11-08). 가운데 선은 벽이 들쭉날쭉한
+    #     연구실 맵에서 꺾였고, 저자 전처리는 코너 반경을 0.72~0.85 배로 줄여 세 맵이 다
+    #     떨어졌다. 예전 방식(가운데 선 + 저자 전처리)은 --center
     MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
     MAPARG=""; TNAME=""
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then MAPARG="$1"; shift; fi
@@ -1563,25 +1741,45 @@ maptrack)
     fi
     MBASE="$(basename "${MAPARG%.yaml}")"
     TNAME="${TNAME:-${MBASE}_track}"
-    DRY=0
-    for a in "$@"; do [ "$a" = "--dry-run" ] && DRY=1; done
+    DRY=0; CENTER=0; MT_ARGS=()
+    for a in "$@"; do
+        case "$a" in
+            --dry-run) DRY=1; MT_ARGS+=("$a") ;;
+            --center)  CENTER=1 ;;
+            *)         MT_ARGS+=("$a") ;;
+        esac
+    done
+    # ★ 기본은 MPCC 용 --walls: 매끄러운 가운데 선(좌표계) + 지점별 벽 폭. MPC 가 벽 안에서 선을 고른다.
+    #   --mincurv 를 주면 그 선을 쓰고, --center 는 예전 방식(저자 전처리)이다.
+    if [ "$CENTER" != 1 ]; then
+        case " ${MT_ARGS[*]+"${MT_ARGS[*]}"} " in
+            *" --mincurv "*) MT_ARGS=(--no-author-prep "${MT_ARGS[@]}") ;;
+            *) MT_ARGS=(--walls "${MT_ARGS[@]+"${MT_ARGS[@]}"}") ;;
+        esac
+    fi
 
     log "① 맵 → 트랙  ($MBASE → $TNAME)"
-    python3 "$SCRIPT_DIR/tools/track_from_map.py" "$MAPARG" "$TNAME" "$@" || {
+    python3 "$SCRIPT_DIR/tools/track_from_map.py" "$MAPARG" "$TNAME" "${MT_ARGS[@]+"${MT_ARGS[@]}"}" || {
         echo
         err "트랙을 못 만들었습니다 — 위 메시지를 보세요. 자주 쓰는 옵션:"
         echo "    --reverse            반대 방향으로 돈다"
         echo "    --start X Y          출발점 (기본 0 0 = 맵핑 시작 자리)"
         echo "    --allow-infeasible   차 한계보다 급한 코너가 있어도 저장 (폭이 넉넉할 때만)"
         echo "    --seal 0.15          벽 틈이 커서 트랙이 새면 키운다"
+        echo "    --line-margin 0.30   선에서 벽까지 여유 (기본 0.40) — 좁은 트랙"
+        echo "    --center             예전 방식 (가운데 선 + 저자 전처리)"
         echo "    -h                   전체 옵션"
         exit 1
     }
     [ "$DRY" = 1 ] && exit 0
     echo
-    log "② 저자 전처리 → prep_$TNAME.csv"
-    python3 "$SCRIPT_DIR/tools/prep_track.py" "$TNAME" \
-        || warn "전처리 실패 — 트랙 파일은 저장됐습니다. ./drive.sh preptrack $TNAME 으로 다시"
+    if [ "$CENTER" = 1 ]; then
+        log "② 저자 전처리 → prep_$TNAME.csv"
+        python3 "$SCRIPT_DIR/tools/prep_track.py" "$TNAME" \
+            || warn "전처리 실패 — 트랙 파일은 저장됐습니다. ./drive.sh preptrack $TNAME 으로 다시"
+    else
+        log "② 저자 전처리 건너뜀 — prep_$TNAME.csv 는 ①에서 이 선으로 썼습니다"
+    fi
     echo
     log "③ 프리뷰 그림"
     python3 "$SCRIPT_DIR/tools/preview_track.py" "$TNAME" || true
@@ -1620,25 +1818,9 @@ localize)
     [ "$SPEED_SET" = 0 ] && SPEED="1.5"
     start_bringup
     start_lidar
-    log "Cartographer 위치추정 — 맵 $MBASE"
-    ros2 run cartographer_ros cartographer_node \
-        -configuration_directory "$CARTO_DIR" \
-        -configuration_basename localization_2d.lua \
-        -load_state_filename "$PB" -load_frozen_state=true \
-        >"$(run_log cartographer)" 2>&1 &
-    PIDS="$PIDS $!"
-    ros2 run cartographer_ros cartographer_occupancy_grid_node \
-        -resolution 0.05 -publish_period_sec 1.0 \
-        >/tmp/mlcs_cartogrid.log 2>&1 &
-    PIDS="$PIDS $!"
-    sleep 3
-    if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
-        err "Cartographer 가 기동 직후 죽었습니다 — tail -50 /tmp/mlcs_cartographer.log"
-        exit 1
-    fi
-    echo "localize $MBASE" > /tmp/mlcs_carto_mode
+    start_localization "$PB"
     if [ -n "${DISPLAY:-}" ]; then
-        rviz2 -d "$CARTO_DIR/mapping.rviz" >/tmp/mlcs_rviz.log 2>&1 &
+        taskset -c 0-3 rviz2 -d "$CARTO_DIR/localization.rviz" >/tmp/mlcs_rviz.log 2>&1 &
         PIDS="$PIDS $!"
     fi
     echo
@@ -1804,14 +1986,24 @@ stop)
     kill_matching '/lib/vesc_driver/'
     kill_matching '/lib/vesc_ackermann/'
     kill_matching '/lib/ackermann_mux/'
-    # mapping 모드가 띄우는 것들
-    kill_matching '/lib/urg_node/'
+    # lidar / mapping 모드가 띄우는 것들 (래퍼 'ros2 run ...' 까지)
     kill_matching '/lib/cartographer_ros/'
+    kill_matching 'ros2 run cartographer_ros'
+    kill_matching "rviz2 -d $SCRIPT_DIR/"          # 우리가 띄운 RViz 만
     kill_matching '[j]oy_teleop' -9
     sleep 1
     kill_matching 'install/mlcs_mpc/lib/mlcs_mpc/' -9
     kill_matching 'bringup_launch' -9
     kill_matching '/lib/joy/joy_node' -9
+    kill_matching '/lib/cartographer_ros/' -9
+    kill_matching 'ros2 run cartographer_ros' -9
+    kill_lidar && log "  ✓ 라이다 정리"
+    # 남은 게 있으면 보여준다 — 조용히 남아 있다가 다음 주행을 망치는 게 제일 나쁘다
+    _left="$(pgrep -af '/lib/(urg_node|cartographer_ros|vesc_driver|vesc_ackermann|ackermann_mux|joy)/|install/mlcs_mpc/lib/mlcs_mpc/' 2>/dev/null)"
+    if [ -n "$_left" ]; then
+        warn "아직 남은 프로세스:"
+        echo "$_left" | sed 's/^/    /'
+    fi
     log "종료 완료"
     ;;
 

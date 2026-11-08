@@ -74,6 +74,7 @@ class FakeCar:
         self.vs = self.n.create_publisher(VescStateStamped, '/sensors/core', 10)
         self.en = self.n.create_publisher(Bool, '/mpc/enabled', LATCHED)
         self.ma = self.n.create_publisher(Bool, '/mpc/manual', LATCHED)
+        self.go = self.n.create_publisher(Bool, '/mpc/go', 10)
         self.n.create_subscription(AckermannDriveStamped, '/drive', self._drive, 50)
         self.n.create_subscription(Float32, '/mpc/solve_time', lambda m: self.solve.append(m.data), 50)
         self.n.create_timer(0.01, self._tick)
@@ -188,10 +189,11 @@ def test_gates():
     # ackermann_mux timeout 0.2 s 안에 다음 명령이 와야 한다.
     r &= check('출발 전 속도 0 을 계속 보냄', gap < 0.2 and all(e[1] == 0.0 for e in w),
                f'{len(w)} Hz, 최대 간격 {gap * 1000:.0f} ms')
-    car.enable(True)
+    r &= check('B 전에는 정지', not any(e[1] > 0 for e in car.since(t)))
+    car.go.publish(Bool(data=True))     # 조이스틱 B
     if not n.wait_ready():
         n.close()
-        return check('워커 준비', False)
+        return check('B 뒤 워커 준비', False)
     t = time.monotonic()
     car.spin(12.0)
     w = car.since(t)

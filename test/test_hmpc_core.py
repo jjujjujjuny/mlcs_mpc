@@ -132,6 +132,19 @@ def test_health_two_repeats_are_fine():
         assert h.update(0.5 + i * 0.01, *f[1:])[0]
 
 
+def test_health_bunched_stamps():
+    # 1 m/s 로 1 cm 씩 가는데 메시지가 몰려 스탬프 간격이 1 ms 인 프레임 (실측 오탐)
+    h = PoseHealth()
+    t, x = 0.0, 0.0
+    for i in range(200):
+        t += 0.001 if i % 10 == 5 else 0.01
+        x += 0.01
+        a = 0.02 * i
+        assert h.update(t, x, 0.0, 0.1, 0, 0, math.sin(a / 2), math.cos(a / 2))[0], i
+    # 진짜 튐은 여전히 잡는다
+    assert not h.update(t + 0.01, x + 0.5, 0.0, 0.1, 0, 0, 0, 1.0)[0]
+
+
 def test_health_yaw_jump():
     h = PoseHealth()
     assert h.update(0.0, 0, 0, 0, 0, 0, 0, 1.0)[0]
@@ -146,3 +159,23 @@ if __name__ == '__main__':
         f()
         print(f'ok  {f.__name__}')
     print(f'{len(tests)}개 통과')
+
+
+def test_wall_bounds():
+    # w_left/w_right 열이 있으면 지점별 경계, 없으면 track_width 의 반씩. 랩을 넘어도 이어진다.
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, 'prep.csv')
+    n, R = 100, 2.0
+    a = np.arange(n) * 2 * np.pi / n
+    wl = 0.4 + 0.2 * np.sin(a)
+    np.savetxt(p, np.c_[R * a, R * np.cos(a), R * np.sin(a), a + np.pi / 2, 0 * a + 1 / R,
+                        0 * a + 1.0, 0 * a + 0.6, wl],
+               delimiter=',', header='s,x,y,heading,curvature,track_width,w_right,w_left', comments='')
+    t = Track(p)
+    assert t.has_walls
+    lo, hi = t.bounds_at(np.array([0.0, t.s[25], t.s[25] + t.length]), 0.2)
+    assert np.allclose(lo, -0.4) and np.isclose(hi[0], 0.2)
+    assert np.isclose(hi[1], 0.4) and np.isclose(hi[2], hi[1])
+    t2, _ = circle()
+    lo, hi = t2.bounds_at(np.array([1.0]), 0.1)
+    assert not t2.has_walls and np.isclose(lo[0], -0.15) and np.isclose(hi[0], 0.15)

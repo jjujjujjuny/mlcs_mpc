@@ -33,6 +33,9 @@ track_from_map.py — 라이다 맵(pgm/yaml)에서 트랙을 만든다. 대회�
 ■ 주의
 
   ★ 중심선은 트랙 중앙이지 레이싱 라인이 아니다. 첫 주행용이다.
+  ★ 벽 모양이 들쭉날쭉하면 가운데 선이 꺾여 차가 못 돈다 (2026-11-08 연구실 맵 세 장).
+    폭이 넉넉하면 --mincurv 로 폭 안에서 덜 굽은 선을 찾는다. 이때 결과는 가운데가
+    아니므로 --line-margin 으로 벽에서 띄운다 (MPC 가 선에서 ±0.25 m 벗어날 수 있다).
   ★ 트랙 안의 작은 장애물(기둥 등)은 중심선 계산에서 빼고 경고만 한다.
     폭과 벽 여유 검사에는 들어간다.
   ★ 맵이 휘었으면(루프가 안 닫힘) 트랙도 휜다. 맵을 먼저 RViz 로 확인한다.
@@ -46,7 +49,8 @@ import os
 import sys
 
 import numpy as np
-from scipy import ndimage
+from scipy import ndimage, sparse
+from scipy.optimize import lsq_linear
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -58,6 +62,7 @@ import draw_track as dt                                     # noqa: E402
 from track_from_lap import dist_to_polyline                 # noqa: E402
 
 REPO = dt.REPO
+_MAP = {}       # write_own_prep 가 폭을 다시 잴 때 쓴다
 MAPS = os.path.join(REPO, 'maps')
 
 
@@ -274,7 +279,10 @@ def resample_poly(c, step):
     """닫힌 폴리라인을 호길이 등간격으로."""
     P = np.vstack([c, c[:1]])
     s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
-    q = np.arange(0.0, s[-1], step)
+    # ★ 길이를 정확히 n 등분한다. arange(0, L, step) 이면 마지막 점→첫 점 간격이 남는 자투리
+    #   (1108_6 에서 1.1 cm, 나머지 5 cm)가 되어 최소 곡률선이 이음매에서 꺾였다 (R 0.54 m, 2026-11-08).
+    n = max(3, int(round(s[-1] / step)))
+    q = np.linspace(0.0, s[-1], n, endpoint=False)
     return np.c_[np.interp(q, s, P[:, 0]), np.interp(q, s, P[:, 1])]
 
 
@@ -282,6 +290,38 @@ def normals(c):
     t = np.roll(c, -1, axis=0) - np.roll(c, 1, axis=0)
     t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-12)
     return np.c_[-t[:, 1], t[:, 0]]          # 왼쪽 법선
+
+
+def min_curvature_line(m, blocked, c, margin, max_w, iters=4, reg=1e-3, smooth_w=0.0):
+    """폭 안에서 가장 덜 굽은 닫힌 선.
+
+    c + α·n (n 은 왼쪽 법선) 에서 α 를 [-(오른쪽 폭 - margin), 왼쪽 폭 - margin] 안에서
+    골라 2차 차분 제곱합을 최소로 한다 (등간격이면 곡률 제곱합과 같다). 법선과 폭을 새
+    선에서 다시 재며 몇 번 되풀이한다. 좁아서 범위가 없는 곳은 그 자리에 둔다.
+
+    smooth_w 는 α 의 1차 차분에 거는 무게다. 0.3 으로 해 봤더니 1108_2 맵이 오히려
+    실패해서 (선이 경계에서 덜 떨어짐) 기본은 끈다 (2026-11-08).
+    """
+    for _ in range(iters):
+        N = len(c)
+        n = normals(c)
+        W = ray_widths(m, blocked, c, max_w)
+        lo, hi = -(W[:, 0] - margin), W[:, 1] - margin
+        narrow = lo > hi
+        lo[narrow] = hi[narrow] = 0.0
+        hi = np.maximum(hi, lo + 1e-9)
+        D2 = sparse.diags([np.ones(N), -2 * np.ones(N), np.ones(N)], [-1, 0, 1],
+                          shape=(N, N), format='lil')
+        D2[0, N - 1] = D2[N - 1, 0] = 1.0
+        D2 = D2.tocsr()
+        D1 = sparse.diags([-np.ones(N), np.ones(N)], [0, 1], shape=(N, N), format='lil')
+        D1[N - 1, 0] = 1.0
+        A = sparse.vstack([D2 @ sparse.diags(n[:, 0]), D2 @ sparse.diags(n[:, 1]),
+                           reg * sparse.identity(N), smooth_w * D1.tocsr()]).tocsr()
+        b = -np.r_[D2 @ c[:, 0], D2 @ c[:, 1], np.zeros(N), np.zeros(N)]
+        al = lsq_linear(A, b, bounds=(lo, hi), lsmr_tol='auto').x
+        c = resample_poly(c + al[:, None] * n, 0.05)
+    return c
 
 
 def ray_widths(m, blocked, c, max_w):
@@ -406,13 +446,33 @@ def main():
     p.add_argument('--allow-infeasible', action='store_true',
                    help='중심선 곡률이 차 한계를 넘어도 저장한다 (경고만). '
                         '좁은 헤어핀은 MPC 가 폭을 써서 돌아야 한다')
+    p.add_argument('--mincurv', action='store_true',
+                   help='가운데 선 대신 폭 안에서 가장 덜 굽은 선을 쓴다 (주석 참고)')
+    p.add_argument('--line-margin', type=float, default=0.40,
+                   help='--mincurv 선에서 벽까지 최소 여유 m. 차 반폭 0.135 + MPC 가 '
+                        '선에서 벗어나는 0.25 정도')
+    p.add_argument('--no-author-prep', action='store_true',
+                   help='저자 전처리를 안 거친다. 그 전처리는 코너 반경을 0.72~0.85 배로 줄인다 '
+                        '(hypermpc/README.md). 대신 우리 선을 같은 형식으로 prep_<이름>.csv 에 쓴다')
+    p.add_argument('--walls', action='store_true',
+                   help='MPCC 용 (기본, maptrack). 선은 좌표계일 뿐이라 차 한계 곡률 검사를 안 하고, '
+                        '매끄러운 가운데 선 + 지점별 좌/우 벽 폭을 prep 에 쓴다. MPC 가 벽 안에서 선을 고른다')
+    p.add_argument('--ref-radius', type=float, default=0.5,
+                   help='--walls: 기준선 최소 반경 m. 이보다 급하면 평활을 더 한다 (잡음 꺾임 방지)')
+    p.add_argument('--frenet-frac', type=float, default=0.9,
+                   help='--walls: 코너 안쪽 폭을 이 비율 × 반경으로 자른다 (1 - n·κ > 0 특이점)')
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args()
+    if a.walls:
+        a.no_author_prep, a.mincurv = True, False
 
     m = load_map(a.map)
     base = os.path.splitext(os.path.basename(m['path']))[0]
     name = a.name or f'{base}_track'
     kappa_lim = math.tan(a.max_steer) / a.wheelbase
+    if a.walls:
+        # ★ MPCC 에서 선은 좌표계다. 차가 그 선을 그대로 돌 필요가 없다 — 매끄럽기만 하면 된다.
+        kappa_lim = 1.0 / a.ref_radius
     print(f'■ 맵  {m["path"]}')
     print(f'   {m["W"]}x{m["H"]} 칸, {m["res"]*100:.1f} cm, 원점 '
           f'({m["ox"]:+.2f}, {m["oy"]:+.2f}, {m["oyaw"]:+.3f})  '
@@ -446,8 +506,19 @@ def main():
     print(f'   중심선 원본 {len(c0)}점, 길이 {L0:.2f} m')
 
     blocked = wall_mask(m, a.speck)         # 폭·여유는 메우기 전 실제 벽으로
-    TR = dt.load_track_reader(a.hypermpc)
-    if TR is None:
+    if a.mincurv:
+        c0 = orient(min_curvature_line(m, blocked, c0, a.line_margin, a.max_width),
+                    a.start, a.start_yaw, a.reverse)
+        L1 = float(np.sum(np.linalg.norm(np.diff(np.vstack([c0, c0[:1]]),
+                                                 axis=0), axis=1)))
+        k1 = np.abs(signed_curvature(c0, 0.05))
+        print(f'   최소 곡률선 {len(c0)}점, 길이 {L1:.2f} m, 벽 여유 최소 '
+              f'{clearance(m, blocked, c0).min():.3f} m, 평활 전 R_min {1/k1.max():.3f} m '
+              f'(벽 여유 목표 {a.line_margin:.2f} m)')
+    TR = None if a.no_author_prep else dt.load_track_reader(a.hypermpc)
+    if a.no_author_prep:
+        print('   ★ 저자 전처리를 안 거칩니다 — prep_*.csv 를 이 선으로 직접 씁니다')
+    elif TR is None:
         print('   ⚠ 원저장소가 없어 HyperMPC 전처리 검사를 건너뜁니다')
 
     print(f'\n■ 평활화 — 통과하는 최소값을 찾습니다 '
@@ -587,9 +658,54 @@ def main():
              kappa_lim=kappa_lim, max_bad_run=a.max_bad_run),
         spacing=a.spacing, raw_spacing=a.raw_spacing,
         widths=Wraw, frame=frame)
+    if a.no_author_prep:
+        _MAP.update(m=m, blocked=blocked, max_w=a.max_width)
+        write_own_prep(name, c, kap, W, a.spacing,
+                       frenet_frac=a.frenet_frac if a.walls else None)
     print('   ★ 위 "벽~경계" 는 여기서 중심선에서 가장 가까운 벽까지 거리입니다')
     print(f'   ★ map 프레임 트랙입니다. hmpc 는 위치추정(map→base_link)으로 '
           '달려야 맞습니다')
+
+
+def write_own_prep(name, c, kap, W, spacing, frenet_frac=None):
+    """저자 prep 형식 (s,x,y,heading,curvature,track_width) 을 우리 선으로 쓴다.
+
+    ★ 시작점을 옮기면서 이음매에 아주 가까운 점이 하나 생긴다 (간격 0.4 cm 를 봤다).
+      그대로 쓰면 그 자리 곡률이 엉뚱하게 나와서, 등간격으로 다시 뽑고 곡률도 다시 낸다.
+    """
+    keep = np.r_[True, np.linalg.norm(np.diff(c, axis=0), axis=1) > 0.5 * spacing]
+    if np.linalg.norm(c[-1] - c[0]) < 0.5 * spacing:
+        keep[-1] = False
+    c = resample_poly(c[keep], spacing)
+    kap = signed_curvature(c, spacing)
+    W = ray_widths(_MAP['m'], _MAP['blocked'], c, _MAP['max_w'])
+    t = np.roll(c, -1, axis=0) - np.roll(c, 1, axis=0)
+    head = np.unwrap(np.arctan2(t[:, 1], t[:, 0]))
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(c, axis=0), axis=1))]
+    # 벽 폭 [오른쪽, 왼쪽]. ★ 이웃 ±15 cm 중 최소로 깎는다 — 벽 틈으로 레이가 새면 그 점만
+    #   폭이 크게 나오는데, MPC 에는 그게 "벽이 멀다" 로 보인다. 깎는 쪽이 안전하다.
+    win = max(1, int(round(0.15 / spacing)))
+    Wc = np.stack([ndimage.minimum_filter1d(W[:, j], 2 * win + 1, mode='wrap') for j in (0, 1)], axis=1)
+    if frenet_frac is not None:
+        # 1 - n·κ > 0: 왼쪽으로 도는 곳(κ>0)은 왼쪽 폭, 오른쪽으로 도는 곳은 오른쪽 폭을 반경 이내로
+        lim = frenet_frac / np.maximum(np.abs(kap), 1e-6)
+        cut_l = (kap > 0) & (Wc[:, 1] > lim)
+        cut_r = (kap < 0) & (Wc[:, 0] > lim)
+        Wc[cut_l, 1] = lim[cut_l]
+        Wc[cut_r, 0] = lim[cut_r]
+        if cut_l.any() or cut_r.any():
+            print(f'   코너 안쪽 폭을 {frenet_frac:.1f}·R 로 자름: {int(cut_l.sum() + cut_r.sum())}점 '
+                  f'(최소 {min(Wc[cut_l, 1].min() if cut_l.any() else 9, Wc[cut_r, 0].min() if cut_r.any() else 9):.2f} m)')
+    path = os.path.join(dt.OUTDIR, name, f'prep_{name}.csv')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('s,x,y,heading,curvature,track_width,w_right,w_left\n')
+        for i in range(len(c)):
+            f.write(f'{s[i]},{c[i, 0]},{c[i, 1]},{head[i]},{kap[i]},{W[i, 0] + W[i, 1]},'
+                    f'{Wc[i, 0]},{Wc[i, 1]}\n')
+    print(f'   벽 폭 (깎은 값) 오른쪽 {Wc[:, 0].min():.2f}~{Wc[:, 0].max():.2f} m, '
+          f'왼쪽 {Wc[:, 1].min():.2f}~{Wc[:, 1].max():.2f} m')
+    print(f'   ✓ {path}  (저자 전처리 없이, {spacing*100:.0f} cm 간격, '
+          f'R_min {1/np.abs(kap).max():.3f} m)')
 
 
 def signed_curvature(c, spacing):

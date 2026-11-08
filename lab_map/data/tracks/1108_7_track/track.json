@@ -1,0 +1,51 @@
+{
+  "name": "1108_7_track",
+  "created": "2026-11-08T15:47:23",
+  "source": "tools/track_from_map.py (맵 /home/mlcs/mlcs_mpc/maps/1108_7.yaml, 출발 [0.0, 0.0] yaw 0.0)",
+  "coordinate_frame": {
+    "name": "map",
+    "unit": "meter",
+    "note": "Cartographer map 프레임 (맵핑 시작 자세가 원점). mocap 과 비교하려면 tools/map_mocap_align.py",
+    "map_yaml": "/home/mlcs/mlcs_mpc/maps/1108_7.yaml"
+  },
+  "boundary_source": null,
+  "generation": {
+    "clicked_points": [],
+    "spline": "scipy.interpolate.splprep(k=3, per=1) — 근사 평활",
+    "smooth_dev_m": 0.01,
+    "spacing_m": 0.05,
+    "half_width_m": 0.625,
+    "width_right_m": [
+      0.42500000000000004,
+      1.1
+    ],
+    "width_left_m": [
+      0.4,
+      2.0
+    ]
+  },
+  "vehicle_limits": {
+    "wheelbase": 0.33,
+    "max_steer": 0.378,
+    "kappa_limit": 2.0,
+    "r_min_car": 0.5
+  },
+  "geometry": {
+    "closed": true,
+    "path_length_m": 10.447987499629027,
+    "num_points": 209,
+    "max_abs_kappa": 1.8188252388496287,
+    "min_radius_m": 0.5498054341012336,
+    "infeasible_fraction": 0.0,
+    "infeasible_points": 0,
+    "infeasible_longest_run_m": 0.0,
+    "max_bad_run_m": 0.15,
+    "wall_fold_points": 0,
+    "wall_fold_longest_run_m": 0.0,
+    "winding_number": 1.0011101207717652,
+    "enclosed_area_m2": 7.40587630045936,
+    "track_width_m": 1.25,
+    "wall_to_boundary_clearance_m": 0.41031349100265513,
+    "inside_lab_boundary": true
+  }
+}

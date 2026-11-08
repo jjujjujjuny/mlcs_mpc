@@ -199,6 +199,8 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
     xdot = cs.MX.sym('xdot', 9)
 
+    build_ocp.last_f = cs.Function('f', [x, u, p], [f_expl])   # make_plant 가 쓴다
+
     model = AcadosModel()
     model.name = 'hmpc_car'
     model.x, model.u, model.xdot, model.p = x, u, xdot, p
@@ -224,8 +226,9 @@ def build_ocp(dyn_fun, N, dt, cfg):
         beta_dyn = cs.atan(vy / vx)
         common = (-s + cfg['q_beta'] * (beta_kin - beta_dyn)**2
                   + q_n * n**2 + q_mu * mu**2
-                  + barrier(cfg['track_width'] - n) + barrier(cfg['track_width'] + n)
                   + cfg['q_slip'] * (ws - vx)**2)
+        if not cfg['track_hard']:
+            common = common + barrier(cfg['track_width'] - n) + barrier(cfg['track_width'] + n)
         stage = (common + q_speed * (ws_ref - ws)**2
                  + q_delta * (delta_ref - delta)**2)
         terminal = cfg['q_e_scaler'] * (common + cfg['q_mu_e'] * mu**2)
@@ -244,6 +247,27 @@ def build_ocp(dyn_fun, N, dt, cfg):
     ocp.constraints.lbu = np.array([cfg['min_ws_ref'], -cfg['max_steer_ref']])
     ocp.constraints.ubu = np.array([cfg['max_ws_ref'], +cfg['max_steer_ref']])
     ocp.constraints.idxbu = np.array([0, 1])
+    if cfg['track_hard']:
+        # ★ 트랙 경계를 비용이 아니라 상태 경계로 (|n| ≤ track_width). 저자는 비용(배리어)이다.
+        #   폭은 실행 중에 스테이지별로 바꾼다 (ocp_worker 의 경계 일정 참고).
+        w = cfg['track_width']
+        ocp.constraints.idxbx = np.array([1])
+        ocp.constraints.lbx = np.array([-w])
+        ocp.constraints.ubx = np.array([+w])
+        ocp.constraints.idxbx_e = np.array([1])
+        ocp.constraints.lbx_e = np.array([-w])
+        ocp.constraints.ubx_e = np.array([+w])
+        if cfg['track_slack'] > 0:
+            # ★ 순수 하드 경계는 차가 폭 안에 못 머무는 순간(한계 코너, 외란) QP 해가 없어져
+            #   status 4 가 된다 (1108_3, ±0.12 에서 94%). 슬랙에 큰 L1 무게를 걸면 지킬 수
+            #   있을 때는 하드와 똑같이 지키고, 못 지킬 때만 최소로 넘는다 (정확 페널티).
+            z = cfg['track_slack']
+            ocp.constraints.idxsbx = np.array([0])
+            ocp.constraints.idxsbx_e = np.array([0])
+            ocp.cost.zl = ocp.cost.zu = np.array([z])
+            ocp.cost.Zl = ocp.cost.Zu = np.array([z * 0.1])
+            ocp.cost.zl_e = ocp.cost.zu_e = np.array([z])
+            ocp.cost.Zl_e = ocp.cost.Zu_e = np.array([z * 0.1])
 
     ocp.parameter_values = np.concatenate([default_params(), [0.0]])
 
@@ -261,14 +285,19 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
 
 def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
-             wheel_speed_tau=0.046122448979591835):
+             wheel_speed_tau=0.046122448979591835, track_hard=False, track_width=0.25,
+             track_slack=0.0):
     """OCP 설정. 기본값은 저자 config_car.yaml 이다. 우리 차 시정수는 config/hmpc.yaml."""
     return dict(
         wheel_speed_tau=wheel_speed_tau,
         steering_tau=steering_tau,
         q_n=0.02, q_mu=0.002, q_delta=2.0, q_speed_diff=2.0,
         q_e_scaler=1.0, q_mu_e=5.0,
-        q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=0.25,
+        q_beta=1.0, q_slip=0.1, barrier_lambda=200.0, track_width=track_width,
+        # True 면 배리어 비용 대신 |n| ≤ track_width 상태 경계 (저자는 False)
+        track_hard=track_hard,
+        # > 0 이면 경계 넘는 양에 이 L1 무게 (정확 페널티). 0 이면 순수 하드
+        track_slack=track_slack,
         q_progress=1.0,
         min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
         # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
@@ -282,7 +311,9 @@ def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
 
 def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     """생성 코드가 있으면 다시 쓰고, 없으면 빌드한다."""
-    tag = f'N{N}_{cfg["cost"]}_{"guard" if guard else "noguard"}_rk{cfg["rk_steps"]}'
+    tag = (f'N{N}_{cfg["cost"]}_{"guard" if guard else "noguard"}_rk{cfg["rk_steps"]}'
+           + ('_hard' if cfg.get('track_hard') else '')
+           + ('_slack' if cfg.get('track_hard') and cfg.get('track_slack', 0) > 0 else ''))
     build = os.path.join(build_dir, tag)
     os.makedirs(build, exist_ok=True)
     ocp = build_ocp(dyn_fun, N, dt, cfg)
@@ -302,6 +333,82 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
         f.write(stamp)
     print(f'  ✓ {time.perf_counter()-t0:.1f}초', flush=True)
     return solver
+
+
+def make_plant(dyn_fun, cfg, dt, substeps=16):
+    """OCP 와 같은 연속 모델을 RK4 로 dt 만큼 적분하는 '차'. → step(x, u, p) → x_next.
+
+    ★ 폐루프 시험에서 solver.get(1, 'x') 를 다음 상태로 쓰면 안 된다. SQP_RTI 는 한 번만 반복해서
+      그 값이 동역학을 정확히 만족하지 않는다 (1108_6 시험에서 vx 0.7 인데 s 가 단계당 0.003 m).
+    """
+    build_ocp(dyn_fun, 2, dt, cfg)          # 식만 만든다 (빌드 안 함)
+    f = build_ocp.last_f
+    h = dt / substeps
+
+    def step(x, u, p):
+        x = np.asarray(x, float)
+        for _ in range(substeps):
+            k1 = np.array(f(x, u, p)).ravel()
+            k2 = np.array(f(x + h / 2 * k1, u, p)).ravel()
+            k3 = np.array(f(x + h / 2 * k2, u, p)).ravel()
+            k4 = np.array(f(x + h * k3, u, p)).ravel()
+            x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        return x
+    return step
+
+
+def hard_bounds(N, w, n0, relax=10):
+    """스테이지 1..N 의 |n| 상한.
+
+    현재 |n| 이 이미 w 를 넘었으면 첫 스테이지부터 w 를 요구하면 해가 없다 (한 스텝 0.033 s
+    에 못 돌아온다). 그래서 relax 스테이지 동안 현재 값에서 w 로 줄여 간다.
+    """
+    k = np.arange(1, N + 1)
+    return np.maximum(w, abs(n0) * np.clip(1.0 - k / relax, 0.0, 1.0)) + 1e-3
+
+
+def set_hard_bounds(solver, N, w, n0):
+    for k, b in zip(range(1, N + 1), hard_bounds(N, w, n0)):
+        solver.constraints_set(k, 'lbx', np.array([-b]))
+        solver.constraints_set(k, 'ubx', np.array([+b]))
+
+
+def wall_bounds(N, lo, hi, n0, relax=10):
+    """스테이지 1..N 의 n 범위 [lo_k, hi_k] (MPCC: 지점별 벽 폭 − 여유).
+
+    lo, hi 는 스테이지 0..N 의 값 (길이 N+1). 현재 n0 가 범위 밖이면 hard_bounds 처럼 relax
+    스테이지 동안 n0 에서 범위로 줄여 간다. 좁아서 lo > hi 면 가운데 한 점으로 둔다.
+    """
+    lo, hi = np.asarray(lo, float)[1:N + 1].copy(), np.asarray(hi, float)[1:N + 1].copy()
+    bad = lo > hi
+    lo[bad] = hi[bad] = 0.5 * (lo[bad] + hi[bad])
+    f = np.clip(1.0 - np.arange(1, N + 1) / relax, 0.0, 1.0)
+    return np.minimum(lo, n0 * f) - 1e-3, np.maximum(hi, n0 * f) + 1e-3
+
+
+def set_wall_bounds(solver, N, lo, hi, n0):
+    for k, a, b in zip(range(1, N + 1), *wall_bounds(N, lo, hi, n0)):
+        solver.constraints_set(k, 'lbx', np.array([a]))
+        solver.constraints_set(k, 'ubx', np.array([b]))
+
+
+def track_walls(path, margin):
+    """prep_*.csv → q ↦ (κ, n 하한, n 상한). w_left/w_right 열이 없으면 track_width/2."""
+    d = np.genfromtxt(path, delimiter=',', names=True)
+    length = d['s'][-1] + np.hypot(d['x'][0] - d['x'][-1], d['y'][0] - d['y'][-1])
+    if 'w_left' in d.dtype.names:
+        wl, wr = d['w_left'], d['w_right']
+    else:
+        wl = wr = d['track_width'] / 2
+    S = np.r_[d['s'], length]
+    ext = lambda v: np.r_[v, v[0]]  # noqa: E731
+
+    def at(q):
+        q = np.mod(q, length)
+        return (np.interp(q, S, ext(d['curvature'])),
+                -(np.interp(q, S, ext(wr)) - margin),
+                np.interp(q, S, ext(wl)) - margin)
+    return at
 
 
 def track_kappa(path):
@@ -336,25 +443,38 @@ def load_params(path):
     return np.array(d['vehicle_params'] + d['tire_front'] + d['tire_rear'], dtype=float)
 
 
-def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params):
-    """폐루프로 laps 번 푼다."""
+def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=None, plant=None):
+    """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC)."""
     N = args.N
+    wall_hist, s_hist, trace = [], [], []
     restart(solver, N, x0)
     x = x0.copy()
-    times, cycles, status = [], [], []
+    times, cycles, status, n_hist = [], [], [], []
     first_bad = None
     for i in range(laps):
         t_cycle = time.perf_counter()
+        qs = np.array([x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
+                       for k in range(N + 1)])
         for k in range(N + 1):
-            q = x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
-            solver.set(k, 'p', np.concatenate([params, [kappa_of_s(q)]]))
+            solver.set(k, 'p', np.concatenate([params, [kappa_of_s(qs[k])]]))
         solver.set(0, 'lbx', x)
         solver.set(0, 'ubx', x)
+        if cfg['track_hard'] and walls is not None:
+            _, lo, hi = walls(qs)
+            set_wall_bounds(solver, N, lo, hi, x[1])
+            lo0, hi0 = walls(x[0])[1:]
+            wall_hist.append((x[1] - lo0 - 1e-9 < 0) or (x[1] - hi0 > 1e-9))
+            s_hist.append(x[0])
+        elif cfg['track_hard']:
+            set_hard_bounds(solver, N, cfg['track_width'], x[1])
         t0 = time.perf_counter()
         st = solver.solve()
         t1 = time.perf_counter()
-        x_next = solver.get(1, 'x')
         u0 = solver.get(0, 'u')
+        if plant is not None:
+            x_next = plant(x, u0, np.concatenate([params, [kappa_of_s(x[0])]]))
+        else:
+            x_next = solver.get(1, 'x')
         cycles.append((time.perf_counter() - t_cycle) * 1000)
         times.append((t1 - t0) * 1000)
         status.append(st)
@@ -365,6 +485,8 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params):
             print(f'  ✗ {name}: {i} 번째 풀이에서 NaN/inf (status {st})')
             break
         x = x_next
+        n_hist.append(abs(x[1]))
+        trace.append(np.r_[x, u0])
 
     ts = np.array(times[1:]) if len(times) > 1 else np.array(times)
     codes, counts = np.unique(status, return_counts=True)
@@ -375,6 +497,13 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params):
     print(f'  풀이 시간   평균 {ts.mean():7.2f}  p95 {np.percentile(ts, 95):7.2f}  '
           f'최대 {ts.max():7.2f} ms   (예산 {budget:.1f} ms, 초과 {(ts > budget).mean() * 100:.1f}%)')
     print(f'  주기 전체   평균 {np.mean(cycles[1:] or cycles):7.2f} ms  (곡률 갱신 포함)')
+    print(f'  |n| 최대 {max(n_hist or [0]):.3f} m' + (f'  (경계 {cfg["track_width"]:.2f})' if cfg['track_hard'] else ''))
+    if wall_hist:
+        sh = np.array(s_hist)
+        print(f'  벽 경계 밖 {np.mean(wall_hist) * 100:.1f}%  진행 {sh[-1] - sh[0]:.2f} m '
+              f'({(sh[-1] - sh[0]) / (len(sh) * args.dt):.2f} m/s 평균)')
+        if getattr(args, 'trace', None):
+            np.save(args.trace, np.array(trace))
     print(f'  마지막 상태 vx {x[3]:.3f}  vy {x[4]:.3f}  r {x[5]:.3f}  n {x[1]:.3f}  '
           f'ws {x[7]:.3f}  delta {x[8]:.3f}')
 
@@ -395,6 +524,16 @@ def main():
                     help='차량·타이어 값 파일 (config/hmpc.yaml). 없으면 저자 기본값')
     ap.add_argument('--start-v', type=float, default=1.0, help='초기 v_x [m/s]')
     ap.add_argument('--max-steer', type=float, default=0.378, help='--v-max 와 함께 쓰는 실제 조향 상한')
+    ap.add_argument('--track-hard', type=float, default=None,
+                    help='트랙 경계를 |n| ≤ 이 값 의 상태 경계로 (배리어 비용 대신)')
+    ap.add_argument('--track-slack', type=float, default=0.0,
+                    help='--track-hard 경계에 슬랙 L1 무게 (0 이면 순수 하드)')
+    ap.add_argument('--walls', type=float, default=None, metavar='MARGIN',
+                    help='track 시나리오: prep 의 w_left/w_right − MARGIN 을 지점별 경계로 (MPCC). '
+                         '--track-hard 와 함께')
+    ap.add_argument('--plant', action='store_true',
+                    help='다음 상태를 솔버 예측 대신 같은 모델의 RK4 적분으로 (진짜 폐루프)')
+    ap.add_argument('--trace', default=None, help='--walls: 상태·입력 기록 .npy')
     ap.add_argument('--steering-tau', type=float, default=0.0436734693877551)
     ap.add_argument('--wheel-speed-tau', type=float, default=0.046122448979591835)
     ap.add_argument('--scenario', nargs='+',
@@ -413,7 +552,10 @@ def main():
         print('  git clone https://github.com/hyper-mpc/hypermpc_code.git ~/hypermpc_code')
         return 1
 
-    cfg = make_cfg(args.cost, args.rk_steps, args.steering_tau, args.wheel_speed_tau)
+    cfg = make_cfg(args.cost, args.rk_steps, args.steering_tau, args.wheel_speed_tau,
+                   track_hard=args.track_hard is not None,
+                   track_width=args.track_hard if args.track_hard is not None else 0.25,
+                   track_slack=args.track_slack)
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
@@ -455,7 +597,9 @@ def main():
             st = solver.solve()
             print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
             continue
-        run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params)
+        walls = track_walls(args.track, args.walls) if (name == 'track' and args.walls is not None) else None
+        plant = make_plant(dyn_fun, cfg, args.dt) if args.plant else None
+        run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant)
     return 0
 
 

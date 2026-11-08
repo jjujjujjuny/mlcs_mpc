@@ -11,6 +11,7 @@ joystick_teleop — 로지텍 F710 조이스틱 수동 조종.
     RB 누른 채 RT     후진
     L스틱 좌/우       조향
     LB                수동 ↔ 자율 토글
+    B(버튼 1)         출발 — /mpc/go (hmpc). 한 번 누르면 이후 LB 로 바로 재개
     START(버튼 7)     비상 정지 — 자율 해제 + 속도 0
 
   랠리 모드(./drive.sh rally)에서는 십자키로 상한을 조절한다 (rally_limits.py):
@@ -79,6 +80,8 @@ class JoystickTeleop(Node):
         self.declare_parameter('btn_reverse', 5)      # RB — 누르는 동안 후진
         self.declare_parameter('btn_toggle', 4)       # LB — 수동↔자율
         self.declare_parameter('btn_estop', 7)        # START — 비상 정지
+        self.declare_parameter('btn_go', 1)           # B — 출발 (/mpc/go). -1 이면 끔
+        self.declare_parameter('axis_align', 2)       # LT — 라이다 위치 다시 맞춤 (/mpc/relocalize). -1 이면 끔
 
         # ── 모드 ────────────────────────────────────────────────────
         # allow_toggle=False 면 수동 전용. 자율로 넘길 대상(mpc_node)이
@@ -127,6 +130,8 @@ class JoystickTeleop(Node):
         self.btn_rev = int(p('btn_reverse'))
         self.btn_tog = int(p('btn_toggle'))
         self.btn_estop = int(p('btn_estop'))
+        self.btn_go = int(p('btn_go'))
+        self.ax_align = int(p('axis_align'))
         self.allow_tog = bool(p('allow_toggle'))
         self.auto_mode = bool(p('start_auto'))
         self.inv_steer = bool(p('steer_invert'))
@@ -161,6 +166,8 @@ class JoystickTeleop(Node):
 
         self.prev_lb = False
         self.prev_estop = False
+        self.prev_go = False
+        self.prev_align = False
         self._last_log = 0.0
 
         # 워치독 상태
@@ -193,6 +200,12 @@ class JoystickTeleop(Node):
         #   26-jetson 이 mission_manager 로 같은 문제를 푼 방식이다.
         self.pub_manual = self.create_publisher(Bool, '/mpc/manual', LATCHED)
         self.pub_manual.publish(Bool(data=not self.auto_mode))
+        # ★ B 출발은 /mpc/enabled 가 아니라 별도 /mpc/go 로 낸다 (위 이유 그대로).
+        #   래치하지 않는다 — 누른 그 순간만 의미가 있다.
+        self.pub_go = self.create_publisher(Bool, '/mpc/go', 10)
+        self.pub_align = self.create_publisher(Bool, '/mpc/relocalize', 10)
+        if self.auto_mode:
+            self._auto_since = time.time()
 
         self.create_timer(1.0, self._check_auto)
         if self.joy_timeout > 0.0:
@@ -205,6 +218,9 @@ class JoystickTeleop(Node):
             f'  L스틱(축{self.ax_steer})    → 조향\n'
             + (f'  LB(버튼{self.btn_tog})      → 수동↔자율 토글\n'
                if self.allow_tog else '  LB 토글 없음 — 수동 전용\n')
+            + (f'  B(버튼{self.btn_go})        → 출발\n' if self.btn_go >= 0 else '')
+            + (f'  LT(축{self.ax_align})        → 라이다 위치 다시 맞춤 (멈춘 상태에서)\n'
+               if self.ax_align >= 0 else '')
             + f'  START(버튼{self.btn_estop})   → 비상 정지\n'
             f'  max_speed={self.max_speed} m/s  max_steer={self.max_steer} rad\n'
             '  ★ 트리거 자동 캘리 중 — RT 에서 손 떼고 가만히 두세요')
@@ -332,6 +348,24 @@ class JoystickTeleop(Node):
                 '★ 비상 정지 — 자율 해제, 속도 0. '
                 '다시 출발하려면 LB 로 자율 전환하세요.')
         self.prev_estop = es
+
+        # ── 출발 (B 상승 엣지) ──────────────────────────────────────
+        go = self.btn_go >= 0 and btn(self.btn_go)
+        if go and not self.prev_go:
+            self.pub_go.publish(Bool(data=True))
+            if self.auto_mode:
+                self.get_logger().info('B — 출발')
+            else:
+                self.get_logger().warn('B — 출발 허가. 지금은 수동이라 LB 를 눌러야 자율로 갑니다')
+        self.prev_go = go
+
+        # ── 위치 다시 맞춤 (LT 끝까지 당김, 상승 엣지) ──────────────
+        #   ROS joy 의 트리거는 휴지 +1, 끝까지 -1. 처음 건드리기 전에는 0 이 온다 — 그래서 -0.5 로 본다.
+        al = (0 <= self.ax_align < len(msg.axes)) and msg.axes[self.ax_align] < -0.5
+        if al and not self.prev_align:
+            self.pub_align.publish(Bool(data=True))
+            self.get_logger().info('LT — 라이다 위치 다시 맞춤 요청')
+        self.prev_align = al
 
         # ── 모드 토글 (LB 상승 엣지) ────────────────────────────────
         lb = btn(self.btn_tog)

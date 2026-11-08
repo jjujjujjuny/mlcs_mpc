@@ -21,11 +21,18 @@ class Track:
         d = np.genfromtxt(path, delimiter=',', names=True)
         self.s, self.x, self.y = d['s'], d['x'], d['y']
         self.heading, self.kappa = d['heading'], d['curvature']
+        # 지점별 벽 폭 (MPCC 경계). maptrack --walls 가 쓴다. 없으면 track_width 의 반씩.
+        self.has_walls = 'w_left' in d.dtype.names
+        if self.has_walls:
+            self.w_left, self.w_right = d['w_left'], d['w_right']
+        else:
+            self.w_left = self.w_right = d['track_width'] / 2.0
         close = math.hypot(self.x[0] - self.x[-1], self.y[0] - self.y[-1])
         self.length = float(self.s[-1] + close)
         if close < 1e-6:    # 저자 전처리는 끝점을 시작점과 겹쳐 둔다
             self.s, self.x, self.y = self.s[:-1], self.x[:-1], self.y[:-1]
             self.heading, self.kappa = self.heading[:-1], self.kappa[:-1]
+            self.w_left, self.w_right = self.w_left[:-1], self.w_right[:-1]
         self.n = len(self.s)
         self.last = None
         self.s_cont = None
@@ -33,6 +40,14 @@ class Track:
     def kappa_at(self, s):
         q = np.mod(s, self.length)
         return np.interp(q, np.r_[self.s, self.length], np.r_[self.kappa, self.kappa[0]])
+
+    def bounds_at(self, s, margin):
+        """n 의 [하한, 상한] = [-(오른쪽 폭 - margin), 왼쪽 폭 - margin]. n 은 왼쪽 +."""
+        q = np.mod(s, self.length)
+        S = np.r_[self.s, self.length]
+        wl = np.interp(q, S, np.r_[self.w_left, self.w_left[0]])
+        wr = np.interp(q, S, np.r_[self.w_right, self.w_right[0]])
+        return -(wr - margin), wl - margin
 
     def _nearest(self, x, y):
         if self.last is None:

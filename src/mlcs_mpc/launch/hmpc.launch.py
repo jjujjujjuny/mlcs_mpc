@@ -20,16 +20,40 @@ def generate_launch_description():
 
     def _nodes(context, *_a, **_k):
         bench = LaunchConfiguration('bench').perform(context).lower() in ('1', 'true', 'yes')
+        over = {'bench': bench, 'require_enable': True}
+        track = LaunchConfiguration('track_csv').perform(context).strip()
+        if track:       # 비우면 hmpc.yaml 을 따른다
+            over['track_csv'] = track
+        extra = LaunchConfiguration('extra_params').perform(context).strip()
+        vmax = LaunchConfiguration('v_max').perform(context).strip()
+        if vmax:
+            over['v_max'] = float(vmax)
+        src = LaunchConfiguration('source').perform(context).strip()
+        if src == 'lidar':
+            # require_ready: RViz 로 시작 위치를 찍기 전(relocalize)에는 출발하지 않는다
+            bridge = Node(package='mlcs_mpc', executable='lidar_bridge', name='lidar_bridge',
+                          output='screen', parameters=[{'require_ready': True}])
+        else:
+            bridge = Node(package='mlcs_mpc', executable='mocap_bridge', name='mocap_bridge',
+                          output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')])
         return [
-            Node(package='mlcs_mpc', executable='mocap_bridge', name='mocap_bridge',
-                 output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')]),
+            bridge,
             Node(package='mlcs_mpc', executable='hmpc_node', name='hmpc_node',
-                 output='screen', parameters=[os.path.join(pkg, 'config', 'hmpc.yaml'),
-                                              {'bench': bench, 'require_enable': True}]),
+                 output='screen',
+                 parameters=[os.path.join(pkg, 'config', 'hmpc.yaml')]
+                 + ([extra] if extra else []) + [over]),
         ]
 
     return LaunchDescription([
         DeclareLaunchArgument('bench', default_value='true',
                               description='true 면 속도 0. 거치대 확인용'),
+        DeclareLaunchArgument('source', default_value='mocap',
+                              description='위치 출처: mocap | lidar (Cartographer /tracked_pose)'),
+        DeclareLaunchArgument('extra_params', default_value='',
+                              description='hmpc.yaml 뒤에 덮어쓸 파라미터 파일 (race.sh 가 쓴다)'),
+        DeclareLaunchArgument('v_max', default_value='',
+                              description='속도 상한 m/s. 비우면 hmpc.yaml'),
+        DeclareLaunchArgument('track_csv', default_value='',
+                              description='prep 형식 트랙 (절대경로). 비우면 hmpc.yaml'),
         OpaqueFunction(function=_nodes),
     ])

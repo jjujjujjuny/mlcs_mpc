@@ -104,8 +104,8 @@ class Worker:
             pass
         self.alive = False
 
-    def send(self, rid, cmd, x, kappa):
-        data = np.concatenate([[rid, cmd], x, kappa]).tobytes()
+    def send(self, rid, cmd, x, kappa, n_lo, n_hi):
+        data = np.concatenate([[rid, cmd], x, kappa, n_lo, n_hi]).tobytes()
         return os.write(self.to_child, data) == len(data)
 
     def kill(self):
@@ -140,6 +140,13 @@ class HmpcNode(Node):
         d('rk_steps', 4)
         d('steering_tau', 0.13)
         d('wheel_speed_tau', 0.0461)
+        d('track_hard', True)
+        d('track_width', 0.12)
+        d('track_slack', 1000.0)
+        # ★ MPCC 경계. walls = 트랙 파일의 지점별 벽 폭 − wall_margin (선은 좌표계일 뿐, MPC 가 선을 고른다).
+        #   fixed = 선에서 ±track_width (선을 따라가게 묶는다. 예전 방식)
+        d('track_bounds', 'walls')
+        d('wall_margin', 0.22)      # 차 반폭 0.15 + 여유. CoG 기준이라 차가 비스듬하면 모서리가 더 나간다
         d('control_rate', 30.0)
         d('solve_timeout', 0.15)
         d('restart_timeout', 0.5)
@@ -191,12 +198,30 @@ class HmpcNode(Node):
         self.require_enable = bool(gp('require_enable'))
 
         self.track = Track(rel(gp('track_csv')))
+        self.track_width = float(gp('track_width'))
+        self.wall_margin = float(gp('wall_margin'))
+        mode = str(gp('track_bounds'))
+        if mode not in ('walls', 'fixed'):
+            raise ValueError(f'track_bounds 는 walls 또는 fixed: {mode}')
+        self.walls = mode == 'walls'
+        if self.walls:
+            lo, hi = self.track.bounds_at(self.track.s, self.wall_margin)
+            self.get_logger().info(
+                f'경계: 벽 (MPCC) — 여유 {self.wall_margin:.2f} m, n ∈ [{lo.max():+.2f}~{lo.min():+.2f}, '
+                f'{hi.min():+.2f}~{hi.max():+.2f}] m'
+                + ('' if self.track.has_walls else '  ★ 트랙 파일에 w_left/w_right 가 없어 track_width/2 사용'))
+            if (hi - lo).min() < 0.05:
+                self.get_logger().warn(f'벽 폭이 여유보다 좁은 곳이 있습니다 (최소 {(hi - lo).min():.2f} m)')
+        else:
+            self.get_logger().info(f'경계: 선에서 ±{self.track_width:.2f} m (fixed)')
         params = list(gp('vehicle_params')) + list(gp('tire_front')) + list(gp('tire_rear'))
         self.worker_args = dict(
             python=gp('worker_python'), script=rel(gp('worker_script')),
             config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), steering_tau=float(gp('steering_tau')),
                         wheel_speed_tau=float(gp('wheel_speed_tau')),
-                        mass=float(gp('mass')), v_max=self.v_max,
+                        track_hard=bool(gp('track_hard')), track_width=float(gp('track_width')),
+                        track_slack=float(gp('track_slack')),
+                        mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
                         max_steer=self.map_act[-1], params=params, core=int(gp('solver_core'))),
             extra=[a for a in gp('worker_extra_args') if a], N=self.N)
         self.log_file = open(gp('worker_log'), 'ab')
@@ -224,6 +249,8 @@ class HmpcNode(Node):
         self.create_subscription(Bool, '/mocap/valid', self._valid_cb, 10)
         self.create_subscription(Bool, '/mpc/enabled', self._enable_cb, LATCHED)
         self.create_subscription(Bool, '/mpc/manual', self._manual_cb, LATCHED)
+        # 조이스틱 B = 출발. 래치하지 않는다 — 지난번 누름이 재기동 때 남아 혼자 출발하면 안 된다.
+        self.create_subscription(Bool, '/mpc/go', self._go_cb, 10)
         self.create_subscription(VescStateStamped, '/sensors/core', self._vesc_cb, 10)
         self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.solve_pub = self.create_publisher(Float32, '/mpc/solve_time', 1)
@@ -273,6 +300,20 @@ class HmpcNode(Node):
                 self.fault = None
                 self.bad = 0
 
+    def _go_cb(self, m):
+        """B 버튼. /mpc/enabled=true 와 같고, 누를 때마다 고장·mocap 래치도 푼다."""
+        if not m.data:
+            return
+        with self.lock:
+            if not self.enabled:
+                self.get_logger().info('B — 출발')
+            self.enabled = True
+            self.mocap_lost = False
+            if self.fault:
+                self.get_logger().info(f'B — 고장 래치 해제: {self.fault}')
+                self.fault = None
+                self.bad = 0
+
     # ── 워커 ─────────────────────────────────────────────────────────
     def _start_worker(self):
         self.worker = Worker(on_reply=self._reply_cb, log=self.log_file, **self.worker_args)
@@ -285,7 +326,7 @@ class HmpcNode(Node):
             self.running = False
             old = self.worker
             self.worker = None
-        self.get_logger().error(f'✗ 솔버 고장: {why} — 속도 0. /mpc/enabled false→true 로 재개')
+        self.get_logger().error(f'✗ 솔버 고장: {why} — 속도 0. 조이스틱 B 로 재개')
         self._publish(0.0, 0.0)
 
         def replace():
@@ -344,7 +385,7 @@ class HmpcNode(Node):
                 self.mocap_lost = True
             return mocap
         if self.mocap_lost:
-            return 'mocap 불량 뒤 대기 — LB 두 번 또는 go 다시'
+            return 'mocap 불량 뒤 대기 — LB 두 번 또는 B'
         if self.t_vesc is None or now - self.t_vesc > self.vesc_timeout:
             return 'VESC 끊김'
         if self.twist[0] < self.reverse_limit:
@@ -352,7 +393,7 @@ class HmpcNode(Node):
         if self.manual:
             return '수동 조종 중'
         if not self.enabled:
-            return '출발 대기'
+            return '출발 대기 — 조이스틱 B'
         return None
 
     # ── 주기 루프 — 어떤 경우에도 막히면 안 된다 ──────────────────────
@@ -391,13 +432,18 @@ class HmpcNode(Node):
             else:
                 s = x[0] + x[3] * self.dt * np.arange(self.N + 1)
             kappa = self.track.kappa_at(s)
+            if self.walls:
+                n_lo, n_hi = self.track.bounds_at(s, self.wall_margin)
+            else:
+                n_lo = np.full(self.N + 1, -self.track_width)
+                n_hi = -n_lo
             self.rid += 1.0
             cmd = 0.0 if self.running else 1.0
             # 저속에서는 풀이가 110 ms 까지 간다 (실측). 느리니 더 기다려도 멀리 못 간다.
             slow = self.twist[0] < self.slow_speed
             self.limit = self.restart_timeout if not self.running or slow else self.solve_timeout
             try:
-                ok = self.worker.send(self.rid, cmd, x, kappa)
+                ok = self.worker.send(self.rid, cmd, x, kappa, n_lo, n_hi)
             except OSError:
                 ok = False
             if not ok:

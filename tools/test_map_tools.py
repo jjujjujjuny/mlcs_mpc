@@ -288,6 +288,21 @@ check(lines[0].startswith('# x,y') and lines[1].startswith('# note'),
 check(np.allclose([float(v) for v in lines[2].split(',')],
                   mma.rot(th) @ [1.0, 2.0] + t, atol=1e-5), '머리줄 없는 x,y')
 
+print('\n⑨ 최소 곡률선 (--mincurv)')
+yml = write_map('mc', half=0.8)
+m, ring, cl = centerline(yml)
+bl = tfm.wall_mask(m, 0.01)
+mc = tfm.min_curvature_line(m, bl, cl, 0.40, 2.0)
+k0 = np.abs(tfm.signed_curvature(cl, 0.05))
+k1 = np.abs(tfm.signed_curvature(mc, 0.05))
+cl0, cl1 = tfm.clearance(m, bl, cl), tfm.clearance(m, bl, mc)
+check((k1 ** 2).sum() < 0.8 * (k0 ** 2).sum(), '곡률 제곱합이 가운데 선보다 작다',
+      f'{(k1**2).sum():.1f} < {(k0**2).sum():.1f}')
+check(cl1.min() >= 0.40 - 0.05, '벽 여유 목표를 지킨다 (격자 5 cm 안)', f'{cl1.min():.3f} m')
+L1 = np.sum(np.linalg.norm(np.diff(np.vstack([mc, mc[:1]]), axis=0), axis=1))
+L0 = np.sum(np.linalg.norm(np.diff(np.vstack([cl, cl[:1]]), axis=0), axis=1))
+check(L1 < L0, '안쪽으로 깎아 더 짧다', f'{L1:.2f} < {L0:.2f} m')
+
 print()
 if FAIL:
     print(f'✗ {len(FAIL)}건 실패: {", ".join(FAIL)}')

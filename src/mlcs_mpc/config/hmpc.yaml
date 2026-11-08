@@ -43,6 +43,22 @@
     #   0.66 과 0.2~0.35 조합은 곡선에서 QP 실패(status 4)가 대부분이라 못 쓴다 (2026-11-05).
     #   그래서 모델은 실제보다 속도가 훨씬 빨리 붙는다고 믿는다. v_max 를 올리기 전에 볼 것.
     steering_tau: 0.13
+    # 트랙 경계. true 면 |n| ≤ track_width 를 상태 경계(하드)로 둔다. false 면 저자처럼 배리어 비용.
+    #   ★ 2026-11-08 하드로 바꿈. 라이다 맵 트랙은 최소 곡률선이라 벽까지 여유가 0.25 m 쯤뿐이라,
+    #     선에서 ±0.25 m 까지 벗어나던 배리어로는 벽에 닿을 수 있다.
+    #   지금 |n| 이 이미 넘었으면 10 스테이지 동안 경계를 그 값에서 줄인다 (offline_ocp.hard_bounds).
+    #   바꾸면 생성 코드를 다시 만든다 (약 20초, 자동).
+    track_hard: true
+    # ★ 2026-11-08 MPCC 로 되돌림: walls = 트랙 파일의 지점별 벽 폭(w_left/w_right) − wall_margin 을 경계로.
+    #   선은 좌표계(κ, s, n)일 뿐이고 MPC 가 벽 안에서 스스로 선을 고른다 (maptrack --walls 가 폭을 쓴다).
+    #   fixed = 선에서 ±track_width (선에 묶는다. 위치추정이 나쁠 때 썼던 방식)
+    track_bounds: walls
+    wall_margin: 0.22
+    track_width: 0.12
+    # 경계를 넘는 양에 거는 L1 무게. 0 이면 순수 하드인데, 차가 폭 안에 못 머무는 순간 QP 해가
+    #   없어져 status 4 가 된다 (1108_3 트랙, ±0.12 에서 1000 회 중 940). 1000 이면 전부 status 0,
+    #   |n| 최대 0.136 m (1108_3) / 0.121 m (s_track) — 지킬 수 있으면 하드처럼 지킨다.
+    track_slack: 1000.0
     wheel_speed_tau: 0.0461
     control_rate: 30.0
     track_csv: lab_map/data/tracks/s_track/prep_s_track.csv   # 저장소 기준 경로

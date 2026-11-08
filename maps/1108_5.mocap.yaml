@@ -1,0 +1,32 @@
+# map_mocap_align.py fit 결과
+#   p_mocap = R(yaw)·p_map + [x, y]   (map_to_mocap)
+#   lidar_base_link_error: Cartographer base_link 이 mocap base_link 에서 벗어난 양 (차체 좌표, 0 에 가까워야 한다)
+#   time_lag_s: + 면 라이다 자세가 mocap 보다 늦게 찍힌다
+map_to_mocap:
+  x: 1.090716328644521
+  y: -0.7140233062120913
+  yaw: 1.6689567177482239
+lidar_base_link_error:
+  x: 0.0243574168957585
+  y: 0.004546439603893938
+  yaw: -0.019332178755747394
+  solved_position: true
+time_lag_s: 0.027025199937762246
+fit:
+  pairs: 3845
+  used: 3845
+  duration_s: 57.73161005973816
+  pos_rmse_m: 0.03609935824316677
+  pos_p95_m: 0.06845995013829408
+  yaw_rmse_rad: 0.021906842695252757
+  yaw_coverage: 0.6715088579200204
+source:
+  log: /home/mlcs/mlcs_data/align/1108_5_20261108_140140.csv
+  mocap_offsets:
+    topic: /car/pose
+    off_x: 0.0
+    off_y: -0.034
+    yaw_off: 0.062
+  created: '2026-11-08T14:02:42'
+static_tf: ros2 run tf2_ros static_transform_publisher --x 1.0907 --y -0.7140 --yaw
+  1.66896 --frame-id mocap --child-frame-id map

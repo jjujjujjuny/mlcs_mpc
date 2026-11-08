@@ -16,7 +16,8 @@ ocp_worker.py — HyperMPC OCP 를 풀기만 하는 프로세스. hmpc_node 가 
   acados 가 C 에서 stdout 에 직접 쓰므로 stdout 은 통신에 쓸 수 없다.
 
     시작  → b'R' 한 바이트
-    요청  [id, cmd, x(9), kappa(N+1)]         cmd 1 이면 초기 추측을 x 로 다시 깐다
+    요청  [id, cmd, x(9), kappa(N+1), n_lo(N+1), n_hi(N+1)]   cmd 1 이면 초기 추측을 x 로 다시 깐다
+          n_lo/n_hi: 스테이지별 벽 경계 (MPCC). track_hard 일 때만 쓴다
     응답  [id, status, ms, u(2), x1(9), s(N+1)]
 
   파이프가 닫히면 (노드가 죽으면) 끝난다.
@@ -62,7 +63,14 @@ def main():
         os.sched_setaffinity(0, {c['core']})
 
     N = c['N']
-    cfg = oo.make_cfg('author', c['rk_steps'], c['steering_tau'], c['wheel_speed_tau'])
+    cfg = oo.make_cfg('author', c['rk_steps'], c['steering_tau'], c['wheel_speed_tau'],
+                      track_hard=c.get('track_hard', False),
+                      track_width=c.get('track_width', 0.25),
+                      track_slack=c.get('track_slack', 0.0))
+    # ★ 마찰은 상태 x[6] 로 들어간다 (생성 코드 밖). 예전에는 노드 값을 안 받고 make_cfg 기본값으로
+    #   덮어써서 hmpc.yaml 의 friction 이 적용되지 않았다 (2026-11-08 발견).
+    fric = float(c.get('friction', cfg['friction']))
+    print(f'friction {fric}', flush=True)
     dyn_fun, _ = oo.load_naive_dynamics(a.hypermpc, guard=not a.no_guard)
     solver = oo.make_solver(dyn_fun, N, c['dt'], cfg, a.build_dir, guard=not a.no_guard)
     params = np.array(c['params'], dtype=float)
@@ -86,31 +94,36 @@ def main():
     # 첫 풀이는 메모리를 처음 건드려 느리다. 감시 제한에 걸리지 않게 준비 전에 한 번 푼다.
     # 슬립을 0 이 아니게 둔다.
     x_dry = np.zeros(9)
-    x_dry[3], x_dry[6], x_dry[7] = 1.0, cfg['friction'], 1.02
+    x_dry[3], x_dry[6], x_dry[7] = 1.0, fric, 1.02
     for _ in range(3):
         restart(x_dry)
         for k in range(N + 1):
             solver.set(k, 'p', np.concatenate([params, [0.0]]))
         solver.set(0, 'lbx', x_dry)
         solver.set(0, 'ubx', x_dry)
+        if cfg['track_hard']:
+            oo.set_hard_bounds(solver, N, cfg['track_width'], 0.0)
         solver.solve()
 
-    req_len = 8 * (2 + 9 + N + 1)
+    req_len = 8 * (2 + 9 + 3 * (N + 1))
     os.write(a.fd_out, b'R')
     while True:
         raw = read_exact(a.fd_in, req_len)
         if raw is None:
             return 0
         req = np.frombuffer(raw, dtype=np.float64)
-        rid, cmd, x, kappa = req[0], req[1], req[2:11], req[11:]
+        rid, cmd, x = req[0], req[1], req[2:11]
+        kappa, n_lo, n_hi = req[11:].reshape(3, N + 1)
         x = x.copy()
-        x[6] = cfg['friction']
+        x[6] = fric
         if cmd == 1.0:
             restart(x)
         for k in range(N + 1):
             solver.set(k, 'p', np.concatenate([params, [kappa[k]]]))
         solver.set(0, 'lbx', x)
         solver.set(0, 'ubx', x)
+        if cfg['track_hard']:
+            oo.set_wall_bounds(solver, N, n_lo, n_hi, x[1])
         t0 = time.perf_counter()
         st = solver.solve()
         ms = (time.perf_counter() - t0) * 1000
