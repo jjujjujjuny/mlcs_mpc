@@ -29,7 +29,7 @@ actuator_id.py — 속도 명령 → 바퀴 속도 응답을 잰다. MPC 의 바
 
 ■ 주의
 
-  · 충돌은 바퀴가 갑자기 멈춰 감속이 크게 나온다. 바퀴 감속 8 m/s² 넘는 곳 앞뒤 0.5 s 를 뺀다.
+  · 충돌은 바퀴가 갑자기 멈춰 감속이 크게 나온다. 감속 명령이 아닌데 바퀴 감속이 8 m/s² 넘는 곳 앞뒤 0.5 s 를 뺀다.
   · 후진(명령 < 0)과 정지 근처(바퀴 < 0.3 m/s)는 뺀다.
   · 바퀴 속도는 motor_rpm / erpm_gain — 바퀴 '선속도' 다 (prep_hpm_dataset 과 같음).
 """
@@ -55,11 +55,15 @@ def load(path, gain):
     return tg - tg[0], u, w, iq
 
 
-def crash_mask(w):
-    """바퀴 감속이 8 m/s² 를 넘는 곳 앞뒤 0.5 s."""
+def crash_mask(w, u):
+    """명령이 (직전 0.5 s) 바퀴보다 낮지 않은데 바퀴 감속이 8 m/s² 를 넘는 곳 앞뒤 0.5 s.
+    VESC 제동을 켠 뒤에는 정지 명령에서 바퀴가 −10~−50 m/s² 로 서므로 (11-08 저녁)
+    감속 명령 중인 곳은 충돌로 보지 않는다."""
     a = np.gradient(w, DT)
     k = int(0.5 / DT)
-    return np.convolve((a < -8.0).astype(int), np.ones(2 * k + 1), 'same') > 0
+    w_prev = pd.Series(w).rolling(k + 1, min_periods=1).max().to_numpy()   # 직전 0.5 s 최대
+    hit = (a < -8.0) & (u > w_prev - 0.3)
+    return np.convolve(hit.astype(int), np.ones(2 * k + 1), 'same') > 0
 
 
 def steady(t, u, w, ok):
@@ -128,7 +132,7 @@ def main():
     logs = []
     for f in a.logs:
         t, u, w, iq = load(f, a.erpm_gain)
-        cm = crash_mask(w)
+        cm = crash_mask(w, u)
         ok = (u >= 0) & ~cm
         logs.append((t, u, w, iq, ok))
         print(f'{os.path.basename(f)}: {t[-1]:.0f} s, 바퀴 최대 {w.max():.2f} m/s, '
