@@ -29,6 +29,7 @@
 #     ./drive.sh checkstate [초]     기록 전에 /mpc/state 가 멀쩡한지 점검
 #     ./drive.sh cleanlog [로그...]  주행 로그에서 mocap 불량 구간 제거 → clean/
 #     ./drive.sh hpmdata             정리된 로그 → HyperPM 학습 형식 (~/mlcs_data/hpm)
+#     ./drive.sh actuator [로그...]  속도 명령 → 바퀴 응답. MPC 의 ws_acc_max / ws_dec_max 값
 #     ./drive.sh cal <모드> [값]     캘리브레이션 (neutral|speed|steer)
 #     ./drive.sh log [태그]          joy --log 과 같음 (예전 이름)
 #     ./drive.sh mocap               mocap 위치추정만 (연동 확인용)
@@ -937,6 +938,19 @@ cleanlog)
     # 학습 전에 mocap 끊김·튐 구간을 잘라낸다 (tools/clean_drive_log.py)
     # ROS 도 차량도 필요 없다. 기록 중인 로그는 지정하지 말 것.
     python3 "$SCRIPT_DIR/tools/clean_drive_log.py" "$@"
+    ;;
+
+actuator)
+    # ./drive.sh actuator [로그...]   속도 명령 → 바퀴 응답 (tools/actuator_id.py)
+    #   일정 속도 오차(VESC Ki), 감속·가속 때 바퀴 가속도와 Iq, MPC 에 넣을 ws_acc_max / ws_dec_max
+    #   로그를 안 주면 ~/mlcs_data 의 가장 최근 드라이브 로그 3개
+    if [ $# -eq 0 ]; then
+        mapfile -t _L < <(ls -t "${MLCS_DATA:-$HOME/mlcs_data}"/drive_*.csv 2>/dev/null | grep -v _clean | head -3)
+        [ ${#_L[@]} -gt 0 ] || { err "드라이브 로그가 없습니다 (~/mlcs_data/drive_*.csv)"; exit 1; }
+        set -- "${_L[@]}"
+        log "가장 최근 로그 ${#_L[@]}개: $(for f in "${_L[@]}"; do basename "$f"; done | tr '\n' ' ')"
+    fi
+    python3 "$SCRIPT_DIR/tools/actuator_id.py" "$@"
     ;;
 
 hpmdata)

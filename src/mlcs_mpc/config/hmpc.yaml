@@ -60,6 +60,13 @@
     #   |n| 최대 0.136 m (1108_3) / 0.121 m (s_track) — 지킬 수 있으면 하드처럼 지킨다.
     track_slack: 1000.0
     wheel_speed_tau: 0.0461
+    # ★ 바퀴 가속도 한계 m/s² (0 = 끔). 바꾸면 생성 코드를 다시 만든다.
+    #   tau 0.046 이면 MPC 는 바퀴가 바로 명령을 따라가 언제든 설 수 있다고 믿는다 → 늦게 감속해
+    #   앞 벽에 박았다 (2026-11-08). tau 를 올리면 QP 가 실패하므로 바퀴 가속도만 묶는다
+    #   (offline_ocp 의 선형 제약). 값은 tools/actuator_id.py 로 잰다.
+    #   11-08 race 로그 (VESC 제동 꺼짐): 가속 2.0 / 감속 1.5 → 바퀴 2 s 예측 RMSE 0.54 → 0.16 m/s
+    ws_acc_max: 0.0
+    ws_dec_max: 0.0
     control_rate: 30.0
     track_csv: lab_map/data/tracks/s_track/prep_s_track.csv   # 저장소 기준 경로
 

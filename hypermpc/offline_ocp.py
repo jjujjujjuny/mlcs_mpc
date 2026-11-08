@@ -269,6 +269,31 @@ def build_ocp(dyn_fun, N, dt, cfg):
             ocp.cost.zl_e = ocp.cost.zu_e = np.array([z])
             ocp.cost.Zl_e = ocp.cost.Zu_e = np.array([z * 0.1])
 
+    if cfg.get('ws_acc_max', 0.0) > 0 or cfg.get('ws_dec_max', 0.0) > 0:
+        # ★ 바퀴 가속도 한계 (2026-11-08). tau 0.046 이면 모델은 바퀴가 바로 명령을 따라가서
+        #   언제든 설 수 있다고 믿는다. 실제는 감속 ~1.5 m/s² (제동이 꺼져 있던 race 로그,
+        #   tools/actuator_id.py). tau 를 0.66 으로 올리면 QP 가 실패하므로, tau 는 두고
+        #   ws' = (ws_ref − ws)/tau 를 [−ws_dec_max, ws_acc_max] 로 묶는다:
+        #       −a_dec·tau ≤ ws_ref − ws ≤ a_acc·tau        (스테이지 0..N-1, 선형)
+        #   현재 ws 가 v_max 보다 한참 높으면 ubu 와 겹쳐 해가 없어질 수 있어 슬랙을 둔다.
+        tau = cfg['wheel_speed_tau']
+        big = 1e3
+        a_acc = cfg['ws_acc_max'] if cfg.get('ws_acc_max', 0.0) > 0 else big
+        a_dec = cfg['ws_dec_max'] if cfg.get('ws_dec_max', 0.0) > 0 else big
+        C = np.zeros((1, 9))
+        C[0, 7] = -1.0
+        ocp.constraints.C = C
+        ocp.constraints.D = np.array([[1.0, 0.0]])
+        ocp.constraints.lg = np.array([-a_dec * tau])
+        ocp.constraints.ug = np.array([+a_acc * tau])
+        zg = cfg.get('ws_rate_slack', 1000.0)
+        ocp.constraints.idxsg = np.array([0])
+        # 슬랙 순서는 [bx, g] — 트랙 경계 슬랙이 있으면 그 뒤에 붙인다
+        zl = list(ocp.cost.zl) if len(ocp.constraints.idxsbx) else []
+        Zl = list(ocp.cost.Zl) if len(ocp.constraints.idxsbx) else []
+        ocp.cost.zl = ocp.cost.zu = np.array(zl + [zg])
+        ocp.cost.Zl = ocp.cost.Zu = np.array(Zl + [zg * 0.1])
+
     ocp.parameter_values = np.concatenate([default_params(), [0.0]])
 
     # 솔버 — 원본과 같은 조합
@@ -286,7 +311,7 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
 def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
              wheel_speed_tau=0.046122448979591835, track_hard=False, track_width=0.25,
-             track_slack=0.0):
+             track_slack=0.0, ws_acc_max=0.0, ws_dec_max=0.0):
     """OCP 설정. 기본값은 저자 config_car.yaml 이다. 우리 차 시정수는 config/hmpc.yaml."""
     return dict(
         wheel_speed_tau=wheel_speed_tau,
@@ -298,6 +323,8 @@ def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
         track_hard=track_hard,
         # > 0 이면 경계 넘는 양에 이 L1 무게 (정확 페널티). 0 이면 순수 하드
         track_slack=track_slack,
+        # > 0 이면 바퀴 가속도 한계 m/s² (0 = 끔, 저자). tools/actuator_id.py 로 잰다
+        ws_acc_max=ws_acc_max, ws_dec_max=ws_dec_max, ws_rate_slack=1000.0,
         q_progress=1.0,
         min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
         # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
@@ -313,7 +340,8 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     """생성 코드가 있으면 다시 쓰고, 없으면 빌드한다."""
     tag = (f'N{N}_{cfg["cost"]}_{"guard" if guard else "noguard"}_rk{cfg["rk_steps"]}'
            + ('_hard' if cfg.get('track_hard') else '')
-           + ('_slack' if cfg.get('track_hard') and cfg.get('track_slack', 0) > 0 else ''))
+           + ('_slack' if cfg.get('track_hard') and cfg.get('track_slack', 0) > 0 else '')
+           + ('_wsrate' if cfg.get('ws_acc_max', 0) > 0 or cfg.get('ws_dec_max', 0) > 0 else ''))
     build = os.path.join(build_dir, tag)
     os.makedirs(build, exist_ok=True)
     ocp = build_ocp(dyn_fun, N, dt, cfg)
@@ -335,19 +363,36 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     return solver
 
 
-def make_plant(dyn_fun, cfg, dt, substeps=16):
+def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None):
     """OCP 와 같은 연속 모델을 RK4 로 dt 만큼 적분하는 '차'. → step(x, u, p) → x_next.
 
     ★ 폐루프 시험에서 solver.get(1, 'x') 를 다음 상태로 쓰면 안 된다. SQP_RTI 는 한 번만 반복해서
       그 값이 동역학을 정확히 만족하지 않는다 (1108_6 시험에서 vx 0.7 인데 s 가 단계당 0.003 m).
+
+    ws_tau / ws_acc / ws_dec 를 주면 '차' 의 바퀴만 실제처럼 바꾼다 (MPC 는 그대로). 실제 차의
+    느린 바퀴 응답에서 MPC 가 어떻게 되는지 보려고 쓴다 (tools/actuator_id.py 값).
     """
-    build_ocp(dyn_fun, 2, dt, cfg)          # 식만 만든다 (빌드 안 함)
+    pc = dict(cfg)
+    if ws_tau is not None:
+        pc['wheel_speed_tau'] = ws_tau
+    pc['ws_acc_max'] = pc['ws_dec_max'] = 0.0   # 식만 쓰므로 제약은 필요 없다
+    build_ocp(dyn_fun, 2, dt, pc)           # 식만 만든다 (빌드 안 함)
     f = build_ocp.last_f
     h = dt / substeps
+    tau = pc['wheel_speed_tau']
 
-    def step(x, u, p):
+    def actuate(x, u):
+        """바퀴 가속도 한계를 명령에 넣는다: ws' = clip((u−ws)/tau) 가 되도록 u 를 바꾼다."""
+        if ws_acc is None and ws_dec is None:
+            return u
+        rate = (u[0] - x[7]) / tau
+        rate = np.clip(rate, -(ws_dec or np.inf), ws_acc or np.inf)
+        return np.array([x[7] + rate * tau, u[1]])
+
+    def step(x, u0, p):
         x = np.asarray(x, float)
         for _ in range(substeps):
+            u = actuate(x, u0)
             k1 = np.array(f(x, u, p)).ravel()
             k2 = np.array(f(x + h / 2 * k1, u, p)).ravel()
             k3 = np.array(f(x + h / 2 * k2, u, p)).ravel()
@@ -534,6 +579,13 @@ def main():
     ap.add_argument('--plant', action='store_true',
                     help='다음 상태를 솔버 예측 대신 같은 모델의 RK4 적분으로 (진짜 폐루프)')
     ap.add_argument('--trace', default=None, help='--walls: 상태·입력 기록 .npy')
+    ap.add_argument('--ws-acc-max', type=float, default=0.0,
+                    help='MPC 바퀴 가속도 한계 m/s² (0 = 끔). tools/actuator_id.py')
+    ap.add_argument('--ws-dec-max', type=float, default=0.0, help='MPC 바퀴 감속도 한계 m/s² (0 = 끔)')
+    ap.add_argument('--plant-ws-tau', type=float, default=None,
+                    help='--plant: 차의 바퀴 시정수 (실제처럼). 없으면 MPC 와 같음')
+    ap.add_argument('--plant-ws-acc', type=float, default=None, help='--plant: 차의 바퀴 가속도 한계')
+    ap.add_argument('--plant-ws-dec', type=float, default=None, help='--plant: 차의 바퀴 감속도 한계')
     ap.add_argument('--steering-tau', type=float, default=0.0436734693877551)
     ap.add_argument('--wheel-speed-tau', type=float, default=0.046122448979591835)
     ap.add_argument('--scenario', nargs='+',
@@ -555,7 +607,8 @@ def main():
     cfg = make_cfg(args.cost, args.rk_steps, args.steering_tau, args.wheel_speed_tau,
                    track_hard=args.track_hard is not None,
                    track_width=args.track_hard if args.track_hard is not None else 0.25,
-                   track_slack=args.track_slack)
+                   track_slack=args.track_slack,
+                   ws_acc_max=args.ws_acc_max, ws_dec_max=args.ws_dec_max)
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
@@ -598,7 +651,9 @@ def main():
             print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
             continue
         walls = track_walls(args.track, args.walls) if (name == 'track' and args.walls is not None) else None
-        plant = make_plant(dyn_fun, cfg, args.dt) if args.plant else None
+        plant = (make_plant(dyn_fun, cfg, args.dt, ws_tau=args.plant_ws_tau,
+                            ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec)
+                 if args.plant else None)
         run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant)
     return 0
 

@@ -66,7 +66,9 @@ def main():
     cfg = oo.make_cfg('author', c['rk_steps'], c['steering_tau'], c['wheel_speed_tau'],
                       track_hard=c.get('track_hard', False),
                       track_width=c.get('track_width', 0.25),
-                      track_slack=c.get('track_slack', 0.0))
+                      track_slack=c.get('track_slack', 0.0),
+                      ws_acc_max=c.get('ws_acc_max', 0.0),
+                      ws_dec_max=c.get('ws_dec_max', 0.0))
     # ★ 마찰은 상태 x[6] 로 들어간다 (생성 코드 밖). 예전에는 노드 값을 안 받고 make_cfg 기본값으로
     #   덮어써서 hmpc.yaml 의 friction 이 적용되지 않았다 (2026-11-08 발견).
     fric = float(c.get('friction', cfg['friction']))

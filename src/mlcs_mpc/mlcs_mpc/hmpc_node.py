@@ -140,6 +140,9 @@ class HmpcNode(Node):
         d('rk_steps', 4)
         d('steering_tau', 0.13)
         d('wheel_speed_tau', 0.0461)
+        # 바퀴 가속도 한계 m/s² (0 = 끔). tau 는 작게 두고 이것으로 '바로 못 선다' 를 알려 준다
+        d('ws_acc_max', 0.0)
+        d('ws_dec_max', 0.0)
         d('track_hard', True)
         d('track_width', 0.12)
         d('track_slack', 1000.0)
@@ -219,6 +222,7 @@ class HmpcNode(Node):
             python=gp('worker_python'), script=rel(gp('worker_script')),
             config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), steering_tau=float(gp('steering_tau')),
                         wheel_speed_tau=float(gp('wheel_speed_tau')),
+                        ws_acc_max=float(gp('ws_acc_max')), ws_dec_max=float(gp('ws_dec_max')),
                         track_hard=bool(gp('track_hard')), track_width=float(gp('track_width')),
                         track_slack=float(gp('track_slack')),
                         mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
