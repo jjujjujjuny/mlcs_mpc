@@ -492,7 +492,8 @@ def load_params(path):
     return np.array(d['vehicle_params'] + d['tire_front'] + d['tire_rear'], dtype=float)
 
 
-def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=None, plant=None):
+def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=None, plant=None,
+                 plant_friction=None):
     """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC)."""
     N = args.N
     wall_hist, s_hist, trace = [], [], []
@@ -521,7 +522,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         t1 = time.perf_counter()
         u0 = solver.get(0, 'u')
         if plant is not None:
-            x_next = plant(x, u0, np.concatenate([params, [kappa_of_s(x[0])]]))
+            xp = np.array(x, float)
+            if plant_friction is not None:      # 차만 다른 마찰 (MPC 는 x0 의 값을 믿는다)
+                xp[6] = plant_friction
+            x_next = plant(xp, u0, np.concatenate([params, [kappa_of_s(x[0])]]))
+            x_next[6] = x[6]
         else:
             x_next = solver.get(1, 'x')
         cycles.append((time.perf_counter() - t_cycle) * 1000)
@@ -580,6 +585,10 @@ def main():
     ap.add_argument('--walls', type=float, default=None, metavar='MARGIN',
                     help='track 시나리오: prep 의 w_left/w_right − MARGIN 을 지점별 경계로 (MPCC). '
                          '--track-hard 와 함께')
+    ap.add_argument('--friction', type=float, default=None,
+                    help='MPC 가 믿는 마찰 (상태 x[6]). 없으면 make_cfg 기본 0.41. 생성 코드와 무관')
+    ap.add_argument('--plant-friction', type=float, default=None,
+                    help='--plant: 차의 실제 마찰. 없으면 MPC 와 같음')
     ap.add_argument('--plant', action='store_true',
                     help='다음 상태를 솔버 예측 대신 같은 모델의 RK4 적분으로 (진짜 폐루프)')
     ap.add_argument('--trace', default=None, help='--walls: 상태·입력 기록 .npy')
@@ -658,7 +667,10 @@ def main():
         plant = (make_plant(dyn_fun, cfg, args.dt, ws_tau=args.plant_ws_tau,
                             ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec)
                  if args.plant else None)
-        run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant)
+        if args.friction is not None:
+            x0[6] = args.friction
+        run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant,
+                     plant_friction=args.plant_friction)
     return 0
 
 
