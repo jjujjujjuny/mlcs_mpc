@@ -492,11 +492,48 @@ def load_params(path):
     return np.array(d['vehicle_params'] + d['tire_front'] + d['tire_rear'], dtype=float)
 
 
+def make_opponent(track_csv, v, d, gap):
+    """--opponent: 트랙 선에서 d 만큼 옆을 v 로 도는 가상 상대 + hmpc_node 와 같은 opponent 로직."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../src/mlcs_mpc'))
+    from mlcs_mpc.hmpc_core import Track
+    from mlcs_mpc.opponent import Opponent
+    tr = Track(track_csv)
+    return dict(track=tr, logic=Opponent(tr), v=v, d=d, s=gap, modes={}, min_dist=np.inf,
+                hits=0, passes=0, last_ds=None)
+
+
+def _opp_cycle(o, i, dt, qs, x, lo, hi, v_max):
+    """가상 상대를 dt 만큼 움직이고 통로·속도 상한을 낸다. 거리 기록도 여기서."""
+    tr = o['track']
+    t = i * dt
+    for j in range(3):          # mocap 100 Hz 쯤
+        so = o['s'] + o['v'] * dt * (j + 1) / 3
+        h = float(np.interp(np.mod(so, tr.length), np.r_[tr.s, tr.length],
+                            np.unwrap(np.r_[tr.heading, tr.heading[0]])))
+        ox, oy = tr.xy(so, o['d'])
+        o['logic'].measure(t - dt + dt * (j + 1) / 3, float(ox), float(oy), h)
+    o['s'] += o['v'] * dt
+    s_now = np.r_[qs[1:], 2 * qs[-1] - qs[-2]] if i > 0 else qs     # node 와 같은 한 칸 당김
+    lo, hi, cap, mode = o['logic'].step(t, s_now, x[1], lo, hi, v_max, len(qs) - 1, dt)
+    o['modes'][mode] = o['modes'].get(mode, 0) + 1
+    ex, ey = tr.xy(x[0], x[1])
+    ox, oy = tr.xy(o['s'], o['d'])
+    o['min_dist'] = min(o['min_dist'], float(np.hypot(ex - ox, ey - oy)))
+    ds = (x[0] - o['s'] + tr.length / 2) % tr.length - tr.length / 2
+    if abs(ds) < 0.55 and abs(x[1] - o['d']) < 0.30:   # 차 길이·폭으로 본 겹침
+        o['hits'] += 1
+    if o['last_ds'] is not None and o['last_ds'] < 0 <= ds and abs(ds) < 1.0:
+        o['passes'] += 1
+    o['last_ds'] = ds
+    return lo, hi, cap
+
+
 def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=None, plant=None,
-                 plant_friction=None):
-    """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC)."""
+                 plant_friction=None, opp=None):
+    """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC). opp 면 가상 상대 (make_opponent)."""
     N = args.N
     wall_hist, s_hist, trace = [], [], []
+    v_top = args.v_max if args.v_max is not None else cfg['max_ws_ref']
     restart(solver, N, x0)
     x = x0.copy()
     times, cycles, status, n_hist = [], [], [], []
@@ -511,6 +548,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         solver.set(0, 'ubx', x)
         if cfg['track_hard'] and walls is not None:
             _, lo, hi = walls(qs)
+            if opp is not None:
+                lo, hi, cap = _opp_cycle(opp, i, args.dt, qs, x, lo, hi, v_top)
+                cap = np.full(N, v_top) if cap is None else cap
+                for k in range(N):
+                    solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.max_steer]))
             set_wall_bounds(solver, N, lo, hi, x[1])
             lo0, hi0 = walls(x[0])[1:]
             wall_hist.append((x[1] - lo0 - 1e-9 < 0) or (x[1] - hi0 > 1e-9))
@@ -560,6 +602,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             np.save(args.trace, np.array(trace))
     print(f'  마지막 상태 vx {x[3]:.3f}  vy {x[4]:.3f}  r {x[5]:.3f}  n {x[1]:.3f}  '
           f'ws {x[7]:.3f}  delta {x[8]:.3f}')
+    if opp is not None:
+        print(f'  상대 {opp["v"]:.2f} m/s, d {opp["d"]:+.2f}: 추월 {opp["passes"]}번, '
+              f'최소 중심 거리 {opp["min_dist"]:.2f} m, 겹침(충돌) {opp["hits"]} 주기, 모드 {opp["modes"]}')
 
 
 def main():
@@ -592,6 +637,10 @@ def main():
     ap.add_argument('--plant', action='store_true',
                     help='다음 상태를 솔버 예측 대신 같은 모델의 RK4 적분으로 (진짜 폐루프)')
     ap.add_argument('--trace', default=None, help='--walls: 상태·입력 기록 .npy')
+    ap.add_argument('--opponent', type=float, default=None, metavar='V',
+                    help='--walls 와 함께: 속도 V 로 도는 가상 상대 (추월·뒤따르기 시험). --v-max 도 줄 것')
+    ap.add_argument('--opp-d', type=float, default=0.0, help='가상 상대의 선에서 횡위치 m (왼쪽 +)')
+    ap.add_argument('--opp-gap', type=float, default=2.0, help='가상 상대가 앞서 출발하는 거리 m')
     ap.add_argument('--ws-acc-max', type=float, default=0.0,
                     help='MPC 바퀴 가속도 한계 m/s² (0 = 끔). tools/actuator_id.py')
     ap.add_argument('--ws-dec-max', type=float, default=0.0, help='MPC 바퀴 감속도 한계 m/s² (0 = 끔)')
@@ -669,8 +718,10 @@ def main():
                  if args.plant else None)
         if args.friction is not None:
             x0[6] = args.friction
+        opp = (make_opponent(args.track, args.opponent, args.opp_d, args.opp_gap)
+               if (walls is not None and args.opponent is not None) else None)
         run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant,
-                     plant_friction=args.plant_friction)
+                     plant_friction=args.plant_friction, opp=opp)
     return 0
 
 

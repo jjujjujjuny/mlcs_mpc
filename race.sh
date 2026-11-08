@@ -58,6 +58,8 @@ if source == 'lidar':
         err(f'라이다 주행 맵이 없습니다: maps/{mp}.pbstream')
     if '_mocap' in t:
         err(f'라이다 주행인데 mocap 프레임 트랙입니다: {t}')
+    if h.get('opponent_topic'):
+        print('echo "⚠ 라이다 주행에서 opponent_topic 을 켰습니다 — 상대 pose 가 map 좌표계가 아니면 통로가 엉뚱한 곳에 생깁니다" >&2')
 elif '_mocap' not in t:
     print('echo "⚠ mocap 주행인데 트랙 이름에 _mocap 이 없습니다 — 좌표계를 확인하세요" >&2')
 log = str(c.get('log') or '')

@@ -85,3 +85,25 @@
     vesc_timeout: 0.3
     # 부하 측정에서 33 ms 를 넘은 것은 코어를 빼앗겼을 때다. 솔버를 이 코어에 묶는다.
     solver_core: 5
+
+    # ── 상대 차 (추월·뒤따르기, mlcs_mpc/opponent.py) ──────────────────
+    # 비우면 끈다. mocap 이면 상대 RigidBody 의 PoseStamped (예: /car2/pose), 시뮬이면 opp_odom + odom.
+    # ★ 상대 pose 는 트랙과 같은 좌표계여야 한다 (mocap 주행 = *_mocap 트랙).
+    # 상대 옆 통로로 스테이지별 n 경계를 좁혀 추월하고, 양쪽이 막히면 바퀴 속도 상한으로 뒤따른다.
+    # 처음엔 학습 없이 예측하고, 상대를 한 바퀴 거의 다 보면 상대 라인·속도를 GP 로 맞춰 쓴다.
+    # 여기 없는 opp_* 값은 OppParams 기본값이다 (opponent.py).
+    opponent_topic: ''
+    opponent_msg: pose
+    # 두 차 중심 사이 최소 횡거리 m (차 폭 약 0.30 + 여유). 1108_7 트랙(폭 중앙값 1.18 m)에서는 상대가
+    #   벽 쪽에 붙어 있어야 추월 통로가 나온다 (offline 간이 시험: d −0.28 이면 추월, 0 이면 뒤따름)
+    opp_clear: 0.40
+    # 앞뒤로 이 안이면 겹친다고 본다 m (차 길이 약 0.55 + 여유)
+    opp_length: 0.70
+    # 상대 횡 불확실성 ½ a_y t² 와 그 상한 m. 상한을 키우면 먼 스테이지가 막혀 추월이 거의 안 된다
+    opp_a_y: 1.0
+    opp_d_cap: 0.15
+    # 뒤따를 때 목표 간격 (s 차이) m
+    opp_trail_gap: 0.80
+    opp_gp: true
+    # 상대 위치 측정 표준편차 m. mocap 0.01, 라이다 검출로 바꾸면 0.05~0.1
+    opp_meas_noise: 0.01

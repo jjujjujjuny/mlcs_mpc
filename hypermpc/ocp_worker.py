@@ -16,8 +16,9 @@ ocp_worker.py — HyperMPC OCP 를 풀기만 하는 프로세스. hmpc_node 가 
   acados 가 C 에서 stdout 에 직접 쓰므로 stdout 은 통신에 쓸 수 없다.
 
     시작  → b'R' 한 바이트
-    요청  [id, cmd, x(9), kappa(N+1), n_lo(N+1), n_hi(N+1)]   cmd 1 이면 초기 추측을 x 로 다시 깐다
-          n_lo/n_hi: 스테이지별 벽 경계 (MPCC). track_hard 일 때만 쓴다
+    요청  [id, cmd, x(9), kappa(N+1), n_lo(N+1), n_hi(N+1), v_cap(N)]   cmd 1 이면 초기 추측을 x 로 다시 깐다
+          n_lo/n_hi: 스테이지별 벽 경계 (MPCC, 상대 차 통로 포함). track_hard 일 때만 쓴다
+          v_cap: 스테이지 0..N-1 의 바퀴 속도 명령 상한 (상대 뒤따르기). v_max 보다 크면 v_max
     응답  [id, status, ms, u(2), x1(9), s(N+1)]
 
   파이프가 닫히면 (노드가 죽으면) 끝난다.
@@ -107,7 +108,8 @@ def main():
             oo.set_hard_bounds(solver, N, cfg['track_width'], 0.0)
         solver.solve()
 
-    req_len = 8 * (2 + 9 + 3 * (N + 1))
+    req_len = 8 * (2 + 9 + 3 * (N + 1) + N)
+    ubu_k = np.full(N, np.inf)      # 지금 스테이지별로 걸려 있는 속도 상한 (바뀔 때만 다시 넣는다)
     os.write(a.fd_out, b'R')
     while True:
         raw = read_exact(a.fd_in, req_len)
@@ -115,11 +117,16 @@ def main():
             return 0
         req = np.frombuffer(raw, dtype=np.float64)
         rid, cmd, x = req[0], req[1], req[2:11]
-        kappa, n_lo, n_hi = req[11:].reshape(3, N + 1)
+        kappa, n_lo, n_hi = req[11:11 + 3 * (N + 1)].reshape(3, N + 1)
+        v_cap = np.clip(req[11 + 3 * (N + 1):], lbu[0], ubu[0])
         x = x.copy()
         x[6] = fric
         if cmd == 1.0:
             restart(x)
+            ubu_k[:] = ubu[0]
+        for k in np.flatnonzero(v_cap != ubu_k):
+            solver.constraints_set(int(k), 'ubu', np.array([v_cap[k], ubu[1]]))
+            ubu_k[k] = v_cap[k]
         for k in range(N + 1):
             solver.set(k, 'p', np.concatenate([params, [kappa[k]]]))
         solver.set(0, 'lbx', x)

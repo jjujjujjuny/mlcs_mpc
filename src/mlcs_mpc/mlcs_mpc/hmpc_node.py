@@ -2,8 +2,8 @@
 """
 hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 아직 상수 파라미터다.
 
-  구독: /mpc/state, /mocap/valid, /mpc/enabled, /mpc/manual, /sensors/core
-  발행: /drive, /mpc/solve_time, /hmpc/status
+  구독: /mpc/state, /mocap/valid, /mpc/enabled, /mpc/manual, /sensors/core, (opponent_topic)
+  발행: /drive, /mpc/solve_time, /hmpc/status, /hmpc/opponent, /hmpc/opponent_markers
 
 ■ ★ 풀이는 다른 프로세스에서 한다 (hypermpc/ocp_worker.py)
 
@@ -31,6 +31,14 @@ hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 아직 상수 
   모델의 delta 는 실제 조향이다. 원선회로 잰 맵으로 명령으로 바꿔 내보낸다
   (최대 명령 0.40 이 실제 0.378). 조향 시정수는 계단 응답에 맞췄고 순수 지연은 따로
   넣지 않았다. 바퀴 시정수는 저자 값이다 (config/hmpc.yaml 참고).
+
+■ 상대 차 (opponent_topic 을 주면 켜진다 — opponent.py)
+
+  상대 pose 로 예측한 위치 옆 통로로 스테이지별 n 경계를 좁힌다 (추월). 양쪽이 막히면 스테이지별
+  바퀴 속도 상한으로 뒤따른다. 솔버는 그대로다. 측면·상태는 /hmpc/opponent, 예측과 통로는
+  /hmpc/opponent_markers (RViz). ★ 상대 pose 는 트랙과 같은 좌표계여야 한다 (mocap 주행이면
+  mocap 트랙 + 상대 mocap RigidBody, 시뮬이면 opp_odom). 라이다 주행에서 mocap 상대를 쓰려면
+  map↔mocap 변환이 필요하다 (아직 없음).
 """
 import json
 import math
@@ -46,12 +54,17 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
 
+from dataclasses import fields
+
+from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, ColorRGBA, Float32, String
 from ackermann_msgs.msg import AckermannDriveStamped
 from vesc_msgs.msg import VescStateStamped
+from visualization_msgs.msg import Marker, MarkerArray
 
 from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, to_command
+from mlcs_mpc.opponent import LEFT, RIGHT, Opponent, OppParams
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -104,8 +117,8 @@ class Worker:
             pass
         self.alive = False
 
-    def send(self, rid, cmd, x, kappa, n_lo, n_hi):
-        data = np.concatenate([[rid, cmd], x, kappa, n_lo, n_hi]).tobytes()
+    def send(self, rid, cmd, x, kappa, n_lo, n_hi, v_cap):
+        data = np.concatenate([[rid, cmd], x, kappa, n_lo, n_hi, v_cap]).tobytes()
         return os.write(self.to_child, data) == len(data)
 
     def kill(self):
@@ -173,6 +186,11 @@ class HmpcNode(Node):
         d('vesc_timeout', 0.3)
         d('require_enable', True)
         d('bench', False)
+        # 상대 차. 비우면 끔. opponent_msg: pose = PoseStamped (mocap), odom = Odometry (시뮬 opp_odom)
+        d('opponent_topic', '')
+        d('opponent_msg', 'pose')
+        for f in fields(OppParams):         # opp_clear, opp_length, ... (opponent.py 의 OppParams)
+            d('opp_' + f.name, f.default)
 
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
         root = gp('repo_root')
@@ -243,6 +261,7 @@ class HmpcNode(Node):
         self.rid = 0.0
         self.pending_t = None   # 답을 기다리는 요청 시각
         self.s_pred = None
+        self.v_cap = np.full(self.N, self.v_max)
         self.delta = 0.0
         self.cmd_steer = 0.0
         self.running = False    # 다음 요청이 초기 추측을 다시 깔아야 하면 False
@@ -259,6 +278,23 @@ class HmpcNode(Node):
         self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.solve_pub = self.create_publisher(Float32, '/mpc/solve_time', 1)
         self.status_pub = self.create_publisher(String, '/hmpc/status', 1)
+
+        self.opp = None
+        self.opp_mode = None
+        topic = str(gp('opponent_topic')).strip()
+        if topic:
+            op = OppParams(**{f.name: type(f.default)(gp('opp_' + f.name)) for f in fields(OppParams)})
+            self.opp = Opponent(self.track, op)
+            kind = str(gp('opponent_msg'))
+            if kind not in ('pose', 'odom'):
+                raise ValueError(f'opponent_msg 는 pose 또는 odom: {kind}')
+            self.create_subscription(PoseStamped if kind == 'pose' else Odometry, topic, self._opp_cb, 10)
+            self.opp_pub = self.create_publisher(String, '/hmpc/opponent', LATCHED)
+            self.opp_marker_pub = self.create_publisher(MarkerArray, '/hmpc/opponent_markers', 1)
+            self.create_timer(1.0, self._opp_refit)
+            self.create_timer(0.1, self._opp_markers)
+            self.get_logger().info(f'상대 차: {topic} ({kind}) — 통로 여유 {op.clear:.2f} m, '
+                                   f'GP {"켬" if op.gp else "끔"}')
 
         self._start_worker()
         self.create_timer(self.period, self._control_loop)
@@ -303,6 +339,55 @@ class HmpcNode(Node):
                 self.get_logger().info(f'고장 래치 해제: {self.fault}')
                 self.fault = None
                 self.bad = 0
+
+    def _opp_cb(self, m):
+        p = m.pose if isinstance(m, PoseStamped) else m.pose.pose
+        q = p.orientation
+        with self.lock:
+            # 수신 시각을 쓴다. 다른 PC 의 stamp 와 이 노드 시계가 어긋나도 상관없게
+            self.opp.measure(self._now(), p.position.x, p.position.y, yaw_from_quat(q))
+
+    def _opp_refit(self):
+        with self.lock:
+            was = self.opp.model.tab is not None
+            now = self.opp.model.refit()
+        if now != was:
+            self.get_logger().info('상대 라인: ' + ('GP 학습됨 — 상대 선과 속도로 예측' if now
+                                                   else '관측 부족 — 제로샷 예측'))
+
+    def _opp_markers(self):
+        with self.lock:
+            last = self.opp.last
+        arr = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+
+        def strip(mid, xs, ys, rgba, width):
+            m = Marker()
+            m.header.frame_id, m.header.stamp = 'map', stamp
+            m.ns, m.id, m.type = 'opponent', mid, Marker.LINE_STRIP
+            m.action = Marker.ADD if xs is not None else Marker.DELETE
+            m.scale.x = width
+            m.color = ColorRGBA(r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3])
+            m.pose.orientation.w = 1.0
+            if xs is not None:
+                m.points = [Point(x=float(a), y=float(b)) for a, b in zip(xs, ys)]
+            return m
+
+        if last is None:
+            arr.markers = [strip(0, None, None, (0, 0, 0, 0), 0.02), strip(1, None, None, (0, 0, 0, 0), 0.02)]
+        else:
+            pred, pl, mode = last
+            xs, ys = self.track.xy(pred.s, pred.d)
+            arr.markers.append(strip(0, xs, ys, (1.0, 0.4, 0.0, 0.9), 0.04))   # 상대 예측 경로
+            h = pl.hit
+            if mode in (LEFT, RIGHT) and h.any():
+                c = self.opp.p.clear + pred.sig_d[h]
+                n = pred.d[h] + c if mode == LEFT else pred.d[h] - c
+                bx, by = self.track.xy(pred.s[h], n)
+                arr.markers.append(strip(1, bx, by, (0.1, 0.8, 0.2, 0.9), 0.03))  # 통로 경계
+            else:
+                arr.markers.append(strip(1, None, None, (0, 0, 0, 0), 0.02))
+        self.opp_marker_pub.publish(arr)
 
     def _go_cb(self, m):
         """B 버튼. /mpc/enabled=true 와 같고, 누를 때마다 고장·mocap 래치도 푼다."""
@@ -441,13 +526,24 @@ class HmpcNode(Node):
             else:
                 n_lo = np.full(self.N + 1, -self.track_width)
                 n_hi = -n_lo
+            v_cap = self.v_cap
+            if self.opp is not None:
+                # s_pred[k] 는 지난 풀이 시각 기준이라 지금 기준으로는 한 칸 앞이 맞다 (상대와 시각을 맞춘다)
+                s_now = np.r_[s[1:], 2 * s[-1] - s[-2]] if self.running and self.s_pred is not None else s
+                n_lo, n_hi, cap, mode = self.opp.step(now, s_now, x[1], n_lo, n_hi, self.v_max, self.N, self.dt)
+                if cap is not None:
+                    v_cap = cap
+                if mode != self.opp_mode:
+                    self.opp_mode = mode
+                    self.get_logger().info(f'상대: {mode or "없음"}')
+                    self.opp_pub.publish(String(data=mode or 'none'))
             self.rid += 1.0
             cmd = 0.0 if self.running else 1.0
             # 저속에서는 풀이가 110 ms 까지 간다 (실측). 느리니 더 기다려도 멀리 못 간다.
             slow = self.twist[0] < self.slow_speed
             self.limit = self.restart_timeout if not self.running or slow else self.solve_timeout
             try:
-                ok = self.worker.send(self.rid, cmd, x, kappa, n_lo, n_hi)
+                ok = self.worker.send(self.rid, cmd, x, kappa, n_lo, n_hi, v_cap)
             except OSError:
                 ok = False
             if not ok:

@@ -49,6 +49,15 @@ class Track:
         wr = np.interp(q, S, np.r_[self.w_right, self.w_right[0]])
         return -(wr - margin), wl - margin
 
+    def xy(self, s, n):
+        """(s, n) → (x, y). 선 위 점에서 왼쪽 법선 방향으로 n. 시각화용 (점 사이는 선형 보간)."""
+        q = np.mod(s, self.length)
+        S = np.r_[self.s, self.length]
+        x = np.interp(q, S, np.r_[self.x, self.x[0]])
+        y = np.interp(q, S, np.r_[self.y, self.y[0]])
+        h = np.interp(q, S, np.unwrap(np.r_[self.heading, self.heading[0]]))
+        return x - np.sin(h) * n, y + np.cos(h) * n
+
     def _nearest(self, x, y):
         if self.last is None:
             i = int(np.argmin((self.x - x) ** 2 + (self.y - y) ** 2))

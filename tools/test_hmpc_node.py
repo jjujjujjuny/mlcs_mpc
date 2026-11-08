@@ -44,7 +44,7 @@ a = ap.parse_args(); N = json.loads(a.config)['N']
 os.write(a.fd_out, b'R')
 while True:
     buf = b''
-    while len(buf) < 8 * (2 + 9 + N + 1):
+    while len(buf) < 8 * (2 + 9 + 3 * (N + 1) + N):
         c = os.read(a.fd_in, 4096)
         if not c: sys.exit(0)
         buf += c
