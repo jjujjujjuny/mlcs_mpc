@@ -35,6 +35,21 @@
 #     ./drive.sh mapping             라이다 맵핑 (Cartographer + RViz, 조이스틱으로 몬다)
 #     ./drive.sh savemap [이름]      맵 저장 — mapping 중 다른 터미널에서 (maps/<이름>.*)
 #     ./drive.sh natnet              mocap 드라이버만 (보통 자동으로 뜬다)
+#
+#   ── 라이다 맵 → 트랙 (대회: 라이다만, mocap 없음) ──
+#     ./drive.sh mapping             ① 맵핑 (위에 있음)
+#     ./drive.sh savemap <맵>        ② 저장 (위에 있음)
+#     ./drive.sh maptrack [맵] [트랙] ③ 맵 → 트랙 + 전처리 + 프리뷰 한 번에
+#                                    맵 생략 = 가장 최근 맵, 트랙 생략 = <맵>_track
+#     ./drive.sh localize [맵]       저장한 맵으로 위치추정만 (맵은 안 바뀜)
+#
+#   ── 라이다 맵 ↔ mocap (연구실: 정답으로 검증) ──
+#     ./drive.sh align [맵]          localize 중에 다른 창에서. 기록 → Ctrl+C 하면
+#                                    첫 번째는 변환 맞추기, 그다음부터는 검증
+#     ./drive.sh align fit|eval [기록] [맵]   다시 맞추기 / 다시 검증
+#     ./drive.sh align list          맵별 변환·기록 목록
+#     ./drive.sh mocaptrack <트랙> [맵]  map 프레임 트랙 → mocap 프레임 (<트랙>_mocap)
+#
 #     ./drive.sh go                  ★ 출발 — /mpc/enabled=true
 #     ./drive.sh halt                ★ 정지 — /mpc/enabled=false (노드는 유지)
 #     ./drive.sh topics              토픽 상태 점검
@@ -1459,6 +1474,7 @@ mapping)
         err "Cartographer 가 기동 직후 죽었습니다 — tail -50 /tmp/mlcs_cartographer.log"
         exit 1
     fi
+    echo "mapping" > /tmp/mlcs_carto_mode     # ./drive.sh align 이 본다
 
     if [ -n "${DISPLAY:-}" ]; then
         rviz2 -d "$CARTO_DIR/mapping.rviz" >/tmp/mlcs_rviz.log 2>&1 &
@@ -1527,6 +1543,240 @@ savemap)
     ls -l "$OUT".* 2>/dev/null | awk '{print "    " $5 "\t" $NF}'
     echo
     echo "    이제 mapping 창을 Ctrl+C 로 닫으세요."
+    echo "    다음:  ./drive.sh maptrack $NAME          (맵 → 트랙)"
+    ;;
+
+maptrack)
+    # ./drive.sh maptrack [맵] [트랙이름] [옵션...]
+    #   라이다 맵 → 중심선 트랙 → 저자 전처리(prep_*.csv) → 프리뷰를 한 번에
+    #   (tools/track_from_map.py → prep_track.py → preview_track.py)
+    #   맵을 안 주면 maps/ 에서 가장 최근 맵. 트랙 이름 기본 <맵>_track.
+    #   옵션은 이름 뒤에 — 예:  ./drive.sh maptrack comp1 comp1_track --reverse
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    MAPARG=""; TNAME=""
+    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then MAPARG="$1"; shift; fi
+    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then TNAME="$1"; shift; fi
+    if [ -z "$MAPARG" ]; then
+        MAPARG="$(ls -t "$MAP_DIR"/*.yaml 2>/dev/null | grep -v '\.mocap\.yaml$' | head -1)"
+        [ -n "$MAPARG" ] || { err "maps/ 에 맵이 없습니다 — ./drive.sh mapping → savemap 먼저"; exit 1; }
+        log "맵을 안 줘서 가장 최근 맵을 씁니다: $(basename "$MAPARG")"
+    fi
+    MBASE="$(basename "${MAPARG%.yaml}")"
+    TNAME="${TNAME:-${MBASE}_track}"
+    DRY=0
+    for a in "$@"; do [ "$a" = "--dry-run" ] && DRY=1; done
+
+    log "① 맵 → 트랙  ($MBASE → $TNAME)"
+    python3 "$SCRIPT_DIR/tools/track_from_map.py" "$MAPARG" "$TNAME" "$@" || {
+        echo
+        err "트랙을 못 만들었습니다 — 위 메시지를 보세요. 자주 쓰는 옵션:"
+        echo "    --reverse            반대 방향으로 돈다"
+        echo "    --start X Y          출발점 (기본 0 0 = 맵핑 시작 자리)"
+        echo "    --allow-infeasible   차 한계보다 급한 코너가 있어도 저장 (폭이 넉넉할 때만)"
+        echo "    --seal 0.15          벽 틈이 커서 트랙이 새면 키운다"
+        echo "    -h                   전체 옵션"
+        exit 1
+    }
+    [ "$DRY" = 1 ] && exit 0
+    echo
+    log "② 저자 전처리 → prep_$TNAME.csv"
+    python3 "$SCRIPT_DIR/tools/prep_track.py" "$TNAME" \
+        || warn "전처리 실패 — 트랙 파일은 저장됐습니다. ./drive.sh preptrack $TNAME 으로 다시"
+    echo
+    log "③ 프리뷰 그림"
+    python3 "$SCRIPT_DIR/tools/preview_track.py" "$TNAME" || true
+    echo
+    log "${GRN}완료${RST} — 트랙: lab_map/data/tracks/$TNAME/   (map 프레임)"
+    echo "    맵 위 그림:  lab_map/data/tracks/$TNAME/map_track.png"
+    echo "    ★ map 프레임 트랙이라 라이다 위치추정(./drive.sh localize $MBASE)으로 달려야 맞습니다"
+    echo "    연구실에서 mocap 으로 달리려면:  ./drive.sh mocaptrack $TNAME $MBASE"
+    ;;
+
+localize)
+    # ./drive.sh localize [맵]
+    #   저장한 맵(maps/<맵>.pbstream)으로 Cartographer 위치추정만 (맵은 안 바뀜)
+    #   /tracked_pose, map→odom TF 가 나온다. 조이스틱 병행.
+    #   맵을 안 주면 가장 최근 맵.
+    load_ros; require_ws_pkg mlcs_mpc
+    CARTO_DIR="$SCRIPT_DIR/src/mlcs_mpc/config/cartographer"
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    if [ -n "${1:-}" ]; then
+        PB="$MAP_DIR/$(basename "${1%.*}").pbstream"
+        [ -f "$1" ] && [ "${1##*.}" = pbstream ] && PB="$1"
+    else
+        PB="$(ls -t "$MAP_DIR"/*.pbstream 2>/dev/null | head -1)"
+    fi
+    [ -n "$PB" ] && [ -f "$PB" ] || { err "pbstream 이 없습니다: ${PB:-maps/*.pbstream}  (./drive.sh savemap 으로 만든다)"; exit 1; }
+    MBASE="$(basename "${PB%.pbstream}")"
+    if mocap_bridge_running; then
+        err "mocap_bridge 가 떠 있습니다 — map 프레임 TF 가 Cartographer 와 겹칩니다. ./drive.sh stop"
+        exit 1
+    fi
+    if pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 이미 떠 있습니다 — ./drive.sh stop"
+        exit 1
+    fi
+    arm_cleanup
+    [ "$SPEED_SET" = 0 ] && SPEED="1.5"
+    start_bringup
+    start_lidar
+    log "Cartographer 위치추정 — 맵 $MBASE"
+    ros2 run cartographer_ros cartographer_node \
+        -configuration_directory "$CARTO_DIR" \
+        -configuration_basename localization_2d.lua \
+        -load_state_filename "$PB" -load_frozen_state=true \
+        >"$(run_log cartographer)" 2>&1 &
+    PIDS="$PIDS $!"
+    ros2 run cartographer_ros cartographer_occupancy_grid_node \
+        -resolution 0.05 -publish_period_sec 1.0 \
+        >/tmp/mlcs_cartogrid.log 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 3
+    if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+        err "Cartographer 가 기동 직후 죽었습니다 — tail -50 /tmp/mlcs_cartographer.log"
+        exit 1
+    fi
+    echo "localize $MBASE" > /tmp/mlcs_carto_mode
+    if [ -n "${DISPLAY:-}" ]; then
+        rviz2 -d "$CARTO_DIR/mapping.rviz" >/tmp/mlcs_rviz.log 2>&1 &
+        PIDS="$PIDS $!"
+    fi
+    echo
+    log "${GRN}위치추정 중${RST} — 맵 $MBASE"
+    echo "    · 맵핑을 시작한 자리·방향 근처에서 출발하세요 (새 궤적이 거기서 시작한다)"
+    echo "    · 조금 움직여 RViz 에서 스캔이 맵 벽에 겹치면 붙은 것"
+    echo "    · mocap 과 비교:  다른 터미널에서  ./drive.sh align"
+    echo
+    joy_session
+    ;;
+
+align)
+    # 연구실용 — 라이다 맵 좌표계 ↔ mocap 좌표계 (tools/map_mocap_align.py)
+    #
+    #   ./drive.sh align [맵]              기록 → Ctrl+C 하면 자동으로
+    #                                       · 맵의 변환이 아직 없으면 → 맞춘다 (fit)
+    #                                       · 이미 있으면            → 검증한다 (eval)
+    #   ./drive.sh align fit  [기록] [맵]   다시 맞춘다 (기록 기본: 그 맵의 가장 최근 기록)
+    #   ./drive.sh align eval [기록] [맵]   다시 검증한다
+    #   ./drive.sh align list              맵별 변환·기록 목록
+    #
+    #   맵 기본값: localize 로 띄운 맵 → 없으면 가장 최근 맵
+    #   기록: ~/mlcs_data/align/<맵>_<시각>.csv   변환: maps/<맵>.mocap.yaml
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    ALIGN_DIR="${MLCS_DATA:-$HOME/mlcs_data}/align"
+    AL="$SCRIPT_DIR/tools/map_mocap_align.py"
+    SUB="rec"
+    case "${1:-}" in fit|eval|list|rec) SUB="$1"; shift ;; esac
+
+    align_map () {      # $1 = 사용자가 준 맵 (없으면 추정)
+        if [ -n "${1:-}" ]; then basename "${1%.*}"; return; fi
+        if [ -f /tmp/mlcs_carto_mode ] && pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+            read -r M N < /tmp/mlcs_carto_mode
+            [ "$M" = localize ] && { echo "$N"; return; }
+        fi
+        basename "$(ls -t "$MAP_DIR"/*.pbstream 2>/dev/null | head -1)" .pbstream
+    }
+    align_fit () {      # $1 = 기록, $2 = 맵
+        log "변환 맞추기 → maps/$2.mocap.yaml"
+        python3 "$AL" fit "$1" "$MAP_DIR/$2"
+    }
+    align_eval () {
+        log "검증 — maps/$2.mocap.yaml 로 이 기록의 라이다 위치 오차"
+        python3 "$AL" eval "$1" "$MAP_DIR/$2.mocap.yaml"
+    }
+
+    case "$SUB" in
+    list)
+        for y in "$MAP_DIR"/*.yaml; do
+            case "$y" in *.mocap.yaml) continue ;; esac
+            [ -f "$y" ] || continue
+            B="$(basename "$y" .yaml)"
+            if [ -f "$MAP_DIR/$B.mocap.yaml" ]; then S="${GRN}변환 있음${RST}"; else S="변환 없음"; fi
+            N=$(ls "$ALIGN_DIR/${B}"_*.csv 2>/dev/null | wc -l)
+            echo "  $B   $S   기록 $N개"
+        done
+        ;;
+    fit|eval)
+        LOGF=""; MAPARG=""
+        for a in "$@"; do
+            case "$a" in *.csv) LOGF="$a" ;; *) MAPARG="$a" ;; esac
+        done
+        MB="$(align_map "$MAPARG")"
+        [ -n "$MB" ] || { err "맵을 모르겠습니다 — ./drive.sh align $SUB [기록.csv] <맵>"; exit 1; }
+        [ -n "$LOGF" ] || LOGF="$(ls -t "$ALIGN_DIR/${MB}"_*.csv 2>/dev/null | head -1)"
+        [ -n "$LOGF" ] && [ -f "$LOGF" ] || { err "$MB 의 기록이 없습니다 ($ALIGN_DIR/${MB}_*.csv)"; exit 1; }
+        if [ "$SUB" = eval ] && [ ! -f "$MAP_DIR/$MB.mocap.yaml" ]; then
+            err "maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align fit"
+            exit 1
+        fi
+        "align_$SUB" "$LOGF" "$MB"
+        ;;
+    rec)
+        load_ros
+        MB="$(align_map "${1:-}")"
+        [ -n "$MB" ] || { err "맵이 없습니다 — ./drive.sh mapping → savemap 먼저"; exit 1; }
+        if mocap_bridge_running; then
+            err "mocap_bridge 가 떠 있습니다 — TF 가 Cartographer 와 겹칩니다. ./drive.sh stop 후 localize 부터"
+            exit 1
+        fi
+        if ! pgrep -f '/lib/cartographer_ros/cartographer_node' >/dev/null 2>&1; then
+            err "Cartographer 가 안 떠 있습니다 — 다른 터미널에서 ./drive.sh localize $MB"
+            exit 1
+        fi
+        if [ "$(cut -d' ' -f1 /tmp/mlcs_carto_mode 2>/dev/null)" != localize ]; then
+            warn "Cartographer 가 맵핑 중입니다. 맵핑 중 자세는 나중에 루프가 닫히며 저장된 맵과"
+            warn "어긋날 수 있습니다 — 정확한 검증은 savemap 뒤 ./drive.sh localize $MB 에서."
+        fi
+        arm_cleanup
+        start_natnet           # mocap 드라이버만 (브릿지 없음). 이미 떠 있으면 그대로
+        mkdir -p "$ALIGN_DIR"
+        LOGF="$ALIGN_DIR/${MB}_$(date +%Y%m%d_%H%M%S).csv"
+        HAS_T=0; [ -f "$MAP_DIR/$MB.mocap.yaml" ] && HAS_T=1
+        echo
+        if [ "$HAS_T" = 0 ]; then
+            log "맵 ${BLD}$MB${RST} — 변환이 아직 없습니다. 이 기록으로 ${BLD}맞춥니다${RST}"
+        else
+            log "맵 ${BLD}$MB${RST} — 변환이 있습니다. 이 기록으로 ${BLD}검증합니다${RST}"
+            echo "    (다시 맞추려면 끝난 뒤:  ./drive.sh align fit)"
+        fi
+        echo "    · 조이스틱은 localize 창에서. 2~3바퀴, 좌우 회전이 다 들어가게"
+        echo "    · 다 돌았으면 이 창에서 Ctrl+C"
+        echo
+        # 기록기만 Ctrl+C 를 받게 한다 — 끝난 뒤 이 스크립트가 fit/eval 을 이어서 돈다
+        trap ':' INT
+        python3 "$AL" record "$LOGF"
+        trap 'on_signal 130' INT        # arm_cleanup 의 것으로 되돌린다
+        [ -s "$LOGF" ] || { err "기록이 비었습니다: $LOGF"; exit 1; }
+        echo
+        if [ "$HAS_T" = 0 ]; then align_fit "$LOGF" "$MB"; else align_eval "$LOGF" "$MB"; fi
+        echo
+        log "기록: $LOGF"
+        [ "$HAS_T" = 0 ] && echo "    다음: 한 번 더  ./drive.sh align   → 다른 주행으로 검증"
+        ;;
+    esac
+    ;;
+
+mocaptrack)
+    # ./drive.sh mocaptrack <트랙> [맵] [--to map] [--as 새이름]
+    #   map 프레임 트랙(maptrack 결과) → mocap 프레임 (<트랙>_mocap). 연구실에서
+    #   mocap 위치로 같은 트랙을 달릴 때. --to map 이면 반대 방향.
+    #   맵 기본값: 트랙을 만든 맵 (track.json 에 적혀 있다)
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { err "사용법: ./drive.sh mocaptrack <트랙> [맵]"; exit 1; }
+    TR="$1"; shift
+    MB=""
+    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then MB="$(basename "${1%.*}")"; shift; fi
+    TO="mocap"
+    for a in "$@"; do [ "$a" = map ] && TO=map; done
+    if [ -z "$MB" ]; then
+        TJ="$SCRIPT_DIR/lab_map/data/tracks/$TR/track.json"
+        MB="$(python3 -c "import json,os,sys;f=json.load(open(sys.argv[1])).get('coordinate_frame',{});print(os.path.basename(f.get('map_yaml','')).rsplit('.',1)[0])" "$TJ" 2>/dev/null)"
+    fi
+    [ -n "$MB" ] || { err "어느 맵의 트랙인지 모르겠습니다 — ./drive.sh mocaptrack $TR <맵>"; exit 1; }
+    [ -f "$MAP_DIR/$MB.mocap.yaml" ] || { err "maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align"; exit 1; }
+    case " $* " in *" --to "*) ;; *) set -- --to "$TO" "$@" ;; esac
+    log "트랙 $TR → $TO 프레임  (변환 maps/$MB.mocap.yaml)"
+    python3 "$SCRIPT_DIR/tools/map_mocap_align.py" apply "$MAP_DIR/$MB.mocap.yaml" "$TR" "$@"
     ;;
 
 stop)

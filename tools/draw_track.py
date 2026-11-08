@@ -183,20 +183,34 @@ def load_track_reader(hypermpc):
         return None
 
 
+def _widths(half_width, n):
+    """숫자 하나 또는 (n,2) [오른쪽, 왼쪽] → (n,2)."""
+    W = np.asarray(half_width, dtype=float)
+    if W.ndim == 0:
+        return np.full((n, 2), float(W))
+    if W.shape != (n, 2):
+        raise ValueError(f'폭 배열 모양이 {W.shape} — ({n}, 2) 여야 합니다')
+    return W
+
+
 def run_prep(TrackReader, craw, half_width, spacing):
     """저자 전처리기를 그대로 돌려 MPC 가 실제로 받을 값을 낸다.
 
     TrackReader 가 경로를 받으므로 임시 파일을 거친다. 1 cm 1000점에
     11.6 ms (젯슨 실측) — 클릭마다 돌려도 된다.
+
+    half_width 는 숫자(양쪽 같은 폭) 또는 craw 와 같은 길이의 (N,2)
+    [오른쪽, 왼쪽] 배열이다 (track_from_map 이 맵에서 잰 폭).
     """
     import tempfile
     import warnings
+    W = _widths(half_width, len(craw))
     f = tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False,
                                     encoding='utf-8')
     try:
         f.write('x_m,y_m,w_tr_right_m,w_tr_left_m\n')
-        for q in craw:
-            f.write(f'{q[0]:.6f},{q[1]:.6f},{half_width:.6f},{half_width:.6f}\n')
+        for q, w in zip(craw, W):
+            f.write(f'{q[0]:.6f},{q[1]:.6f},{w[0]:.6f},{w[1]:.6f}\n')
         f.close()
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')     # splprep 의 per= 경고
@@ -389,12 +403,17 @@ def link_into_workspace(wp, ws=None):
 
 
 def write_track(name, c, kap, left, right, craw, hw, s, prep, cfg,
-                spacing=0.05, raw_spacing=0.01):
+                spacing=0.05, raw_spacing=0.01, widths=None, frame=None):
     """트랙을 네 가지 형식으로 쓴다. draw_track 과 make_s_track 이 공유한다.
 
     ★ 손으로 그린 것과 해석적으로 만든 것이 **같은 파일 형식**을 내야 한다.
       따로 쓰면 반드시 갈라진다. cfg 에 생성 방법만 다르게 담는다.
+
+    widths  craw 와 같은 길이의 (N,2) [오른쪽, 왼쪽] 폭. 없으면 양쪽 hw.
+            track_from_map 처럼 실제 벽까지 잰 폭이 있을 때 넘긴다.
+    frame   coordinate_frame 메타. 없으면 mocap_world (연구실 경계 프레임).
     """
+    W = _widths(hw if widths is None else widths, len(craw))
     c, kap = c, kap
     left, right = left, right
 
@@ -426,9 +445,9 @@ def write_track(name, c, kap, left, right, craw, hw, s, prep, cfg,
     #    craw 는 호출자가 그 간격으로 깔아서 넘긴다.
     with open(os.path.join(d, f'{name}.csv'), 'w', encoding='utf-8') as f:
         f.write('x_m,y_m,w_tr_right_m,w_tr_left_m\n')
-        for q in craw:
+        for q, w in zip(craw, W):
             f.write(f'{q[0]:.6f},{q[1]:.6f},'
-                    f'{hw:.6f},{hw:.6f}\n')
+                    f'{w[0]:.6f},{w[1]:.6f}\n')
 
     with open(os.path.join(d, 'curvature_profile.csv'), 'w',
               encoding='utf-8') as f:
@@ -440,17 +459,20 @@ def write_track(name, c, kap, left, right, craw, hw, s, prep, cfg,
         'name': name,
         'created': time.strftime('%Y-%m-%dT%H:%M:%S'),
         'source': cfg['source'],
-        'coordinate_frame': {
+        'coordinate_frame': frame or {
             'name': 'mocap_world', 'unit': 'meter',
             'note': '경계 JSON 과 같은 프레임. /car/pose 와 변환 없이 비교 가능',
         },
-        'boundary_source': os.path.relpath(cfg['boundary'], REPO),
+        'boundary_source': (os.path.relpath(cfg['boundary'], REPO)
+                            if cfg.get('boundary') else None),
         'generation': {
             'clicked_points': [[float(p[0]), float(p[1])] for p in cfg['clicked']],
             'spline': cfg.get('spline', 'scipy.interpolate.splprep(k=3, per=1)'),
             'smooth_dev_m': cfg['smooth_dev'],
             'spacing_m': spacing,
             'half_width_m': hw,
+            'width_right_m': [float(W[:, 0].min()), float(W[:, 0].max())],
+            'width_left_m': [float(W[:, 1].min()), float(W[:, 1].max())],
         },
         'vehicle_limits': {
             'wheelbase': cfg['wheelbase'],
