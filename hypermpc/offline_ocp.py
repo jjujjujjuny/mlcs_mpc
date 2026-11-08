@@ -293,6 +293,10 @@ def build_ocp(dyn_fun, N, dt, cfg):
         Zl = list(ocp.cost.Zl) if len(ocp.constraints.idxsbx) else []
         ocp.cost.zl = ocp.cost.zu = np.array(zl + [zg])
         ocp.cost.Zl = ocp.cost.Zu = np.array(Zl + [zg * 0.1])
+        # ★ 스테이지 0 은 x0 고정이라 트랙 경계(bx) 슬랙이 없고 이 g 슬랙만 있다. 개수가 달라서
+        #   acados 가 zl_0 를 못 채운다 (젯슨 빌드에서 ValueError, 2026-11-08) — 직접 준다.
+        ocp.cost.zl_0 = ocp.cost.zu_0 = np.array([zg])
+        ocp.cost.Zl_0 = ocp.cost.Zu_0 = np.array([zg * 0.1])
 
     ocp.parameter_values = np.concatenate([default_params(), [0.0]])
 
