@@ -24,6 +24,19 @@ opponent — 상대 차 추적·예측과 추월 통로 (ROS 없음). test/test_
   GP 로 맞추고, 지금 값에서 그 선으로 지수로 수렴한다고 본다 (UNICORN 의 '라인 복귀' 와 같은 생각).
   불확실성은 상대가 물리적으로 움직일 수 있는 범위 (½ a t², 상한 있음) 와 GP 표준편차를 합친다.
   상한이 없으면 1 초 안에 트랙 폭을 다 덮어 추월이 아예 안 된다.
+  ★ 앞뒤는 따로 본다. 상대가 뒤로 밀리는 것은 제동으로 서는 만큼까지다 (서 있는 상대는 0).
+    옆으로 움직이는 것도 달린 거리만큼만이다 (차는 제자리에서 옆으로 못 간다). 2026-11-08 젯슨 실제
+    솔버 시험에서 정지 장애물의 ½ a t² 가 앞뒤 3 m 까지 커져 모든 스테이지가 막혔다 (status 4).
+
+■ 도달 가능성 (2026-11-08)
+
+  통로는 우리 차가 그 스테이지까지 달린 거리 Δs 안에 옆으로 갈 수 있어야 의미가 있다. 차는 최대
+  곡률 κ 로 꺾어 헤딩 θ 까지 틀고 그대로 가는 만큼만 옆으로 간다:
+      y(Δs) = ½ κ Δs²                       (Δs ≤ θ/κ)
+            = θ²/(2κ) + (Δs − θ/κ) sin θ     (그 뒤)
+  시간이 아니라 거리라서 저속에서도 같다. 못 가는 쪽은 고르지 않고, 둘 다 못 가면 뒤따른다.
+  뒤따를 때는 옆으로 빠질 수 있는 간격을 두고 서고, 우리 진행을 pass_speed 이상으로 가정해
+  다시 판단한다 (멈춰 있으면 스테이지가 상대에 닿지 않아 영영 다시 고르지 않는다).
 
 ■ 좌표
 
@@ -51,6 +64,12 @@ class OppParams:
     tau_d: float = 0.8          # 횡속도 감쇠·GP 선 수렴 시정수 s
     tau_v: float = 1.0          # 속도가 GP 속도로 수렴하는 시정수 s
     opp_half: float = 0.15      # 상대 반폭. 상대 예측 d 를 벽 안으로 자른다 m
+    sig_s_cap: float = 1.0      # 앞쪽 종 불확실성 상한 m (상대가 예측보다 더 가는 쪽)
+    opp_turn: float = 0.5       # 상대 횡 이동 ≤ 달린 거리 × sin(opp_turn) rad
+    reach_kappa: float = 1.0    # 우리 차 회피 곡률 1/m (최대 조향 곡률 약 1.28 보다 작게). 고속은 a_lat/v² 로 줄인다
+    reach_heading: float = 0.5  # 회피 때 트는 최대 헤딩 rad
+    reach_margin: float = 0.02  # 도달 판정 여유 m
+    pass_speed: float = 0.8     # 판단할 때 우리 진행 속도 하한 m/s (서 있어도 다시 고르게)
     gap_start: float = 0.05     # 이 폭 이상 남아야 그 쪽으로 추월을 시작한다 m
     gap_switch: float = 0.10    # 반대쪽이 이만큼 더 넓어야 바꿀 후보가 된다 m
     switch_frames: int = 10     # 후보가 이만큼 이어져야 바꾼다 (TRAIL 에서 나올 때도)
@@ -214,8 +233,9 @@ class Prediction:
     d: np.ndarray
     v: np.ndarray       # 상대 진행 속도
     sig_d: np.ndarray   # 횡 불확실성 m
-    sig_s: np.ndarray   # 종 불확실성 m
+    sig_s: np.ndarray   # 종 불확실성 m — 앞쪽 (상대가 예측보다 더 감)
     learned: bool
+    sig_b: np.ndarray = None   # 종 불확실성 m — 뒤쪽 (상대가 제동). 없으면 sig_s 와 같다
 
 
 class OpponentModel:
@@ -269,20 +289,26 @@ class OpponentModel:
             if k < N:
                 s[k + 1] = s[k] + v[k] * dt
         decay = np.exp(-t / p.tau_d)
-        reach = np.minimum(0.5 * p.a_y * t ** 2, p.d_cap)
-        sig_s = 0.5 * p.a_x * t ** 2
+        # 옆으로는 달린 거리만큼만 간다 (서 있는 차는 0)
+        reach = np.minimum(np.minimum(0.5 * p.a_y * t ** 2, p.d_cap),
+                           (s - s[0]) * math.sin(p.opp_turn))
+        sig_s = np.minimum(0.5 * p.a_x * t ** 2, p.sig_s_cap)
+        # 뒤로는 최대 제동으로 서는 만큼까지: v t − (제동 거리). 서 있으면 0
+        stop_t = vs0 / p.a_x
+        sig_b = np.where(t < stop_t, 0.5 * p.a_x * t ** 2, vs0 * t - 0.5 * vs0 * stop_t)
         if learned:
             d_line, _, sd, sv = self._lookup(s)
             d_line0 = self._lookup(s0)[0]
             d = d_line + (d0 - d_line0) * decay
             sig_d = np.sqrt(reach ** 2 + sd ** 2)
             sig_s = sig_s + sv * t
+            sig_b = sig_b + np.minimum(sv * t, vs0 * t)
         else:
             d = d0 + vd0 * p.tau_d * (1.0 - decay)
             sig_d = reach
         lo, hi = self.track.bounds_at(s, p.opp_half)
         d = np.clip(d, np.minimum(lo, hi), np.maximum(lo, hi))
-        return Prediction(t, s, d, v, sig_d, sig_s, learned)
+        return Prediction(t, s, d, v, sig_d, sig_s, learned, sig_b)
 
 
 # ── 통로와 측면 ───────────────────────────────────────────────────────
@@ -295,20 +321,60 @@ class Plan:
     ds0: float              # 지금 (우리 s − 상대 s), 음수 = 상대가 앞
     alongside: bool         # 지금 나란히 (앞뒤로 겹침)
     ego_left: bool          # 우리가 상대보다 왼쪽
+    reach_left: bool = True     # 왼쪽 통로에 달린 거리 안에 갈 수 있나
+    reach_right: bool = True
+    need_left: float = 0.0      # 그쪽 통로까지 옆으로 가야 할 최대 거리 m
+    need_right: float = 0.0
+
+
+def lateral_reach(ds, kappa, heading):
+    """달린 거리 ds 동안 옆으로 갈 수 있는 거리 (곡률 kappa 로 heading 까지 틀고 직진)."""
+    ds = np.maximum(np.asarray(ds, float), 0.0)
+    a0 = heading / kappa
+    return np.where(ds <= a0, 0.5 * kappa * ds ** 2,
+                    0.5 * kappa * a0 ** 2 + (ds - a0) * math.sin(heading))
+
+
+def reach_distance(need, kappa, heading):
+    """lateral_reach 의 역: 옆으로 need 만큼 가는 데 필요한 거리."""
+    need = max(float(need), 0.0)
+    a0 = heading / kappa
+    y0 = 0.5 * kappa * a0 ** 2
+    return math.sqrt(2.0 * need / kappa) if need <= y0 else a0 + (need - y0) / math.sin(heading)
+
+
+def eval_s(s_ego, t, p):
+    """판단에 쓰는 우리 s: 예측이 pass_speed 보다 느리면 그만큼은 간다고 본다."""
+    s_ego = np.asarray(s_ego, float)
+    return np.maximum(s_ego, s_ego[0] + p.pass_speed * np.asarray(t))
 
 
 def plan(s_ego, n0, lo, hi, pred, length, p):
     """겹침과 양쪽 남는 폭. s_ego 는 스테이지별 우리 s, lo/hi 는 벽 경계."""
-    ds = wrap_s(np.asarray(s_ego) - pred.s, length)
-    hit = np.abs(ds) < p.length + pred.sig_s
+    s_ego = np.asarray(s_ego, float)
+    ds = wrap_s(s_ego - pred.s, length)
+    sig_b = pred.sig_s if pred.sig_b is None else pred.sig_b
+    # 우리가 뒤 (ds < 0): 상대가 제동하면 다가온다 / 우리가 앞: 상대가 가속하면 다가온다
+    hit = (ds > -(p.length + sig_b)) & (ds < p.length + pred.sig_s)
     c = p.clear + pred.sig_d
+    reach_l = reach_r = True
+    need_l = need_r = 0.0
     if hit.any():
-        gl = float(np.min(hi[hit] - (pred.d[hit] + c[hit])))
-        gr = float(np.min((pred.d[hit] - c[hit]) - lo[hit]))
+        edge_l = pred.d[hit] + c[hit]           # 왼쪽 통로 하한
+        edge_r = pred.d[hit] - c[hit]           # 오른쪽 통로 상한
+        gl = float(np.min(hi[hit] - edge_l))
+        gr = float(np.min(edge_r - lo[hit]))
+        # 도달 가능성: 그 스테이지까지 달린 거리로 옆으로 갈 수 있는 만큼
+        v0 = max((s_ego[1] - s_ego[0]) / max(pred.t[1], 1e-6), 0.1) if len(s_ego) > 1 else 0.1
+        kap = min(p.reach_kappa, p.a_lat / v0 ** 2)
+        r = lateral_reach(s_ego[hit] - s_ego[0], kap, p.reach_heading) + p.reach_margin
+        nl, nr = edge_l - n0, n0 - edge_r
+        reach_l, reach_r = bool(np.all(nl <= r)), bool(np.all(nr <= r))
+        need_l, need_r = float(max(nl.max(), 0.0)), float(max(nr.max(), 0.0))
     else:
         gl = gr = math.inf
     ds0 = float(wrap_s(s_ego[0] - pred.s[0], length))
-    return Plan(hit, gl, gr, ds0, abs(ds0) < p.length, n0 > pred.d[0])
+    return Plan(hit, gl, gr, ds0, abs(ds0) < p.length, n0 > pred.d[0], reach_l, reach_r, need_l, need_r)
 
 
 def apply_corridor(lo, hi, pred, pl, side, p):
@@ -323,10 +389,19 @@ def apply_corridor(lo, hi, pred, pl, side, p):
     return lo, hi
 
 
+def trail_standoff(pl, p):
+    """뒤따를 때 목표 간격. 옆에 자리는 있는데 못 가서 뒤따르는 거면 옆으로 빠질 거리를 둔다."""
+    needs = [n for n, g in ((pl.need_left, pl.gap_left), (pl.need_right, pl.gap_right))
+             if g >= p.gap_start]
+    if not needs:
+        return p.trail_gap
+    return max(p.trail_gap, p.length + reach_distance(min(needs), p.reach_kappa, p.reach_heading))
+
+
 def trail_cap(pl, pred, v_max, p):
     """뒤따를 때 스테이지 0..N−1 의 바퀴 속도 상한. 상대가 앞에 있을 때만 의미가 있다."""
     gap = -pl.ds0
-    cap = pred.v[:-1] + p.trail_gain * (gap - p.trail_gap)
+    cap = pred.v[:-1] + p.trail_gain * (gap - trail_standoff(pl, p))
     return np.clip(cap, 0.0, v_max)
 
 
@@ -340,7 +415,10 @@ class SideSelector:
         self.count = 0
 
     def _gap(self, pl, side):
-        return pl.gap_left if side == LEFT else pl.gap_right
+        """남는 폭. 달린 거리 안에 못 가는 쪽은 막힌 것으로 본다."""
+        if side == LEFT:
+            return pl.gap_left if pl.reach_left else -math.inf
+        return pl.gap_right if pl.reach_right else -math.inf
 
     def _pending(self, side):
         """같은 후보가 switch_frames 번 이어지면 True."""
@@ -409,7 +487,7 @@ class Opponent:
             self.last = None
             return lo, hi, None, None
         pred = self.model.predict(*st, N, dt)
-        pl = plan(s_ego, n0, lo, hi, pred, self.track.length, self.p)
+        pl = plan(eval_s(s_ego, pred.t, self.p), n0, lo, hi, pred, self.track.length, self.p)
         mode = self.sel.update(pl)
         cap = None
         if mode in (LEFT, RIGHT):

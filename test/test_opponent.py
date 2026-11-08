@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """test_opponent.py — opponent 시험 (ROS·acados 불필요).  python3 test/test_opponent.py
 
-마지막 두 시험은 솔버 대신 간이 차 (통로 가운데로 가는 Frenet 운동학) 로 돌리는 폐루프다.
+마지막 시험들은 솔버 대신 간이 차 (통로 가운데로 가는 Frenet 운동학) 로 돌리는 폐루프다.
 MPC 동역학은 보지 않는다. 측면 결정·통로·뒤따르기 로직이 끝까지 맞물리는지만 본다.
+간이 차는 실제 차처럼 옆으로 v·sin(0.5) 까지만, 가감속 ±2.5 m/s² 로 움직인다 (2026-11-08: 옆으로
+속도와 상관없이 1.5 m/s 씩 가던 예전 간이 차는 실제 솔버에서 실패한 정지 장애물을 통과시켰다).
 """
 import math
 import os
@@ -16,7 +18,8 @@ sys.path.insert(0, os.path.join(ROOT, 'src/mlcs_mpc'))
 from mlcs_mpc.hmpc_core import Track  # noqa: E402
 from mlcs_mpc.opponent import (FREE, LEFT, RIGHT, TRAIL, OppParams, Opponent,  # noqa: E402
                                OpponentModel, OpponentTracker, PeriodicGP, SideSelector,
-                               apply_corridor, plan, trail_cap, wrap_s)
+                               apply_corridor, eval_s, lateral_reach, plan, reach_distance,
+                               trail_cap, trail_standoff, wrap_s)
 
 N, DT = 60, 0.033
 
@@ -123,11 +126,11 @@ def _pred_const(t, s0, d, v):
 def test_corridor_left_and_only_hit_stages():
     t, R = circle(width=1.6)
     p = OppParams()
-    pr = _pred_const(t, 1.0, -0.25, 1.0)
+    pr = _pred_const(t, 2.0, -0.25, 1.0)
     s_ego = 0.0 + 2.5 * DT * np.arange(N + 1)
     lo, hi = t.bounds_at(s_ego, 0.22)
     pl = plan(s_ego, 0.0, lo, hi, pr, t.length, p)
-    assert pl.hit.any() and not pl.hit.all() and not pl.alongside
+    assert pl.hit.any() and not pl.hit.all() and not pl.alongside and pl.reach_left
     assert pl.gap_left > pl.gap_right
     sel = SideSelector(p)
     assert sel.update(pl) == LEFT
@@ -177,12 +180,12 @@ def test_switch_needs_frames():
     assert modes[:-1] == [RIGHT] * (p.switch_frames - 1) and modes[-1] == LEFT
 
 
-def _toy_race(width, v_ego, v_opp, d_opp, secs=12.0):
+def _toy_race(width, v_ego, v_opp, d_opp, secs=12.0):  # noqa: C901
     """간이 폐루프. 우리 차: s' = min(v_ego, cap), n 은 스테이지 1..10 경계 가운데로 1.5 m/s 까지."""
     t, R = circle(width=width)
     p = OppParams()
     opp = Opponent(t, p)
-    s, n = 0.0, 0.0
+    s, n, v = 0.0, 0.0, 1.0
     so = 2.0
     s_pred = None
     min_lat, modes, passed = math.inf, set(), False
@@ -192,13 +195,15 @@ def _toy_race(width, v_ego, v_opp, d_opp, secs=12.0):
             tj = tt - DT + (j + 1) * DT / 3
             opp.measure(tj, *xy_on(R, so - v_opp * (DT - (j + 1) * DT / 3), d_opp))
         if s_pred is None:
-            s_pred = s + v_ego * DT * np.arange(N + 1)
+            s_pred = s + v * DT * np.arange(N + 1)
         lo, hi = t.bounds_at(s_pred, 0.22)
         lo, hi, cap, mode = opp.step(tt, s_pred, n, lo, hi, v_ego, N, DT)
         modes.add(mode)
-        v = v_ego if cap is None else min(v_ego, cap[0])
+        vt = v_ego if cap is None else min(v_ego, cap[0])
+        v = max(v + np.clip(vt - v, -2.5 * DT, 2.5 * DT), 0.0)
         target = 0.5 * (lo[1:11].mean() + hi[1:11].mean())
-        n += np.clip(target - n, -1.5 * DT, 1.5 * DT)
+        lat = v * math.sin(0.5) * DT           # 옆으로는 달리는 만큼만
+        n += np.clip(target - n, -lat, lat)
         s += v * DT
         so += v_opp * DT
         s_pred = s + v * DT * np.arange(N + 1)
@@ -221,6 +226,65 @@ def test_toy_trail_when_blocked():
     passed, min_lat, modes = _toy_race(width=1.0, v_ego=2.0, v_opp=1.0, d_opp=0.0)
     assert not passed and TRAIL in modes
     assert min_lat == math.inf, min_lat         # 앞뒤로 0.5 m 안에 들어간 적이 없다
+
+
+def test_reach_geometry():
+    k, th = 1.0, 0.5
+    assert lateral_reach(0.0, k, th) == 0.0
+    assert abs(lateral_reach(0.4, k, th) - 0.08) < 1e-12              # ½ κ s²
+    y = float(lateral_reach(2.0, k, th))
+    assert abs(reach_distance(y, k, th) - 2.0) < 1e-9                  # 역함수
+    assert abs(reach_distance(0.08, k, th) - 0.4) < 1e-9
+
+
+def test_static_opponent_no_inflation():
+    """서 있는 상대: 뒤로·옆으로 불확실성이 없다. 앞으로도 상한까지만."""
+    t, R = circle(width=1.18)
+    p = OppParams()
+    pr = _pred_const(t, 3.0, -0.28, 0.0)
+    assert np.all(pr.sig_b == 0.0) and np.all(pr.sig_d == 0.0)
+    assert pr.sig_s.max() <= p.sig_s_cap + 1e-12
+    # 1 m/s 로 달리는 상대는 제동으로 서는 만큼 (v²/2a) 까지만 뒤로
+    pr = _pred_const(t, 3.0, -0.28, 1.0)
+    assert abs(pr.sig_b[-1] - (1.0 * pr.t[-1] - 1.0 ** 2 / (2 * p.a_x))) < 1e-9
+
+
+def test_unreachable_side_trails_with_room():
+    """정지 장애물 바로 뒤를 천천히 (젯슨 d 경우): 옆 자리는 있지만 못 간다 → 뒤따르며 빠질 간격을 둔다."""
+    t, R = circle(width=1.18)
+    p = OppParams()
+    pr = _pred_const(t, 0.9, -0.28, 0.0)
+    s_ego = 0.0 + 0.2 * DT * np.arange(N + 1)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    pl = plan(eval_s(s_ego, pr.t, p), -0.05, lo, hi, pr, t.length, p)
+    assert pl.gap_left >= p.gap_start and not pl.reach_left
+    assert SideSelector(p).update(pl) == TRAIL
+    room = trail_standoff(pl, p)
+    assert room > p.trail_gap
+    assert trail_cap(pl, pr, 2.0, p)[0] == 0.0          # 너무 가깝다: 선다 (물러나지는 못함)
+    # 빠질 간격만큼 뒤에 서 있으면 (속도 0) 왼쪽으로 다시 고른다
+    s_ego = np.full(N + 1, 0.9 - room - 0.05)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    pl = plan(eval_s(s_ego, pr.t, p), -0.05, lo, hi, pr, t.length, p)
+    assert pl.hit.any() and pl.reach_left
+    sel = SideSelector(p)
+    sel.mode = TRAIL
+    modes = [sel.update(pl) for _ in range(p.switch_frames)]
+    assert modes[-1] == LEFT, modes
+
+
+def test_toy_pass_static():
+    """정지 장애물 (젯슨 d: 1108_7 폭 1.18, 벽 0.22, d −0.28) 을 왼쪽으로 지나간다."""
+    passed, min_lat, modes = _toy_race(width=1.18, v_ego=2.0, v_opp=0.0, d_opp=-0.28)
+    assert passed, modes
+    assert min_lat >= 0.40 - 0.03, min_lat
+
+
+def test_toy_overtake_narrow():
+    """젯슨 b: 1.0 m/s 상대, d −0.28, 폭 1.18."""
+    passed, min_lat, modes = _toy_race(width=1.18, v_ego=2.0, v_opp=1.0, d_opp=-0.28)
+    assert passed, modes
+    assert min_lat >= 0.40 - 0.03, min_lat
 
 
 if __name__ == '__main__':

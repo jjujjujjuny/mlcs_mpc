@@ -538,7 +538,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     x = x0.copy()
     times, cycles, status, n_hist = [], [], [], []
     first_bad = None
+    bad_run, trips, first_trip, need_restart = 0, 0, None, False
     for i in range(laps):
+        if need_restart:        # 노드: 비정상 해 뒤 다음 요청은 cmd 1 (초기 추측을 지금 상태로)
+            restart(solver, N, x)
+            need_restart = False
         t_cycle = time.perf_counter()
         qs = np.array([x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
                        for k in range(N + 1)])
@@ -563,12 +567,28 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         st = solver.solve()
         t1 = time.perf_counter()
         u0 = solver.get(0, 'u')
+        bad = st != 0 or not np.all(np.isfinite(u0))
+        if bad and not args.apply_bad:
+            # hmpc_node 와 같게: 비정상 해는 버리고 정지 명령 (바퀴 0, 조향 0), 다음엔 다시 깐다.
+            # 노드는 max_bad_solves(3) 번 이어지면 래치해 멈춘다 — 여기서는 세기만 하고 계속 돈다.
+            u0 = np.array([0.0, 0.0])
+            need_restart = True
+            bad_run += 1
+            if bad_run == 3:
+                trips += 1
+                first_trip = i if first_trip is None else first_trip
+        else:
+            bad_run = 0
         if plant is not None:
             xp = np.array(x, float)
             if plant_friction is not None:      # 차만 다른 마찰 (MPC 는 x0 의 값을 믿는다)
                 xp[6] = plant_friction
             x_next = plant(xp, u0, np.concatenate([params, [kappa_of_s(x[0])]]))
             x_next[6] = x[6]
+        elif bad and not args.apply_bad:
+            print(f'  ✗ {name}: {i} 번째 비정상 해 (status {st}) — --plant 없이는 버린 해의 다음 상태가 없어 멈춘다')
+            status.append(st)
+            break
         else:
             x_next = solver.get(1, 'x')
         cycles.append((time.perf_counter() - t_cycle) * 1000)
@@ -590,6 +610,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     print(f'\n■ {name}  ({len(times)}회, 첫 풀이 {times[0]:.1f} ms 는 통계에서 뺌)')
     print(f'  status      {dict(zip(codes.tolist(), counts.tolist()))}'
           + (f'  첫 비정상 {first_bad} 번째' if first_bad is not None else ''))
+    if first_bad is not None and not args.apply_bad:
+        print(f'  비정상 해는 버리고 정지 명령 (노드와 같게). 3번 연속 {trips}회'
+              + (f' — ★ 실차라면 {first_trip} 번째에 래치해 멈춘다' if trips else ''))
     print(f'  풀이 시간   평균 {ts.mean():7.2f}  p95 {np.percentile(ts, 95):7.2f}  '
           f'최대 {ts.max():7.2f} ms   (예산 {budget:.1f} ms, 초과 {(ts > budget).mean() * 100:.1f}%)')
     print(f'  주기 전체   평균 {np.mean(cycles[1:] or cycles):7.2f} ms  (곡률 갱신 포함)')
@@ -641,6 +664,8 @@ def main():
                     help='--walls 와 함께: 속도 V 로 도는 가상 상대 (추월·뒤따르기 시험). --v-max 도 줄 것')
     ap.add_argument('--opp-d', type=float, default=0.0, help='가상 상대의 선에서 횡위치 m (왼쪽 +)')
     ap.add_argument('--opp-gap', type=float, default=2.0, help='가상 상대가 앞서 출발하는 거리 m')
+    ap.add_argument('--apply-bad', action='store_true',
+                    help='status≠0 해도 그대로 적용 (예전 동작). 기본은 노드처럼 버리고 정지 명령')
     ap.add_argument('--ws-acc-max', type=float, default=0.0,
                     help='MPC 바퀴 가속도 한계 m/s² (0 = 끔). tools/actuator_id.py')
     ap.add_argument('--ws-dec-max', type=float, default=0.0, help='MPC 바퀴 감속도 한계 m/s² (0 = 끔)')
