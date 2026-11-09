@@ -133,6 +133,15 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 - RViz 로그에 맵 크기가 시험 중 바뀜: `234 x 365` → `297 x 309` → `298 x 309` (`/map` 이 도중에 다시 들어옴 — 의도한 것인지 젯슨에서 확인 바람)
 - RViz 에러 2줄은 시작할 때 한 번씩만 나옴: `Lookup would require extrapolation into the future ... [laser] to frame [map]` (시작 직후 tf), `GLSL link result : active samplers with a different type refer to the same texture image unit` (노트북 그래픽)
 
+### 노트북으로 맵핑 시도 (2026-11-09 23:38~23:45) — 중단
+
+- 절차: `./car.sh term` → 젯슨 tmux 에서 `./drive.sh mapping`, 다른 창에서 `./drive.sh bridge` (race.sh 와 달리 mapping 은 브리지를 안 띄운다) → 노트북 `./car.sh rviz`
+- 결과 ✗: SSH 터미널이 멈춤. Cartographer 는 23:41:08 시작 → 23:43:04 마지막 로그 후 꺼짐 (약 2분, 맵 저장 없음). 젯슨 브리지는 한 번도 안 떴다.
+- 그때 상태: 노트북 와이파이 신호 100, 젯슨 `signal -40 dBm` 인데 rx `VHT-MCS 1 58.5 MBit/s`. 노트북→젯슨 ping 7~199 ms (손실 0).
+- tmux `race` 에 창 3개, 창 1·2 이름이 `[tmux]` — 젯슨 tmux 안에서 tmux(`car.sh term` 등)를 또 연 것으로 보인다. 겹치면 `Ctrl+b` 가 바깥으로 가서 창 이동이 엉킨다.
+- 노트북 `laptop.rviz` 에 `/trajectory_node_list` `/constraint_list` 가 있는데 `jetson.json5` 허용 목록에 없어 안 온다.
+- 요청: `car.sh map` / `car.sh savemap <이름>` 처럼 맵핑 + 브리지를 한 번에 띄우는 명령, tmux 안에서 `car.sh term` 을 또 치면 막기, Cartographer 가 왜 2분 만에 꺼졌는지 (`~/mlcs_data/logs/20261109_234108_cartographer.log`)
+
 ## 아직 남은 것
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
