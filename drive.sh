@@ -39,6 +39,7 @@
 #     ./drive.sh mapping             라이다 맵핑 (Cartographer + RViz, 조이스틱으로 몬다)
 #     ./drive.sh savemap [이름]      맵 저장 — mapping 중 다른 터미널에서 (maps/<이름>.*)
 #     ./drive.sh natnet              mocap 드라이버만 (보통 자동으로 뜬다)
+#     ./drive.sh bridge              노트북 RViz 연결 (Zenoh 브리지, tools/zenoh/)
 #
 #   ── 라이다 맵 → 트랙 (대회: 라이다만, mocap 없음) ──
 #     ./drive.sh mapping             ① 맵핑 (위에 있음)
@@ -119,6 +120,13 @@ load_ros () {
     set +u
     # shellcheck disable=SC1091
     source /opt/ros/humble/setup.bash
+    # ★ 젯슨의 ROS 는 localhost 에서만 돈다 (2026-11-09).
+    #   ① 와이파이가 끊기거나 흔들려도 주행 노드끼리의 통신은 영향이 없다.
+    #   ② 대회장 공유기에 다른 팀 ROS(도메인 0)가 있어도 섞이지 않는다 —
+    #      섞이면 남의 /drive 가 우리 mux 로 들어온다.
+    #   노트북 RViz 는 ./drive.sh bridge (Zenoh) 로만 연결한다.
+    #   ~/.bashrc 에도 같은 값이 있어야 다른 창의 ros2 CLI 가 토픽을 본다.
+    export ROS_LOCALHOST_ONLY=1
     if [ -f "$WS/install/setup.bash" ]; then
         # shellcheck disable=SC1091
         source "$WS/install/setup.bash"
@@ -1435,6 +1443,26 @@ rviz)
     fi
     log "RViz — Fixed Frame=map  (NoMachine 화면으로 보세요)"
     exec rviz2 -d "$RVIZ_CFG"
+    ;;
+
+bridge)
+    # 노트북 RViz 연결 — Zenoh 브리지 (tools/zenoh/jetson.json5)
+    #   보낼 토픽·주파수는 jetson.json5 에서 고친다.
+    #   노트북에서는:  ./laptop.sh  (tools/zenoh/laptop.sh)
+    load_ros
+    ZB="$SCRIPT_DIR/tools/zenoh/aarch64/zenoh-bridge-ros2dds"
+    [ -x "$ZB" ] || { err "브리지 실행 파일이 없습니다: $ZB"; exit 1; }
+    # ★ 실행 파일 경로로 시작하는 것만 — 이름만 보면 명령줄에 그 단어가 든
+    #   다른 프로세스(셸, tail 등)까지 잡혀 "이미 떠 있다" 로 오판한다 (실측)
+    if pgrep -f "^$ZB" >/dev/null 2>&1; then
+        warn "브리지가 이미 떠 있습니다 — 그대로 둡니다"; exit 0
+    fi
+    WIP="$(ip -4 -br addr show wlP1p1s0 2>/dev/null | awk '{print $3}' | cut -d/ -f1)"
+    log "Zenoh 브리지 — 노트북이 접속할 주소:"
+    echo "    ${BLD}tcp/$(hostname).local:7447${RST}   또는   tcp/${WIP:-<와이파이 IP 없음>}:7447"
+    [ -z "$WIP" ] && warn "와이파이에 IP 가 없습니다. 연결되면 브리지는 그대로 받아 줍니다."
+    log "Ctrl+C 로 종료. 주행 노드에는 영향 없음."
+    exec "$ZB" -c "$SCRIPT_DIR/tools/zenoh/jetson.json5"
     ;;
 
 natnet)

@@ -1,0 +1,69 @@
+// ═══════════════════════════════════════════════════════════════════
+//  젯슨 쪽 Zenoh 브리지 — 노트북 RViz 로 보낼 토픽만 골라 내보낸다
+//
+//  ./drive.sh bridge  로 띄운다.  노트북은 tools/zenoh/laptop.sh
+//
+//  ■ 구조
+//      젯슨 노드들 ──(localhost DDS)── 이 브리지 ══(와이파이 TCP 1개)══ 노트북 브리지 ── RViz
+//
+//    젯슨의 ROS 는 localhost 에서만 돈다 (ROS_LOCALHOST_ONLY=1). 와이파이로
+//    나가는 길은 이 브리지 하나뿐이라, 와이파이가 끊겨도 주행 노드끼리는
+//    영향이 없고, 같은 공유기의 다른 팀 ROS 와도 섞이지 않는다.
+//
+//  ■ 토픽을 더 보내고 싶으면 allow.publishers 에 추가한다.
+//    ★ 빠른 토픽은 pub_max_frequencies 에도 같이 넣는다 (와이파이 아끼기).
+// ═══════════════════════════════════════════════════════════════════
+{
+  plugins: {
+    ros2dds: {
+      ros_localhost_only: true,
+
+      allow: {
+        // 젯슨 → 노트북
+        publishers: [
+          "^/tf$", "^/tf_static$",        // ★ 주파수 제한 금지 — 여러 노드가 한 토픽에 섞여
+                                          //   있어서, 솎으면 특정 변환이 통째로 빠진다
+          "^/map$",
+          "^/scan$",
+          "^/tracked_pose$",
+          "^/mpc/state$",
+          "^/mpc/solve_time$",
+          "^/mpc/predicted_path$", "^/mpc/reference_path$",
+          "^/hmpc/status$",
+          "^/hmpc/opponent_markers$",
+          "^/obstacle/markers$",
+          "^/track/.*", "^/viz/car$",
+          // 뺀 것: /trajectory_node_list /constraint_list (맵 전체 노드라 수백 KB, 33Hz)
+          //        /viz/trail (최대 2000 포즈를 매번 통째로)
+        ],
+        // 노트북 → 젯슨 : RViz '2D Pose Estimate' 만
+        subscribers: [ "^/initialpose$" ],
+      },
+
+      // 이보다 빠르면 브리지가 솎아서 보낸다 (젯슨 내부 주파수는 그대로)
+      pub_max_frequencies: [
+        "^/scan$=10",
+        "^/tracked_pose$=20",
+        "^/mpc/state$=20",
+        "^/mpc/solve_time$=5",
+        "^/mpc/predicted_path$=10", "^/mpc/reference_path$=2",
+        "^/hmpc/status$=5",
+        "^/hmpc/opponent_markers$=5",
+        "^/obstacle/markers$=5",
+        "^/viz/car$=10",
+        "^/map$=0.5",
+      ],
+    },
+  },
+
+  // 젯슨은 기다리고, 노트북이 접속해 온다
+  mode: "router",
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+
+  // ★ 자동 발견을 끈다 — 같은 공유기에 다른 팀 Zenoh 브리지가 있으면 서로 붙어서
+  //   토픽이 섞인다 (다른 팀 /initialpose 가 우리 위치추정을 옮겨 버릴 수 있다)
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: false },
+  },
+}

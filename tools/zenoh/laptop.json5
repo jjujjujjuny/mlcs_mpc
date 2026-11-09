@@ -1,0 +1,31 @@
+// ═══════════════════════════════════════════════════════════════════
+//  노트북 쪽 Zenoh 브리지 — 젯슨 브리지에 접속해 토픽을 받아 로컬 ROS 로 푼다
+//
+//  tools/zenoh/laptop.sh 가 이 파일로 띄운다. 젯슨 주소는 laptop.sh 가
+//  -e 로 넘긴다 (기본 mlcs-car.local).
+//  무엇을 보낼지는 젯슨 쪽(jetson.json5)이 정한다. 여기서는 다 받는다.
+// ═══════════════════════════════════════════════════════════════════
+{
+  plugins: {
+    ros2dds: {
+      // 노트북 RViz 와 브리지만 localhost 에서 만난다
+      ros_localhost_only: true,
+      allow: {
+        publishers: [ "^/initialpose$" ],   // 노트북 → 젯슨
+        subscribers: [ ".*" ],              // 젯슨 → 노트북 (RViz 가 구독하는 것)
+      },
+    },
+  },
+
+  mode: "client",
+  // ★ 젯슨 브리지가 아직 없거나 와이파이가 끊겨도 죽지 말고 계속 다시 붙는다
+  //   (기본값은 첫 접속 실패 시 바로 종료 — 실측)
+  connect: {
+    timeout_ms: -1,
+    exit_on_failure: false,
+  },
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: false },
+  },
+}

@@ -32,6 +32,7 @@ source /opt/ros/humble/setup.bash
 # shellcheck disable=SC1091
 source "$WS/install/setup.bash"
 set -u
+export ROS_LOCALHOST_ONLY=1     # drive.sh 와 같아야 브링업의 /sensors/core 가 보인다
 
 LOG="${TMPDIR:-/tmp}/mlcs_bat.log"
 DRV_PID=""
