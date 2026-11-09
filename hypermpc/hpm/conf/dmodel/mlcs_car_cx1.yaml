@@ -1,0 +1,9 @@
+# @package _global_
+
+dmodel:
+
+  pretrain_init_model_path: ""
+
+  model:
+    _partial_: True
+    _target_: "mlcs_car_model.MlcsSingleTrackCx1"

@@ -113,3 +113,29 @@ class MlcsSingleTrackRearFix(MlcsSingleTrack):
     def __init__(self, init_params=None) -> None:
         super().__init__(init_params=init_params)
         self.tire_model = RearSlipFixedTireModel()
+
+
+class Cx1PacejkaTireModel(SafePacejkaTireModel):
+    """Cx ≤ 1 을 모델 안에서 지킨다 — 배포 규칙 (hyper_params.clamp_cx) 과 같다.
+
+    Cx > 1 이면 종방향 힘이 정점 뒤로 떨어지고 그 구간에서 v_x 고유값이 양수가 되어 (2026-11-09)
+    배포 때 Cx 를 1 로 깎고 Bx·Cx 를 유지한다. 학습이 끝난 뒤에 깎으면 학습값과 배포값이 어긋나므로
+    (재학습 P: 깎은 뒤 1109_4 손실이 H Dx×0.45 의 3배) 학습 때부터 깎은 식으로 힘을 계산한다.
+    Bx_eff = Bx·Cx/min(Cx,1) 이라 Cx 쪽 기울기도 흐른다.
+    """
+
+    CX_MAX = 1.0
+
+    @staticmethod
+    def tire_forces_model(slip_angle_rad, slip_ratio, wp):
+        c = torch.clamp(wp.Cx, max=Cx1PacejkaTireModel.CX_MAX)
+        wp = wp._replace(Bx=wp.Bx * wp.Cx / c, Cx=c)
+        return SafePacejkaTireModel.tire_forces_model(slip_angle_rad, slip_ratio, wp)
+
+
+class MlcsSingleTrackCx1(MlcsSingleTrack):
+    """MlcsSingleTrack 에 Cx ≤ 1 (학습 중에도). 내보낸 값은 hyper_params.clamp_cx 를 거친 것과 같다."""
+
+    def __init__(self, init_params=None) -> None:
+        super().__init__(init_params=init_params)
+        self.tire_model = Cx1PacejkaTireModel()

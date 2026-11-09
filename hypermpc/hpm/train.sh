@@ -3,6 +3,7 @@
 #
 #   hypermpc/hpm/train.sh                        기본 (저자 설정 2000 에폭)
 #   hypermpc/hpm/train.sh hpm.train.epoch=3      뒤 인자는 hydra 로 넘어간다
+#   HPM_DMODEL=mlcs_car_cx1 hypermpc/hpm/train.sh  Cx ≤ 1 을 학습 중에도 지키는 차 모델 (배포 규칙과 같음)
 #
 # ★ WANDB_MODE=disabled 는 빼지 말 것. 저자 main.py 에 저자 계정 API 키가
 #   박혀 있어서, 켜면 우리 로그·모델이 그 계정으로 올라간다.
@@ -16,6 +17,6 @@ mkdir -p "$OUT"
 cd "$OUT"
 exec "${HPM_PY:-$HOME/hpm-venv/bin/python}" "$HERE/run_main.py" \
     --config-dir "$HERE/conf" \
-    hmodel=mlcs_hyper dmodel=mlcs_car dataset=mlcs_car \
+    hmodel=mlcs_hyper dmodel="${HPM_DMODEL:-mlcs_car}" dataset=mlcs_car \
     hmodel/time_series_encoder=gru \
     "$@"
