@@ -84,6 +84,17 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 - 3단계 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` ✓
 - 4·5단계 접속 시험: 브리지가 안 떠서 못 함. (이때 젯슨 7447 은 닫혀 있었다)
 
+### musl 빌드 시험 (546b9b6 이후)
+
+- 1번 `--version` ✗: musl-standalone 1.10.2 도 실행되지 않는다.
+  ```
+  $ ./x86_64/zenoh-bridge-ros2dds --version
+  bash: ./x86_64/zenoh-bridge-ros2dds: No such file or directory      (rc=127)
+  ```
+  정적 빌드가 아니라 musl 동적 링크다. `file`: `dynamically linked, interpreter /lib/ld-musl-x86_64.so.1`, `readelf -d` NEEDED: `libgcc_s.so.1`, `libc.so`. 노트북에는 `/lib/ld-musl-x86_64.so.1` 이 없다 (musl 미설치).
+- 참고 (546b9b6 전에 따로 해 본 것): 우분투 `musl` 패키지의 로더 + 우분투 `/lib/x86_64-linux-gnu/libgcc_s.so.1` 로 띄우면 `Error relocating .../libgcc_s.so.1: _dl_find_object: symbol not found` (glibc 용 libgcc_s 라 안 맞음). musl 용 libgcc_s 가 따로 있어야 한다.
+- 2~4번은 브리지가 안 떠서 못 함.
+
 ## 아직 남은 것
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
