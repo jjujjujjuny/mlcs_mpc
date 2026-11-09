@@ -73,6 +73,7 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
 import argparse
 import glob
 import hashlib
+import math
 import os
 import sys
 import time
@@ -113,6 +114,9 @@ def load_naive_dynamics(hypermpc_dir, guard=True):
     import robot_model.car.casadi_car_model_naive as naive
     naive.casadi = SafeSqrtCasadi() if guard else cs
     return naive.pacejca_single_track_casadi()
+
+
+V_FLOOR = 0.25      # hmpc_node v_floor
 
 
 def scale_for_mass(p, mass=MASS):
@@ -551,13 +555,19 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     times, cycles, status, n_hist = [], [], [], []
     first_bad = None
     bad_run, trips, first_trip, need_restart = 0, 0, None, False
+    trail_stopped, trail_cmd, trail_skip, last_u = False, math.inf, False, np.zeros(2)
     for i in range(laps):
         if need_restart:        # 노드: 비정상 해 뒤 다음 요청은 cmd 1 (초기 추측을 지금 상태로)
-            restart(solver, N, x)
+            xr = np.array(x, float)
+            xr[3], xr[7] = max(xr[3], V_FLOOR), max(xr[7], V_FLOOR)
+            restart(solver, N, xr)
             need_restart = False
         t_cycle = time.perf_counter()
+        trail_skip = False
         qs = np.array([x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
                        for k in range(N + 1)])
+        if i > 0 and not args.no_anchor:
+            qs = qs + (x[0] - qs[1])    # hmpc_node 와 같게: 지난 풀이 s 궤적을 지금 위치에 맞춘다
         t_now = i * args.dt
         P_k = np.tile(params, (N + 1, 1))
         if hyper is not None:
@@ -566,12 +576,21 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             P_used.append(P_k[0] / hyper.net.p_const)
         for k in range(N + 1):
             solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])]]))
-        solver.set(0, 'lbx', x)
-        solver.set(0, 'ubx', x)
+        # hmpc_node 의 make_state 와 같게: 솔버에 주는 vx·바퀴 속도는 v_floor (0.25) 아래로 안 내린다.
+        #   정지 장애물 뒤에 서면 vx 가 0 이 되는데, 그대로 주면 슬립 분모가 0 근처라 풀이가 멈춘다.
+        xs = np.array(x, float)
+        xs[3], xs[7] = max(xs[3], V_FLOOR), max(xs[7], V_FLOOR)
+        solver.set(0, 'lbx', xs)
+        solver.set(0, 'ubx', xs)
         if cfg['track_hard'] and walls is not None:
             _, lo, hi = walls(qs)
             if opp is not None:
                 lo, hi, cap = _opp_cycle(opp, i, args.dt, qs, x, lo, hi, v_top)
+                # hmpc_node 와 같은 뒤따름 정지: 상한이 0.3 아래면 풀지 않고 세운다 (0.4 위로 오르면 다시)
+                mode = opp['logic'].last[2] if opp['logic'].last else None
+                c0 = cap[0] if cap is not None else math.inf
+                trail_skip = (not args.no_trail_stop and mode == 'trail' and cap is not None
+                              and (c0 < 0.3 or (trail_stopped and c0 < 0.4)))
                 cap = np.full(N, v_top) if cap is None else cap
                 for k in range(N):
                     solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.max_steer]))
@@ -581,13 +600,24 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             s_hist.append(x[0])
         elif cfg['track_hard']:
             set_hard_bounds(solver, N, cfg['track_width'], x[1])
-        t0 = time.perf_counter()
-        st = solver.solve()
-        t1 = time.perf_counter()
-        u0 = solver.get(0, 'u')
-        bad = st != 0 or not np.all(np.isfinite(u0))
+        if trail_skip:
+            if not trail_stopped:
+                opp['trail_stops'] = opp.get('trail_stops', 0) + 1
+            trail_stopped = True
+            dec = cfg['ws_dec_max'] if cfg.get('ws_dec_max', 0.0) > 0 else 2.5
+            trail_cmd = max(min(trail_cmd, x[7]) - dec * args.dt, 0.0)
+            u0 = np.array([trail_cmd, last_u[1]])
+            st, bad, need_restart = 0, False, True
+            t0 = t1 = time.perf_counter()
+        else:
+            trail_stopped, trail_cmd = False, math.inf
+            t0 = time.perf_counter()
+            st = solver.solve()
+            t1 = time.perf_counter()
+            u0 = solver.get(0, 'u')
+            bad = st != 0 or not np.all(np.isfinite(u0))
         for hs in (hyper, plant_hyper):
-            if hs is None:
+            if hs is None or trail_skip:
                 continue
             xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
             if bad or not np.all(np.isfinite(xs)):
@@ -615,6 +645,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                 p_plant = plant_hyper.stage_params(t_now, x)[0][0]
             x_next = plant(xp, u0, np.concatenate([p_plant, [kappa_of_s(x[0])]]))
             x_next[6] = x[6]
+            if x_next[3] < 0.02:
+                # ★ 차(plant) 가 거의 서면 타이어 식이 수치적으로 발산한다 (vx → −5 m/s, n 수십 m).
+                #   실제 차는 그냥 선다 — 시험용 차만 멈춰 둔다 (2026-11-09, 정지 장애물 뒤 정지).
+                x_next[3] = max(x_next[3], 0.0)
+                x_next[4] = x_next[5] = 0.0
         elif bad and not args.apply_bad:
             print(f'  ✗ {name}: {i} 번째 비정상 해 (status {st}) — --plant 없이는 버린 해의 다음 상태가 없어 멈춘다')
             status.append(st)
@@ -631,6 +666,7 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             print(f'  ✗ {name}: {i} 번째 풀이에서 NaN/inf (status {st})')
             break
         x = x_next
+        last_u = np.array(u0, float)
         n_hist.append(abs(x[1]))
         trace.append(np.r_[x, u0])
 
@@ -661,7 +697,8 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
               f'주기간 변화 p99 {np.percentile(np.abs(np.diff(R_, axis=0)), 99) * 100:.2f}%')
     if opp is not None:
         print(f'  상대 {opp["v"]:.2f} m/s, d {opp["d"]:+.2f}: 추월 {opp["passes"]}번, '
-              f'최소 중심 거리 {opp["min_dist"]:.2f} m, 겹침(충돌) {opp["hits"]} 주기, 모드 {opp["modes"]}')
+              f'최소 중심 거리 {opp["min_dist"]:.2f} m, 겹침(충돌) {opp["hits"]} 주기, 모드 {opp["modes"]}, '
+              f'뒤따름 정지 {opp.get("trail_stops", 0)}번')
 
 
 def main():
@@ -702,6 +739,10 @@ def main():
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
                     help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
+    ap.add_argument('--no-trail-stop', action='store_true',
+                    help='뒤따름 상한이 낮아도 그대로 풂 (예전 동작). 기본은 hmpc_node 처럼 풀지 않고 세움')
+    ap.add_argument('--no-anchor', action='store_true',
+                    help='지난 풀이 s 궤적을 지금 위치에 맞추지 않음 (예전 동작)')
     ap.add_argument('--apply-bad', action='store_true',
                     help='status≠0 해도 그대로 적용 (예전 동작). 기본은 노드처럼 버리고 정지 명령')
     ap.add_argument('--ws-acc-max', type=float, default=0.0,

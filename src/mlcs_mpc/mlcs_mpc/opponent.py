@@ -76,6 +76,7 @@ class OppParams:
     trail_gap: float = 0.80     # 뒤따를 때 목표 간격 (s 차이) m
     trail_gain: float = 1.0     # 간격 오차 → 속도 1/s
     trail_hold: float = 2.0     # 뒤따르는 중 상대가 이 안에 앞서 있으면 겹침이 없어도 계속 뒤따른다 m
+    hold_side: bool = True      # 측면을 정하면 첫 겹침 앞 스테이지도 상대 쪽으로 못 가게 (apply_corridor)
     gp: bool = True
     gp_coverage: float = 0.9    # 상대를 본 구간 비율이 이 이상이면 GP 를 쓴다
     bin: float = 0.1            # 상대 라인 기록 구간 m
@@ -377,8 +378,12 @@ def plan(s_ego, n0, lo, hi, pred, length, p):
     return Plan(hit, gl, gr, ds0, abs(ds0) < p.length, n0 > pred.d[0], reach_l, reach_r, need_l, need_r)
 
 
-def apply_corridor(lo, hi, pred, pl, side, p):
-    """side 쪽 통로로 경계를 좁힌 새 (lo, hi)."""
+def apply_corridor(lo, hi, pred, pl, side, p, n0=None):
+    """side 쪽 통로로 경계를 좁힌 새 (lo, hi).
+
+    n0 를 주면 첫 겹침 스테이지 앞쪽도 상대 쪽으로 못 가게 묶는다 (지금 n 과 통로 끝 중 덜 좁은 쪽).
+    통로가 먼 스테이지에만 걸리면 그 앞은 자유라 MPCC 가 레이싱 라인을 따라 상대 쪽으로 가 버리고,
+    가까워졌을 땐 옆으로 갈 거리가 모자라 뒤따름으로 떨어진다 (1109_3 왼쪽 상자, 2026-11-09)."""
     lo, hi = np.array(lo, float), np.array(hi, float)
     h = pl.hit
     c = p.clear + pred.sig_d
@@ -386,6 +391,14 @@ def apply_corridor(lo, hi, pred, pl, side, p):
         lo[h] = np.maximum(lo[h], pred.d[h] + c[h])
     elif side == RIGHT:
         hi[h] = np.minimum(hi[h], pred.d[h] - c[h])
+    if n0 is not None and h.any() and side in (LEFT, RIGHT):
+        k0 = int(np.argmax(h))
+        if k0 > 0:
+            pre = np.arange(len(lo)) < k0
+            if side == LEFT:
+                lo[pre] = np.maximum(lo[pre], min(n0, float(lo[k0])))
+            else:
+                hi[pre] = np.minimum(hi[pre], max(n0, float(hi[k0])))
     return lo, hi
 
 
@@ -491,7 +504,7 @@ class Opponent:
         mode = self.sel.update(pl)
         cap = None
         if mode in (LEFT, RIGHT):
-            lo, hi = apply_corridor(lo, hi, pred, pl, mode, self.p)
+            lo, hi = apply_corridor(lo, hi, pred, pl, mode, self.p, n0 if self.p.hold_side else None)
         elif mode == TRAIL and pl.ds0 < 0:
             cap = trail_cap(pl, pred, v_max, self.p)
         self.last = (pred, pl, mode)

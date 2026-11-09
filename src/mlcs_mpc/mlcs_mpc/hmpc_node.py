@@ -65,7 +65,7 @@ from vesc_msgs.msg import VescStateStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
 from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, to_command
-from mlcs_mpc.opponent import LEFT, RIGHT, Opponent, OppParams
+from mlcs_mpc.opponent import LEFT, RIGHT, TRAIL, Opponent, OppParams
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -157,6 +157,8 @@ class HmpcNode(Node):
         # 바퀴 가속도 한계 m/s² (0 = 끔). tau 는 작게 두고 이것으로 '바로 못 선다' 를 알려 준다
         d('ws_acc_max', 0.0)
         d('ws_dec_max', 0.0)
+        d('trail_stop_speed', 0.3)      # 뒤따름 속도 상한이 이보다 낮으면 풀지 않고 세운다 m/s
+        d('trail_go_speed', 0.4)        # 세운 뒤 상한이 이보다 높아지면 다시 푼다 m/s
         d('track_hard', True)
         d('track_width', 0.12)
         d('track_slack', 1000.0)
@@ -209,6 +211,8 @@ class HmpcNode(Node):
         self.max_dsteer = float(gp('max_steer_rate')) * self.period
         self.lr = list(gp('vehicle_params'))[1]
         self.v_floor = float(gp('v_floor'))
+        self.ws_dec_max = float(gp('ws_dec_max'))
+        self.trail_stop_speed, self.trail_go_speed = float(gp('trail_stop_speed')), float(gp('trail_go_speed'))
         self.reverse_limit = float(gp('reverse_limit'))
         self.friction = float(gp('friction'))
         self.erpm_gain = float(gp('erpm_gain'))
@@ -279,6 +283,8 @@ class HmpcNode(Node):
         self.v_cap = np.full(self.N, self.v_max)
         self.delta = 0.0
         self.cmd_steer = 0.0
+        self.trail_stopped = False      # 뒤따름 정지 중 (풀지 않고 세우는 중)
+        self.trail_cmd = math.inf       # 그때 내는 속도 명령 (ws_dec_max 로 줄여 간다)
         self.running = False    # 다음 요청이 초기 추측을 다시 깔아야 하면 False
         self.stop_reason = 'init'
         self.worker = None
@@ -520,6 +526,7 @@ class HmpcNode(Node):
                 self.running = False
                 self.track.reset()
                 self.delta = self.cmd_steer = 0.0
+                self.trail_stopped, self.trail_cmd = False, math.inf
                 self._publish(0.0, 0.0)
                 return
             if self.stop_reason is not None:
@@ -532,7 +539,11 @@ class HmpcNode(Node):
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
                            self.lr, self.v_floor, self.friction)
             if self.running and self.s_pred is not None:
-                s = self.s_pred
+                # ★ 지난 풀이의 s 궤적을 지금 위치에 맞춘다 (2026-11-09). MERIT_BACKTRACKING 으로 스텝이
+                #   일부만 들어가면 풀이의 스테이지 0 이 x0 와 어긋나, 예측 s 가 실제보다 최대 0.4 m 뒤처진다
+                #   (뒤따름 급감속 때, 평소는 2 cm 이하). 그대로 쓰면 벽 경계·곡률·상대 간격을 엉뚱한 곳에서
+                #   읽는다 — 정지 장애물 뒤에 0.4 m 까지 붙어 섰다 (offline 1109_3). 지금은 s_pred[1] ≈ x[0].
+                s = self.s_pred + (x[0] - self.s_pred[1])
             else:
                 s = x[0] + x[3] * self.dt * np.arange(self.N + 1)
             kappa = self.track.kappa_at(s)
@@ -552,6 +563,24 @@ class HmpcNode(Node):
                     self.opp_mode = mode
                     self.get_logger().info(f'상대: {mode or "없음"}')
                     self.opp_pub.publish(String(data=mode or 'none'))
+                # ★ 뒤따름 정지 (2026-11-09, 메인 PC 제안): 속도 상한이 trail_stop_speed 아래면 풀지 않고
+                #   직접 세운다. 저속 + 상한 0 은 풀이가 status 4 로 깨져 래치된다 (offline 1109_3,
+                #   정지 장애물 뒤 204/600). 감속은 ws_dec_max 안, 조향은 그대로. 상한이 다시 오르면 푼다.
+                stop_now = mode == TRAIL and cap is not None and (
+                    cap[0] < self.trail_stop_speed or (self.trail_stopped and cap[0] < self.trail_go_speed))
+                if stop_now:
+                    if not self.trail_stopped:
+                        self.get_logger().info(f'뒤따름 정지 — 상한 {cap[0]:.2f} m/s, 풀지 않고 세움')
+                    self.trail_stopped = True
+                    dec = self.ws_dec_max if self.ws_dec_max > 0 else 2.5
+                    self.trail_cmd = max(min(self.trail_cmd, self.ws) - dec * self.dt, 0.0)
+                    self.running = False        # 다시 풀 때 초기 추측을 지금 상태로
+                    self._publish(self.trail_cmd, self.cmd_steer)
+                    return
+                if self.trail_stopped:
+                    self.get_logger().info(f'뒤따름 정지 풀림 — 상한 {cap[0] if cap is not None else -1:.2f} m/s, mode {mode}')
+                self.trail_stopped = False
+                self.trail_cmd = math.inf
             self.rid += 1.0
             cmd = 0.0 if self.running else 1.0
             # 저속에서는 풀이가 110 ms 까지 간다 (실측). 느리니 더 기다려도 멀리 못 간다.
