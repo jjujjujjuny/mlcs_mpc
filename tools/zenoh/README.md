@@ -1,5 +1,17 @@
 # 노트북에서 젯슨 보기 — SSH + tmux + Zenoh 브리지
 
+> **노트북에서는 레포 맨 위의 `./car.sh` 하나로 한다** (2026-11-09 추가)
+>
+> ```
+> ./car.sh ip 192.168.1.7   # 젯슨 주소 저장 (대회장에서 바뀌면 다시)
+> ./car.sh key              # SSH 비밀번호 안 묻게 (한 번만)
+> ./car.sh bench            # 젯슨 race.sh 를 bench 로 (race.yaml 안 고침)
+> ./car.sh rviz             # 다른 창: 노트북 RViz
+> ./car.sh check            # 또 다른 창: /scan /tracked_pose 주파수
+> ./car.sh stop             # 끝
+> ```
+> `./car.sh` 만 치면 전체 사용법. 아래는 그 안에서 무슨 일이 일어나는지에 대한 설명이다.
+
 대회에서 NoMachine 화면 공유 대신 쓴다. 젯슨은 토픽만 보내고, RViz 는 노트북에서 그린다.
 
 ```

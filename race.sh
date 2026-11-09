@@ -4,6 +4,7 @@
 #
 #     ./race.sh               race.yaml
 #     ./race.sh other.yaml    다른 설정 파일
+#     MLCS_RACE_BENCH=1 ./race.sh   이번만 bench (속도 0) — race.yaml 의 drive 무시
 #
 #  자율 모드로 시작해 조이스틱 B 를 누르면 출발. LB = 수동(비상정지), 다시 LB = 바로 자율 재개.
 # ============================================================================
@@ -61,6 +62,9 @@ if hm and not os.path.isfile(hm if os.path.isabs(hm) else os.path.join(root, hm)
     err(f'hyper_model 파일이 없습니다: {hm}')
 
 drive = bool(c.get('drive', False))
+# MLCS_RACE_BENCH=1 → race.yaml 을 안 고치고 이번 한 번만 bench (노트북 ./car.sh bench)
+if os.environ.get('MLCS_RACE_BENCH') == '1':
+    drive = False
 source = str(c.get('source') or 'mocap')
 if source not in ('lidar', 'mocap'):
     err(f'source 는 lidar 또는 mocap: {source}')
