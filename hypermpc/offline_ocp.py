@@ -46,6 +46,10 @@ offline_ocp.py — HyperMPC 정식화를 차 없이 한 번 풀어본다. (3단�
   Bx 가 커서 3회로는 0.25 m/s 출발에서 QP 실패가 대부분이고 4회면 정상이다 (2026-11-05).
   계수가 바뀌면 다시 볼 것.
 
+  ★ 적분과 별개로, 타이어 Cx > 1 이면 종방향 힘이 정점 뒤 떨어져 그 구간에서 v_x 고유값이
+  양수가 된다 (모델 자체가 불안정). 재동정 H 는 뒤 Cx 1.86 이라 0.7 m/s 에서 QP 실패가 반복됐다
+  (2026-11-09 젯슨). 그래서 hmpc.yaml 과 HyperStage 는 Cx ≤ 1 로 묶는다 (hyper_params.clamp_cx).
+
 ■ 원본과의 관계
 
   동역학은 hypermpc_code 의 robot_model/car/casadi_car_model_naive.py 를

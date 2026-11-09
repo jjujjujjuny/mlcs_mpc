@@ -20,8 +20,23 @@ hyper_params.py — HyperPM (시변 동역학 파라미터) 를 numpy 로 돌려
   · v_min 아래 (서 있거나 출발할 때) 와 출력이 유한하지 않을 때는 fallback (hmpc.yaml 상수) 을 쓴다.
     학습 데이터는 vx ≥ 0.25 만 있고, 정지 근처에서는 어차피 동역학 차이가 작다.
   · v_min ~ v_min + blend 사이는 섞는다 (출발할 때 파라미터가 계단으로 바뀌지 않게).
+  · 타이어 Cx 는 CX_MAX (1) 이하로 묶는다 (clamp_cx). Cx > 1 이면 종방향 힘이 정점 뒤 떨어지고 그 구간에서
+    v_x 가 불안정해져 저속에서 QP 가 깨진다 (hmpc.yaml 주석). J 는 뒤 Cx 가 늘 1 을 넘지만 묶어도 손실은 같다.
 """
 import numpy as np
+
+CX_MAX = 1.0
+CX = (17, 27)       # 앞·뒤 타이어 Cx 위치 (바로 앞이 Bx)
+
+
+def clamp_cx(p, cx_max=CX_MAX):
+    """(..., 30) 파라미터의 Cx 를 cx_max 이하로. Bx·Cx 를 유지해 원점 기울기 Bx·Cx·Dx 가 그대로다."""
+    p = np.array(p, dtype=np.float64)
+    for i in CX:
+        c = np.minimum(p[..., i], cx_max)
+        p[..., i - 1] *= p[..., i] / c
+        p[..., i] = c
+    return p
 
 
 def _sig(x):
@@ -78,12 +93,12 @@ class HyperStage:
         reset()                정지·재시작 때
     """
 
-    def __init__(self, path, N, dt, fallback, v_min=0.5, blend=0.3):
+    def __init__(self, path, N, dt, fallback, v_min=0.5, blend=0.3, cx_max=CX_MAX):
         self.net = HyperParams(path)
         self.N, self.dt = N, dt
         self.fallback = np.asarray(fallback, dtype=np.float64)
         assert self.fallback.size == self.net.n_par
-        self.v_min, self.blend = v_min, blend
+        self.v_min, self.blend, self.cx_max = v_min, blend, cx_max
         self.t_stage = dt * np.arange(N + 1)
         self.t_nn = self.net.tp * np.arange(self.net.H)
         # 관측은 0.25 s 만 필요하다. 주기가 늦어도 끊기지 않게 넉넉히 둔다.
@@ -135,4 +150,6 @@ class HyperStage:
         if not np.all(np.isfinite(p_nn)):
             return fb, 0.0
         p = np.stack([np.interp(self.t_stage, self.t_nn, p_nn[:, i]) for i in range(p_nn.shape[1])], axis=1)
+        if self.cx_max:
+            p = clamp_cx(p, self.cx_max)
         return (1.0 - a) * fb + a * p, a

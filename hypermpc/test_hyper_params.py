@@ -15,7 +15,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from hyper_params import HyperParams, HyperStage  # noqa: E402
+from hyper_params import CX, HyperParams, HyperStage, clamp_cx  # noqa: E402
 
 N, DT = 60, 0.033
 
@@ -63,8 +63,14 @@ def check(path):
     t_last = net.tp * (net.H - 1)
     beyond = np.arange(N + 1) * DT > t_last
     p_nn = net.predict(hs.M(19 * DT), hs.P(19 * DT, x_state()))
-    ok(np.allclose(Pk[beyond], p_nn[-1]), f'{t_last:.2f} s 뒤 스테이지는 마지막 값 유지 ({beyond.sum()}개)')
-    ok(np.allclose(Pk[0], p_nn[0]), '스테이지 0 = 네트워크 첫 칸')
+    q_nn = clamp_cx(p_nn)
+    ok(np.allclose(Pk[beyond], q_nn[-1]), f'{t_last:.2f} s 뒤 스테이지는 마지막 값 유지 ({beyond.sum()}개)')
+    ok(np.allclose(Pk[0], q_nn[0]), '스테이지 0 = 네트워크 첫 칸 (Cx 묶음)')
+    ok(np.all(Pk[:, CX] <= 1.0 + 1e-12)
+       and np.allclose(Pk[:, [c - 1 for c in CX]] * Pk[:, CX],
+                       np.stack([np.interp(hs.t_stage, hs.t_nn, p_nn[:, c - 1] * p_nn[:, c]) for c in CX], 1),
+                       rtol=1e-2),
+       f'Cx ≤ 1, Bx·Cx 유지 (묶기 전 뒤 Cx {p_nn[:, CX[1]].min():.2f}~{p_nn[:, CX[1]].max():.2f})')
 
     xs = np.tile(x_state(), (N + 1, 1))
     xs[:, 7] = np.linspace(2.0, 3.0, N + 1)
