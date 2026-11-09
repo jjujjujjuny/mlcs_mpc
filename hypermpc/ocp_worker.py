@@ -63,6 +63,11 @@ def read_exact(fd, n):
     return buf
 
 
+# 통계 CSV 에 남길 예측 스테이지 (dt 0.033 이면 0.33 / 0.66 / 1.0 s 뒤). 젯슨 11-09: 벽에 닿기 전
+# 예측 n 과 실제 n 을 비교하려고. s 는 풀이의 s 그대로 (노드의 앵커 보정 전)
+STATS_STAGES = (0, 10, 20, 30)
+
+
 def solve_stat(solver, key):
     """acados 통계 하나. qp_iter 는 SQP 반복별 배열이라 합한다. 못 읽으면 -1."""
     try:
@@ -92,7 +97,8 @@ def main():
     ap.add_argument('--build-dir', default=os.path.expanduser('~/hmpc_build'))
     ap.add_argument('--no-guard', action='store_true', help='시험 전용. 슬립 0 에서 solve 가 멈춘다')
     ap.add_argument('--stats-csv', default='/tmp/mlcs_hmpc_solve_stats.csv',
-                    help='주기별 풀이 통계 (t, status, ms, sqp_iter, qp_iter, 재시작 풀이 수, n 슬랙 최대). 빈 값이면 끔')
+                    help='주기별 풀이 통계 (t, status, ms, sqp_iter, qp_iter, 재시작 풀이 수, n 슬랙 최대, '
+                         '스테이지 0/10/20/30 의 예측 s·n). 빈 값이면 끔')
     a = ap.parse_args()
     c = json.loads(a.config)
 
@@ -165,7 +171,8 @@ def main():
         new = not os.path.exists(a.stats_csv)
         stats = open(a.stats_csv, 'a', buffering=1)     # 워커가 다시 떠도 앞 기록을 지우지 않는다
         if new:
-            stats.write('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max\n')
+            stats.write('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max,'
+                        + ','.join(f'{c}{k}' for k in STATS_STAGES for c in ('s', 'n')) + '\n')
     while True:
         raw = read_exact(a.fd_in, req_len)
         if raw is None:
@@ -231,7 +238,8 @@ def main():
         if stats is not None:
             # 응답을 보낸 뒤에 쓴다 (노드를 기다리게 하지 않는다). 젯슨 11-09: 느린 풀이를 반복 수로 가르려고
             stats.write(f'{t_req:.4f},{int(st)},{ms:.2f},{solve_stat(solver, "sqp_iter")},'
-                        f'{solve_stat(solver, "qp_iter")},{n_resolve},{slack_n_max(solver, N, cfg):.4f}\n')
+                        f'{solve_stat(solver, "qp_iter")},{n_resolve},{slack_n_max(solver, N, cfg):.4f},'
+                        + ','.join(f'{xs[min(k, N), 0]:.4f},{xs[min(k, N), 1]:.4f}' for k in STATS_STAGES) + '\n')
 
 
 if __name__ == '__main__':
