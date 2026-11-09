@@ -95,6 +95,16 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 - 참고 (546b9b6 전에 따로 해 본 것): 우분투 `musl` 패키지의 로더 + 우분투 `/lib/x86_64-linux-gnu/libgcc_s.so.1` 로 띄우면 `Error relocating .../libgcc_s.so.1: _dl_find_object: symbol not found` (glibc 용 libgcc_s 라 안 맞음). musl 용 libgcc_s 가 따로 있어야 한다.
 - 2~4번은 브리지가 안 떠서 못 함.
 
+### 소스 빌드 시험 (젯슨 답 2, 2026-11-09 23:00)
+
+- 1) 빌드 도구 ✓: `clang` `libclang-dev` 를 apt 로 설치 (나머지는 이미 있었음), rustup 으로 Rust 설치. (clang 없이 먼저 해 보면 bindgen 에서 `'stddef.h' file not found` 로 실패한다 — clang 헤더가 필요)
+- 2) `cargo build --release -p zenoh-bridge-ros2dds` ✓ 2분 42초 (8코어)
+- 3) `objdump` 최대 `GLIBC_2.34` ✓, `--version` → `zenoh-bridge-ros2dds v1.10.2` ✓
+- `./laptop.sh 192.168.1.7` ✓ 브리지 접속, RViz 뜸. 브리지 로그에 `/initialpose` (ROS → Zenoh) 경로 생성
+- `ros2 topic echo /hmpc/status` ✓ "젯슨 브리지 시험 메시지" 1초마다
+- 와이파이 끄고 켜기 ✓: `nmcli radio wifi off` 10초 → `on`. 와이파이 재연결에 1분 넘게 걸렸지만, 붙은 뒤에는 브리지를 다시 띄우지 않아도 메시지가 다시 들어옴
+- 아직 안 한 것: 맵·스캔·차 위치 표시, `/scan` 10Hz, `2D Pose Estimate` 가 젯슨에 도착하는지 (젯슨에서 bench 를 띄운 다음)
+
 ## 아직 남은 것
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
