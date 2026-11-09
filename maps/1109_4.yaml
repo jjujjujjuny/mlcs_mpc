@@ -1,0 +1,6 @@
+image: 1109_4.pgm
+resolution: 0.050000
+origin: [-3.834590, -6.028291, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
