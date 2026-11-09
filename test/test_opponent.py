@@ -15,8 +15,8 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'src/mlcs_mpc'))
-from mlcs_mpc.hmpc_core import Track  # noqa: E402
-from mlcs_mpc.opponent import (FREE, LEFT, RIGHT, TRAIL, OppParams, Opponent,  # noqa: E402
+from mlcs_mpc.env.track import Track  # noqa: E402
+from mlcs_mpc.env.opponent import (FREE, LEFT, RIGHT, TRAIL, OppParams, Opponent,  # noqa: E402
                                OpponentModel, OpponentTracker, PeriodicGP, SideSelector,
                                apply_corridor, eval_s, lateral_reach, plan, reach_distance,
                                trail_cap, trail_standoff, wrap_s)

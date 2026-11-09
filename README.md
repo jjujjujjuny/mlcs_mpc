@@ -38,18 +38,17 @@ Jetson Orin Nano / Ubuntu 22.04 (Jammy) / ROS 2 Humble 대상.
 
 ## 빠른 시작
 
-### 시뮬 (차 없이)
+### 시뮬 (차 없이) — MPC 튜닝용
+
+차 모델은 MPC 와 같은 식(`env/vehicle_model.py`)·같은 값(`config/mpcc.yaml`)이고, `env/simulator.py` 가
+ODE 로 굴린다. 컨트롤러(`mpcc_node`)는 실차와 같은 토픽만 보므로 코드가 한 줄도 다르지 않다.
 
 ```bash
-# 터미널 1 — 시뮬레이터
-ros2 launch f1tenth_gym_ros gym_bridge_launch.py
-
-# 터미널 2 — MPC
-ros2 launch mlcs_mpc sim_mpc.launch.py
+./sim.sh build                 # 처음 한 번 (~/mlcs_sim_ws, ROS 2 Foxy/Humble)
+./sim.sh                       # race.yaml 의 track·mpcc 설정으로 (PC 에서 튜닝 → 젯슨에서 ./race.sh)
+./sim.sh track s_track 0.8     # 트랙과 v_max 만
+./sim.sh status                # 랩 시간·벽 충돌
 ```
-
-기본 웨이포인트(`waypoints/levine_centerline.csv`)는 Levine 맵에서 뽑은
-실제 중앙선이다 (62.4m 폐곡선).
 
 ### 실차
 
@@ -179,36 +178,80 @@ ros2 run mlcs_mpc smooth_path --ros-args -p input:=track1.csv -p output:=track1_
 
 ## 구조
 
+최상위에는 실행 진입점만 둔다.
+
 ```
-src/mlcs_mpc/mlcs_mpc/
-  vehicle_model.py   운동학 자전거 모델 (+ 시변 파라미터 자리)
-  mpc_solver.py      iLQR 최적화기 (acados 백엔드 자리)
-  path_manager.py    웨이포인트 → 참조 궤적, 곡률 기반 속도 프로파일
-  mpc_node.py        ★ 메인 컨트롤러
-  stanley_node.py    Stanley 추종 (게인 2개 — 배관 검증/베이스라인)
-  import_track.py    DeepRacer 트랙 → 웨이포인트 (+주행가능성 검사)
-  track_viz.py       트랙·차량·궤적 RViz 시각화
+mlcs_mpc/
+├── drive.sh  race.sh  sim.sh  bat.sh  race.yaml   실행 진입점 / 레이스 설정 (실차·시뮬 공통)
+├── src/mlcs_mpc/        ROS 2 패키지 (launch/, config/mpcc.yaml, waypoints/, mlcs_mpc/)
+├── learned/             학습 모델 — MPC 에 스테이지별 동역학 파라미터를 주는 쪽
+│   ├── param_model.py   인터페이스 (기본 = 상수). 학습 모델은 여기에 붙인다
+│   └── hyperpm/         HyperPM: numpy 추론, export_hyper, train/ (학습)
+├── tools/
+│   ├── track/           트랙 만들기 — draw_track, track_from_map, track_from_lap,
+│   │                    prep_track, make_s_track, preview_track, map_mocap_align
+│   ├── analysis/        주행 로그 분석·학습 데이터 — race_report, race_to_mocap_log,
+│   │                    clean_drive_log, prep_hpm_dataset, actuator_id, check_kinematic_fit
+│   └── hw/              차 점검 — check_state, servo_sweep
+├── test/                시험 전부 (python3 test/<이름>.py)
+├── data/
+│   ├── tracks/          트랙 (<이름>/prep_<이름>.csv)
+│   ├── maps/            Cartographer 맵 (.pbstream/.pgm/.yaml, .mocap.yaml)
+│   ├── runs/            주행 로그 묶음 (tar.gz)
+│   └── lab_map/         실험실 경계 19각형 + 옛 DeepRacer 트랙 도구
+├── docs/                설명서 + notes/ (날짜별 기록)
+└── third_party/         patches/ (서드파티 수정본), vesc_msgs/ (시뮬 PC 용 메시지)
+```
+
+ROS 패키지 내부 (`src/mlcs_mpc/mlcs_mpc/`):
+
+```
+env/     ROS 없는 핵심 — 차·트랙·MPC·시뮬레이터
+  config.py          MpccConfig — N, dt, 입력·트랙 경계, 비용 가중치 (값은 config/mpcc.yaml)
+  vehicle_model.py   ★ 공통 차 모델 (Pacejka 단일 궤적 + 액추에이터). MPC 와 시뮬이 같은 식
+  track.py           닫힌 트랙 — Frenet, 지점별 벽, κ(s) 격자 (OCP 가 생성 코드에 넣는다)
+  simulator.py       ODE 시뮬레이터 — step() 이 vehicle_model 을 적분
+  opponent.py        상대 차 예측 → 스테이지별 통로 (추월/뒤따르기)
+  path_manager.py    웨이포인트 → 참조 궤적 (옛 컨트롤러·시각화)
+  mpc/               MPCC — acados_ocp, acados_solver, bounds, core, worker, offline (README.md)
+  legacy/            옛 iLQR 의 운동학 모델·솔버
+control/ 컨트롤러 노드
+  mpcc_node.py       ★ MPCC 컨트롤러 (풀이는 env/mpc/worker.py 프로세스)
+  legacy/            ilqr_node (mpc_node), stanley_node — 베이스라인·배관 검증
+io/      위치추정 → /mpc/state
   mocap_bridge.py    NatNet pose → 상태 추정 (칼만 필터)
-  mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
-  sim_bridge.py      시뮬 odom → 같은 인터페이스
-  safety_node.py     경계 감시 / 비상 정지
+  lidar_bridge.py    Cartographer pose → 같은 인터페이스
+  sim_node.py        env/simulator → 같은 인터페이스 (+ /sensors/core)
+  sim_bridge.py      f1tenth_gym odom → 같은 인터페이스 (옛 시뮬)
+  mocap_health.py    mocap 프레임을 믿을 만한가 판정
+  relocalize.py      Cartographer 시작 위치 잡기 + 스캔 매칭으로 다시 맞춤
+ui/      사람 입력·화면
   joystick_teleop.py 로지텍 F710 수동 조종 (+ /joy 워치독)
+  rally_limits.py    랠리 모드 십자키 조종 상한 (원선회용)
+  track_viz.py       트랙·차량·궤적 RViz 시각화
+utils/   안전·캘리브레이션·기록
+  safety_node.py     경계 감시 / 비상 정지
+  track_info.py      트랙 기하 + 안전 여유 점검
   calibrate.py       mocap 으로 VESC 값 측정
+  mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
+  data_logger.py     학습 데이터 수집 (100Hz, mocap 클럭)
   waypoint_logger.py 주행 경로 기록
-  data_logger.py     HyperPM 학습 데이터 수집 (100Hz, mocap 클럭)
   smooth_path.py     경로 평활화
+  import_track.py    DeepRacer 트랙 → 웨이포인트 (+주행가능성 검사)
 ```
+
+노드 이름(`ros2 run mlcs_mpc <노드>`)은 폴더와 상관없이 `setup.py` 의 entry point 가 잇는다.
 
 ### 토픽
 
 ```
-/natnet_ros/car/pose  ─→ mocap_bridge ─→ /mpc/state  ─→ mpc_node ─→ /drive
+/natnet_ros/car/pose  ─→ mocap_bridge ─→ /mpc/state  ─→ mpcc_node ─→ /drive
    (PoseStamped)                          (Odometry)                (Ackermann)
                                        /mocap/valid ↗           ↑
                                                       /mpc/enabled
 ```
 
-시뮬에서는 `mocap_bridge` 자리에 `sim_bridge` 가 들어가고 **나머지는 동일하다.**
+시뮬에서는 `mocap_bridge`(와 VESC) 자리에 `sim_node` 가 들어가고 **나머지는 동일하다.**
 컨트롤러가 시뮬/실차용으로 갈리지 않는 것이 이 설계의 요점이다.
 
 ---
@@ -265,7 +308,7 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 - [docs/SETUP_JETSON.md](docs/SETUP_JETSON.md) — 젯슨 환경 구축 (여기부터)
 - [docs/MOCAP_SETUP.md](docs/MOCAP_SETUP.md) — 모션캡처 연동 (RigidBody → 토픽)
 - [docs/CALIBRATION.md](docs/CALIBRATION.md) — VESC 캘리브레이션
-- [lab_map/](lab_map/) — 실험실 경계(19각형) + 트랙 생성 도구 (메인 PC 에서 가져옴)
+- [data/lab_map/](data/lab_map/) — 실험실 경계(19각형) + 옛 트랙 생성 도구 (메인 PC 에서 가져옴)
 - [docs/TRACKS.md](docs/TRACKS.md) — 트랙 출처와 **주행 가능성** (★ 주행 전 확인)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길 (논문 분석 포함)
 

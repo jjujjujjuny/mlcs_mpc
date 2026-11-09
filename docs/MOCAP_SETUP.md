@@ -213,13 +213,13 @@ ros2 launch natnet_ros2 natnet_ros2.launch.py \
 
 ### 구버전 Motive (2.x) 를 쓴다면
 
-`patches/apply.sh` 를 적용해야 한다. 적용 안 하면 노드가 SIGABRT 로 즉사한다:
+`third_party/patches/apply.sh` 를 적용해야 한다. 적용 안 하면 노드가 SIGABRT 로 즉사한다:
 
     ClientCore.cpp:710: ValidateHostConnection():
         Assertion `mServerDescription.HostPresent' failed.
 
 Motive 2.3 은 NatNet **3.1** 로 말하는데 드라이버의 SDK 는 **4.4** 라
-버전 협상을 안 하기 때문이다. 자세한 내용은 `patches/README.md`.
+버전 협상을 안 하기 때문이다. 자세한 내용은 `third_party/patches/README.md`.
 
 ---
 

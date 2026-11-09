@@ -1,7 +1,7 @@
 -- ============================================================================
 --  Cartographer 2D 위치추정 (pure localization) — ./drive.sh localize 가 쓴다
 --
---  저장한 맵(maps/<이름>.pbstream)을 얼려(frozen) 불러오고, 새 궤적은
+--  저장한 맵(data/maps/<이름>.pbstream)을 얼려(frozen) 불러오고, 새 궤적은
 --  맵에 붙여 위치만 낸다. 맵은 더 자라지 않는다.
 --
 --  설정은 mapping_2d.lua 를 그대로 쓰고 위치추정에 필요한 두 줄만 바꾼다

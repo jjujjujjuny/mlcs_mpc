@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  race.sh — race.yaml 을 읽어 hmpc 를 띄운다.
+#  race.sh — race.yaml 을 읽어 mpcc 를 띄운다.
 #
 #     ./race.sh               race.yaml
 #     ./race.sh other.yaml    다른 설정 파일
@@ -13,20 +13,20 @@ CFG="${1:-$HERE/race.yaml}"
 [ -f "$CFG" ] || { echo "설정 파일이 없습니다: $CFG"; exit 1; }
 OUT=/tmp/mlcs_race_params.yaml
 
-# 설정을 읽어 검사하고, hmpc 파라미터 파일과 환경 변수를 만든다.
+# 설정을 읽어 검사하고, mpcc 파라미터 파일과 환경 변수를 만든다.
 eval "$(python3 - "$CFG" "$HERE" "$OUT" <<'PY'
 import os, shlex, sys
 import numpy as np, yaml
 cfg_path, root, out = sys.argv[1:]
 c = yaml.safe_load(open(cfg_path, encoding='utf-8')) or {}
-base = yaml.safe_load(open(os.path.join(root, 'src/mlcs_mpc/config/hmpc.yaml'), encoding='utf-8'))
+base = yaml.safe_load(open(os.path.join(root, 'src/mlcs_mpc/config/mpcc.yaml'), encoding='utf-8'))
 known = base['/**']['ros__parameters']
-h = dict(c.get('hmpc') or {})
+h = dict(c.get('mpcc') or c.get('hmpc') or {})     # hmpc: 는 예전 이름
 err = lambda m: (print(f'echo {shlex.quote("✗ " + m)} >&2; exit 1'), sys.exit(0))
 
 bad = [k for k in h if k not in known]
 if bad:
-    err(f'race.yaml hmpc 에 모르는 이름: {", ".join(bad)} (config/hmpc.yaml 에 있는 이름만)')
+    err(f'race.yaml mpcc 에 모르는 이름: {", ".join(bad)} (config/mpcc.yaml 에 있는 이름만)')
 for k, v in h.items():
     if type(known[k]) is float and isinstance(v, int) and not isinstance(v, bool):
         h[k] = float(v)          # 1 이라고 써도 ROS 가 float 로 받게
@@ -47,7 +47,7 @@ if not 0.0 < v_max <= v_motor:
 t = str(c.get('track') or '')
 if not t:
     err('track 을 적어 주세요')
-path = t if os.path.isfile(t) else os.path.join(root, 'lab_map/data/tracks', t, f'prep_{t}.csv')
+path = t if os.path.isfile(t) else os.path.join(root, 'src/mlcs_mpc/mlcs_mpc/env/track/data', t, f'prep_{t}.csv')
 if not os.path.isfile(path):
     err(f'트랙을 못 찾았습니다: {t}')
 d = np.genfromtxt(path, delimiter=',', names=True)
@@ -56,9 +56,10 @@ r_min = 1.0 / max(np.abs(d['curvature']).max(), 1e-9)
 fric = float(h.get('friction', known['friction']))
 v_corner = (fric * 9.81 * r_min) ** 0.5
 
-hm = str(h.get('hyper_model') or '')
+hm = str(h.get('param_model') or '')
+hm = hm.partition(':')[2] if ':' in hm else hm
 if hm and not os.path.isfile(hm if os.path.isabs(hm) else os.path.join(root, hm)):
-    err(f'hyper_model 파일이 없습니다: {hm}')
+    err(f'param_model 파일이 없습니다: {hm}')
 
 yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 drive = bool(c.get('drive', False))
@@ -70,8 +71,8 @@ if isinstance(mp, int):
     err(f'map 을 따옴표로 감싸 주세요 (예: map: "1108_5"). 지금은 숫자 {mp} 로 읽혔습니다')
 mp = str(mp)
 if source == 'lidar':
-    if not os.path.isfile(os.path.join(root, 'maps', f'{mp}.pbstream')):
-        err(f'라이다 주행 맵이 없습니다: maps/{mp}.pbstream')
+    if not os.path.isfile(os.path.join(root, 'data/maps', f'{mp}.pbstream')):
+        err(f'라이다 주행 맵이 없습니다: data/maps/{mp}.pbstream')
     if '_mocap' in t:
         err(f'라이다 주행인데 mocap 프레임 트랙입니다: {t}')
     if h.get('opponent_topic'):
@@ -79,20 +80,20 @@ if source == 'lidar':
 elif '_mocap' not in t:
     print('echo "⚠ mocap 주행인데 트랙 이름에 _mocap 이 없습니다 — 좌표계를 확인하세요" >&2')
 log = str(c.get('log') or '')
-print(f'export MLCS_HMPC_TRACK={shlex.quote(os.path.abspath(path))}')
-print(f'export MLCS_HMPC_PARAMS={shlex.quote(out)}')
-print(f'export MLCS_HMPC_DRIVE={1 if drive else 0}')
-print(f'export MLCS_HMPC_SOURCE={source}')
-print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
+print(f'export MLCS_MPCC_TRACK={shlex.quote(os.path.abspath(path))}')
+print(f'export MLCS_MPCC_PARAMS={shlex.quote(out)}')
+print(f'export MLCS_MPCC_DRIVE={1 if drive else 0}')
+print(f'export MLCS_MPCC_SOURCE={source}')
+print(f'export MLCS_MPCC_MAP={shlex.quote(mp)}')
 print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'트랙   {t}  (길이 {d["s"][-1]:.1f} m, 최소 반경 {r_min:.2f} m)',
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
          f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속',
-         f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}']
-lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model')]
+         f'모델   {"★ 학습 모델 시변 " + str(h.get("param_model")) if hm else "상수 파라미터 (mpcc.yaml)"}']
+lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'param_model')]
 if v_max > 3.0:
-    lines.append('⚠ v_max 3 m/s 초과 — 동정 데이터는 3 m/s 까지다. 모델 밖이니 offline_ocp 로 먼저 확인하고 조금씩 올릴 것')
+    lines.append('⚠ v_max 3 m/s 초과 — 동정 데이터는 3 m/s 까지다. 모델 밖이니 env/mpc/offline.py 로 먼저 확인하고 조금씩 올릴 것')
 print('RACE_SUMMARY=' + shlex.quote('\n'.join(lines)))
 PY
 )"
@@ -106,9 +107,9 @@ ARGS=()
 # ★ trap '' 으로 무시하면 자식이 SIGINT 무시를 물려받아 drive.sh 정리가 안 돈다. ':' 로 둔다.
 trap ':' INT
 set +e
-"$HERE/drive.sh" hmpc "${ARGS[@]}"
+"$HERE/drive.sh" mpcc "${ARGS[@]}"
 trap - INT
-if [ -n "$RACE_LOG" ] && [ "$MLCS_HMPC_SOURCE" = lidar ]; then
+if [ -n "$RACE_LOG" ] && [ "$MLCS_MPCC_SOURCE" = lidar ]; then
     echo
     echo "════════════════ 채점 (mocap 정답) ════════════════"
     "$HERE/drive.sh" racereport || echo "채점을 못 했습니다 — 위 메시지를 보세요"

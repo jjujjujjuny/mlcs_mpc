@@ -20,11 +20,11 @@ import numpy as np
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'mlcs_mpc'))
 
-from mlcs_mpc.vehicle_model import (          # noqa: E402
+from mlcs_mpc.env.legacy.kinematic_model import (          # noqa: E402
     VehicleParams, step_rk4, dynamics, normalize_angle, NX, NU)
-from mlcs_mpc.mpc_solver import MPCSolver, MPCConfig    # noqa: E402
-from mlcs_mpc.path_manager import PathManager          # noqa: E402
-from mlcs_mpc.rally_limits import RallyLimits, circle_estimate  # noqa: E402
+from mlcs_mpc.env.legacy.ilqr_solver import MPCSolver, MPCConfig    # noqa: E402
+from mlcs_mpc.env.path_manager import PathManager          # noqa: E402
+from mlcs_mpc.ui.rally_limits import RallyLimits, circle_estimate  # noqa: E402
 
 RESULTS = []
 
@@ -135,7 +135,7 @@ def test_circle_path():
 def test_circle_fit():
     print('\n■ 캘리브레이션 원 피팅')
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '..', 'src', 'mlcs_mpc', 'mlcs_mpc',
+                            '..', 'src', 'mlcs_mpc', 'mlcs_mpc', 'utils',
                             'calibrate.py')).read()
     ns = {'np': np, 'math': math}
     exec(src[src.index('def fit_circle'):src.index('def main(')], ns)
@@ -157,7 +157,7 @@ def test_circle_fit():
 def test_kalman():
     print('\n■ 속도 추정 칼만 필터')
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '..', 'src', 'mlcs_mpc', 'mlcs_mpc',
+                            '..', 'src', 'mlcs_mpc', 'mlcs_mpc', 'io',
                             'mocap_bridge.py')).read()
     ns = {'np': np}
     exec(src[src.index('class PoseKF'):src.index('class MocapBridge')], ns)

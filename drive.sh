@@ -14,11 +14,11 @@
 #                                    인자 없으면 config/track.yaml 을 따른다
 #                       --bag        주행 데이터를 rosbag 으로 기록
 #                                    (횡오차·상태·명령 — 나중에 분석용)
-#     ./drive.sh hmpc                HyperMPC OCP 노드. 기본은 거치대용 (속도 항상 0)
-#                       --log [태그]  주행 데이터도 기록 (태그 기본값 hmpc)
-#                       MLCS_HMPC_TRACK=<트랙>  트랙 지정 (이름 또는 prep csv)
-#                       MLCS_HMPC_VMAX=1.0      속도 상한 (기본 config/hmpc.yaml 의 v_max)
-#                       MLCS_HMPC_SOURCE=lidar MLCS_HMPC_MAP=<맵>  라이다 위치추정으로 (mocap 없이)
+#     ./drive.sh mpcc                MPCC 노드 (예전 이름 hmpc 도 된다). 기본은 거치대용 (속도 항상 0)
+#                       --log [태그]  주행 데이터도 기록 (태그 기본값 mpcc)
+#                       MLCS_MPCC_TRACK=<트랙>  트랙 지정 (이름 또는 prep csv)
+#                       MLCS_MPCC_VMAX=1.0      속도 상한 (기본 config/mpcc.yaml 의 v_max)
+#                       MLCS_MPCC_SOURCE=lidar MLCS_MPCC_MAP=<맵>  라이다 위치추정으로 (mocap 없이)
 #     ./drive.sh drawtrack [이름]    손으로 레이싱 라인 클릭 → 트랙 생성 (차 불필요)
 #     ./drive.sh stracks [이름]     직선+S자 트랙을 수식으로 생성 (차 불필요)
 #     ./drive.sh preptrack <이름>    HyperMPC 원저자 전처리 → prep_*.csv
@@ -37,7 +37,7 @@
 #     ./drive.sh rviz                RViz 시각화 (젯슨에서 — NoMachine 으로 본다)
 #     ./drive.sh lidar [--norviz]    라이다만 띄워서 확인 (RViz + 주기, 차 브링업 없음)
 #     ./drive.sh mapping             라이다 맵핑 (Cartographer + RViz, 조이스틱으로 몬다)
-#     ./drive.sh savemap [이름]      맵 저장 — mapping 중 다른 터미널에서 (maps/<이름>.*)
+#     ./drive.sh savemap [이름]      맵 저장 — mapping 중 다른 터미널에서 (data/maps/<이름>.*)
 #     ./drive.sh natnet              mocap 드라이버만 (보통 자동으로 뜬다)
 #
 #   ── 라이다 맵 → 트랙 (대회: 라이다만, mocap 없음) ──
@@ -293,7 +293,7 @@ start_data_logger () {
     fi
     ensure_single_state_publisher
     wait_for_state
-    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
+    if ! python3 "$SCRIPT_DIR/tools/hw/check_state.py" 4; then
         err "데이터 수집을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
         exit 1
     fi
@@ -477,8 +477,8 @@ NATNET_PGID=""
 #         pub_rigid_body:=true   강체 퍼블리셔를 만든다
 #         activate:=true         라이프사이클 노드를 활성화한다
 #
-#   ★ Motive 2.x 를 쓴다면 patches/apply.sh 를 먼저 적용해야 한다.
-#     안 하면 노드가 SIGABRT 로 즉사한다 (patches/README.md 참고).
+#   ★ Motive 2.x 를 쓴다면 third_party/patches/apply.sh 를 먼저 적용해야 한다.
+#     안 하면 노드가 SIGABRT 로 즉사한다 (third_party/patches/README.md 참고).
 natnet_running () {
     pgrep -f '/lib/natnet_ros2/natnet_ros2_node' >/dev/null 2>&1
 }
@@ -744,17 +744,17 @@ start_bringup () {
 #   bringup_launch.py 에서는 주석 처리돼 있다 (mocap 운용 때문). 필요한 모드만 띄운다.
 #   이미 떠 있으면 그대로 쓴다 — 그 경우 PIDS 에 안 넣으므로 이 창이 내려도 안 죽는다.
 #   네트워크: 유선 enP8p1s0 에 nmcli 프로파일 'hokuyo' (192.168.0.15/24)
-# Cartographer 위치추정 (맵 고정). $1 = pbstream. localize, hmpc(라이다) 가 쓴다.
+# Cartographer 위치추정 (맵 고정). $1 = pbstream. localize, mpcc(라이다) 가 쓴다.
 # ★ 코어 5 를 솔버 혼자 쓰게 한다.
 #   이 스크립트(와 앞으로 띄울 자식들)는 0-4 로, 이미 떠 있는 내 프로세스(VS Code 등)도 0-4 로 옮긴다.
-#   솔버 워커만 스스로 5 로 간다 (ocp_worker sched_setaffinity). 되돌리려면 재부팅하거나 taskset -a -cp 0-5 <pid>.
+#   솔버 워커만 스스로 5 로 간다 (env/mpc/worker.py sched_setaffinity). 되돌리려면 재부팅하거나 taskset -a -cp 0-5 <pid>.
 isolate_solver_core () {
     local n=0 p
     taskset -cp 0-4 $$ >/dev/null 2>&1
     for p in $(pgrep -u "$(id -u)"); do
         taskset -a -cp 0-4 "$p" >/dev/null 2>&1 && n=$((n + 1))
     done
-    log "코어 배치: 솔버 5 전용, hmpc_node 4, Cartographer·RViz 0-3, 나머지 0-4  (옮긴 프로세스 $n 개)"
+    log "코어 배치: 솔버 5 전용, mpcc_node 4, Cartographer·RViz 0-3, 나머지 0-4  (옮긴 프로세스 $n 개)"
 }
 
 start_localization () {
@@ -917,31 +917,31 @@ bench)
     ;;
 
 stracks)
-    # 직선 + S자 트랙을 해석적으로 생성 (tools/make_s_track.py)
+    # 직선 + S자 트랙을 해석적으로 생성 (tools/track/make_s_track.py)
     # 손클릭과 달리 곡률이 설계로 보장된다. 창도 ROS 도 차량도 필요 없다.
-    python3 "$SCRIPT_DIR/tools/make_s_track.py" "$@"
+    python3 "$SCRIPT_DIR/tools/track/make_s_track.py" "$@"
     ;;
 
 checkstate)
     # 기록 전에 /mpc/state 에 궤적이 하나만 오는지 몇 초 본다.
     load_ros
-    python3 "$SCRIPT_DIR/tools/check_state.py" "$@"
+    python3 "$SCRIPT_DIR/tools/hw/check_state.py" "$@"
     ;;
 
 laptrack)
-    # 수동 주행 기록 한 바퀴 → 트랙 (tools/track_from_lap.py)
+    # 수동 주행 기록 한 바퀴 → 트랙 (tools/track/track_from_lap.py)
     # 차가 실제로 돈 라인이라 선회반경과 경계가 자동으로 지켜진다.
-    python3 "$SCRIPT_DIR/tools/track_from_lap.py" "$@"
+    python3 "$SCRIPT_DIR/tools/track/track_from_lap.py" "$@"
     ;;
 
 cleanlog)
-    # 학습 전에 mocap 끊김·튐 구간을 잘라낸다 (tools/clean_drive_log.py)
+    # 학습 전에 mocap 끊김·튐 구간을 잘라낸다 (tools/analysis/clean_drive_log.py)
     # ROS 도 차량도 필요 없다. 기록 중인 로그는 지정하지 말 것.
-    python3 "$SCRIPT_DIR/tools/clean_drive_log.py" "$@"
+    python3 "$SCRIPT_DIR/tools/analysis/clean_drive_log.py" "$@"
     ;;
 
 actuator)
-    # ./drive.sh actuator [로그...]   속도 명령 → 바퀴 응답 (tools/actuator_id.py)
+    # ./drive.sh actuator [로그...]   속도 명령 → 바퀴 응답 (tools/analysis/actuator_id.py)
     #   일정 속도 오차(VESC Ki), 감속·가속 때 바퀴 가속도와 Iq, MPC 에 넣을 ws_acc_max / ws_dec_max
     #   로그를 안 주면 ~/mlcs_data 의 가장 최근 드라이브 로그 3개
     if [ $# -eq 0 ]; then
@@ -950,40 +950,40 @@ actuator)
         set -- "${_L[@]}"
         log "가장 최근 로그 ${#_L[@]}개: $(for f in "${_L[@]}"; do basename "$f"; done | tr '\n' ' ')"
     fi
-    python3 "$SCRIPT_DIR/tools/actuator_id.py" "$@"
+    python3 "$SCRIPT_DIR/tools/analysis/actuator_id.py" "$@"
     ;;
 
 hpmdata)
-    # cleanlog 결과 → 저자 형식 train/val/test (tools/prep_hpm_dataset.py)
-    python3 "$SCRIPT_DIR/tools/prep_hpm_dataset.py" "$@"
+    # cleanlog 결과 → 저자 형식 train/val/test (tools/analysis/prep_hpm_dataset.py)
+    python3 "$SCRIPT_DIR/tools/analysis/prep_hpm_dataset.py" "$@"
     ;;
 
 preview)
-    # 트랙을 그림 한 장으로 — 배치 + 곡률 프로파일 (tools/preview_track.py)
-    python3 "$SCRIPT_DIR/tools/preview_track.py" "$@"
+    # 트랙을 그림 한 장으로 — 배치 + 곡률 프로파일 (tools/track/preview_track.py)
+    python3 "$SCRIPT_DIR/tools/track/preview_track.py" "$@"
     ;;
 
 preptrack)
     # 저자들 TrackReader 를 그대로 돌려 prep_<이름>.csv 를 만든다.
     # ROS 도 차량도 창도 필요 없다 (MPLBACKEND=Agg).
-    python3 "$SCRIPT_DIR/tools/prep_track.py" "$@"
+    python3 "$SCRIPT_DIR/tools/track/prep_track.py" "$@"
     ;;
 
 drawtrack)
-    # 손클릭 레이싱 라인 → 닫힌 스플라인 → 좌/우 벽 (tools/draw_track.py)
+    # 손클릭 레이싱 라인 → 닫힌 스플라인 → 좌/우 벽 (tools/track/draw_track.py)
     # ROS 도 차량도 필요 없다. 창을 띄우므로 NoMachine 으로 젯슨 화면에서.
     [ -n "${DISPLAY:-}" ] || { err "DISPLAY 가 없습니다 — NoMachine 으로 젯슨 화면에 접속한 뒤 실행하세요"; exit 1; }
-    python3 "$SCRIPT_DIR/tools/draw_track.py" "$@"
+    python3 "$SCRIPT_DIR/tools/track/draw_track.py" "$@"
     ;;
 
 servo)
-    # 조향 기계적 한계 찾기 — 서보 값을 키보드로 직접 민다 (tools/servo_sweep.py)
+    # 조향 기계적 한계 찾기 — 서보 값을 키보드로 직접 민다 (tools/hw/servo_sweep.py)
     load_ros
     arm_cleanup
     start_bringup
     log "${YLW}서보 한계 측정${RST} — 속도 명령 없음. 조향만 움직입니다."
     warn "거치대 위에서. 바퀴가 더 안 돌거나 서보가 '지잉' 거리면 거기가 한계 — 바로 되돌리세요."
-    python3 "$SCRIPT_DIR/tools/servo_sweep.py" \
+    python3 "$SCRIPT_DIR/tools/hw/servo_sweep.py" \
         "$WS/src/f1tenth_system/f1tenth_stack/config/vesc.yaml"
     ;;
 
@@ -1053,18 +1053,23 @@ stanley)
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true
     ;;
 
-hmpc)
-    # OCP 는 hypermpc/ocp_worker.py 가 따로 풀고 hmpc_node 가 감시한다.
-    # ★ 기본은 bench 다. 달리려면 MLCS_HMPC_DRIVE=1 을 직접 줘야 한다.
+mpcc|hmpc)
+    # OCP 는 env/mpc/worker.py 가 따로 풀고 mpcc_node 가 감시한다.
+    # 예전 이름 MLCS_HMPC_* 도 받는다.
+    for v in TRACK VMAX SOURCE MAP DRIVE PARAMS; do
+        n="MLCS_MPCC_$v"; o="MLCS_HMPC_$v"
+        [ -z "${!n:-}" ] && [ -n "${!o:-}" ] && export "$n=${!o}"
+    done
+    # ★ 기본은 bench 다. 달리려면 MLCS_MPCC_DRIVE=1 을 직접 줘야 한다.
     load_ros; require_ws_pkg mlcs_mpc
-    # 위치 출처: MLCS_HMPC_SOURCE=lidar 면 Cartographer 위치추정 (맵 MLCS_HMPC_MAP),
+    # 위치 출처: MLCS_MPCC_SOURCE=lidar 면 Cartographer 위치추정 (맵 MLCS_MPCC_MAP),
     #   아니면 mocap. 라이다면 트랙도 같은 맵의 map 프레임 트랙이어야 한다 (*_mocap 아님).
-    STATE_SOURCE="${MLCS_HMPC_SOURCE:-mocap}"
+    STATE_SOURCE="${MLCS_MPCC_SOURCE:-mocap}"
     if [ "$STATE_SOURCE" = lidar ]; then
-        MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
-        PB="$MAP_DIR/${MLCS_HMPC_MAP:-}.pbstream"
-        [ -n "${MLCS_HMPC_MAP:-}" ] && [ -f "$PB" ] \
-            || { err "라이다로 달리려면 맵이 필요합니다: MLCS_HMPC_MAP=<맵> (maps/<맵>.pbstream)"; exit 1; }
+        MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
+        PB="$MAP_DIR/${MLCS_MPCC_MAP:-}.pbstream"
+        [ -n "${MLCS_MPCC_MAP:-}" ] && [ -f "$PB" ] \
+            || { err "라이다로 달리려면 맵이 필요합니다: MLCS_MPCC_MAP=<맵> (data/maps/<맵>.pbstream)"; exit 1; }
         if mocap_bridge_running; then
             err "mocap_bridge 가 떠 있습니다 — map 프레임 TF 가 Cartographer 와 겹칩니다. ./drive.sh stop"
             exit 1
@@ -1073,8 +1078,8 @@ hmpc)
             err "Cartographer 가 이미 떠 있습니다 — ./drive.sh stop"
             exit 1
         fi
-        case "${MLCS_HMPC_TRACK:-}" in
-            *_mocap*) err "라이다 주행인데 mocap 프레임 트랙입니다: $MLCS_HMPC_TRACK"; exit 1 ;;
+        case "${MLCS_MPCC_TRACK:-}" in
+            *_mocap*) err "라이다 주행인데 mocap 프레임 트랙입니다: $MLCS_MPCC_TRACK"; exit 1 ;;
         esac
     fi
     arm_cleanup
@@ -1090,7 +1095,7 @@ hmpc)
         else
             warn "DISPLAY 가 없어 RViz 를 못 띄웁니다 — NoMachine 화면의 터미널에서 실행하세요"
         fi
-        log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_HMPC_MAP})"
+        log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_MPCC_MAP})"
         warn "${BLD}RViz 상단 '2D Pose Estimate' 로 차 위치·방향을 찍으세요${RST} — 찍기 전에는 B 를 눌러도 출발 안 함"
         echo "    LT 끝까지 = 지금 위치 근처에서 맵에 다시 맞춤 (차가 멈춰 있을 때)"
     else
@@ -1099,31 +1104,31 @@ hmpc)
         log "위치: mocap"
     fi
     HM_BENCH=true
-    if [ "${MLCS_HMPC_DRIVE:-0}" = "1" ]; then
+    if [ "${MLCS_MPCC_DRIVE:-0}" = "1" ]; then
         HM_BENCH=false
-        warn "${RED}${BLD}MLCS_HMPC_DRIVE=1 — 차가 실제로 움직입니다.${RST} 상한은 config/hmpc.yaml 의 v_max"
+        warn "${RED}${BLD}MLCS_MPCC_DRIVE=1 — 차가 실제로 움직입니다.${RST} 상한은 config/mpcc.yaml 의 v_max"
     else
         warn "bench — 속도는 항상 0 입니다. ${BLD}바퀴를 띄우고${RST} 조향만 확인하세요."
     fi
-    # 트랙: MLCS_HMPC_TRACK=<prep csv 경로 또는 트랙 이름>. 없으면 config/hmpc.yaml
+    # 트랙: MLCS_MPCC_TRACK=<prep csv 경로 또는 트랙 이름>. 없으면 config/mpcc.yaml
     HM_ARGS=(bench:="$HM_BENCH" source:="$STATE_SOURCE")
-    if [ -n "${MLCS_HMPC_TRACK:-}" ]; then
-        HT="$MLCS_HMPC_TRACK"
-        [ -f "$HT" ] || HT="$SCRIPT_DIR/lab_map/data/tracks/$HT/prep_$HT.csv"
-        [ -f "$HT" ] || { err "트랙을 못 찾았습니다: $MLCS_HMPC_TRACK"; exit 1; }
+    if [ -n "${MLCS_MPCC_TRACK:-}" ]; then
+        HT="$MLCS_MPCC_TRACK"
+        [ -f "$HT" ] || HT="$SCRIPT_DIR/src/mlcs_mpc/mlcs_mpc/env/track/data/$HT/prep_$HT.csv"
+        [ -f "$HT" ] || { err "트랙을 못 찾았습니다: $MLCS_MPCC_TRACK"; exit 1; }
         HT="$(cd "$(dirname "$HT")" && pwd)/$(basename "$HT")"
         log "트랙: ${GRN}$HT${RST}"
         HM_ARGS+=(track_csv:="$HT")
     fi
-    if [ -n "${MLCS_HMPC_PARAMS:-}" ]; then
-        HM_ARGS+=(extra_params:="$MLCS_HMPC_PARAMS")
+    if [ -n "${MLCS_MPCC_PARAMS:-}" ]; then
+        HM_ARGS+=(extra_params:="$MLCS_MPCC_PARAMS")
     fi
-    if [ -n "${MLCS_HMPC_VMAX:-}" ]; then
-        log "속도 상한: ${GRN}${MLCS_HMPC_VMAX} m/s${RST} (MLCS_HMPC_VMAX)"
-        HM_ARGS+=(v_max:="$MLCS_HMPC_VMAX")
+    if [ -n "${MLCS_MPCC_VMAX:-}" ]; then
+        log "속도 상한: ${GRN}${MLCS_MPCC_VMAX} m/s${RST} (MLCS_MPCC_VMAX)"
+        HM_ARGS+=(v_max:="$MLCS_MPCC_VMAX")
     fi
-    # hmpc_node·브릿지는 코어 4, 솔버 워커는 스스로 코어 5 (config/hmpc.yaml solver_core)
-    taskset -c 4 ros2 launch mlcs_mpc hmpc.launch.py "${HM_ARGS[@]}" >"$(run_log hmpc)" 2>&1 &
+    # mpcc_node·브릿지는 코어 4, 솔버 워커는 스스로 코어 5 (config/mpcc.yaml solver_core)
+    taskset -c 4 ros2 launch mlcs_mpc mpcc.launch.py "${HM_ARGS[@]}" >"$(run_log mpcc)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
     if [ "$LOGDATA" = 1 ]; then
@@ -1132,16 +1137,16 @@ hmpc)
             pgrep -f '/lib/mlcs_mpc/(mocap|lidar)_bridge' >/dev/null 2>&1 && break
             sleep 0.5
         done
-        start_data_logger "${1:-hmpc}"
+        start_data_logger "${1:-mpcc}"
         if [ "$STATE_SOURCE" = lidar ]; then
             # mocap 을 정답으로 같이 기록한다 (브릿지는 안 띄운다 — TF 가 겹친다)
             start_natnet
-            ALIGN_LOG="$HOME/mlcs_data/align/${MLCS_HMPC_MAP}_$(date +%Y%m%d_%H%M%S)_race.csv"
+            ALIGN_LOG="$HOME/mlcs_data/align/${MLCS_MPCC_MAP}_$(date +%Y%m%d_%H%M%S)_race.csv"
             mkdir -p "$(dirname "$ALIGN_LOG")"
-            python3 "$SCRIPT_DIR/tools/map_mocap_align.py" record "$ALIGN_LOG" \
+            python3 "$SCRIPT_DIR/tools/track/map_mocap_align.py" record "$ALIGN_LOG" \
                 >/tmp/mlcs_race_align.log 2>&1 &
             PIDS="$PIDS $!"
-            printf 'MAP=%q\nTRACK=%q\nALIGN=%q\nSTART=%q\n' "$MLCS_HMPC_MAP" "$HT" \
+            printf 'MAP=%q\nTRACK=%q\nALIGN=%q\nSTART=%q\n' "$MLCS_MPCC_MAP" "$HT" \
                 "$ALIGN_LOG" "$(date +%s)" > /tmp/mlcs_race_last
             log "정답 기록 (mocap + 라이다): $ALIGN_LOG"
             echo "    끝나면  ./drive.sh racereport  (./race.sh 는 자동으로 돈다)"
@@ -1151,8 +1156,8 @@ hmpc)
     warn "${BLD}자율 모드로 시작합니다 — 조이스틱 B 를 누르면 출발${RST} (그 전에는 정지)"
     echo "    LB     → 수동 (비상정지, 사람이 조종)   LB 다시 → 바로 자율 재개 (B 불필요)"
     echo "    START  → 비상정지 (수동)                B      → mocap 끊김·솔버 고장 뒤 재출발"
-    log "로그: tail -f /tmp/mlcs_hmpc.log    워커: /tmp/mlcs_hmpc_worker.log"
-    log "상태: ros2 topic echo /hmpc/status   풀이 시간: ros2 topic echo /mpc/solve_time"
+    log "로그: tail -f /tmp/mlcs_mpcc.log    워커: /tmp/mlcs_mpcc_worker.log"
+    log "상태: ros2 topic echo /mpcc/status   풀이 시간: ros2 topic echo /mpc/solve_time"
     echo
     JOYARG="$(decide_joyarg)"
     [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
@@ -1216,7 +1221,7 @@ record)
     ensure_single_state_publisher
     wait_for_state
     # ★ 증상을 직접 잰다 — 원인(브릿지 2개/강체 2개/sim_bridge)을 짐작하지 않는다
-    if ! python3 "$SCRIPT_DIR/tools/check_state.py" 4; then
+    if ! python3 "$SCRIPT_DIR/tools/hw/check_state.py" 4; then
         err "기록을 시작하지 않습니다. 위 안내대로 정리한 뒤 다시 하세요."
         exit 1
     fi
@@ -1668,8 +1673,8 @@ mapping)
 
 savemap)
     # ./drive.sh savemap [이름]    mapping 이 도는 중에 다른 터미널에서
-    #   → maps/<이름>.pbstream   Cartographer 원본 (pure localization 에 쓴다)
-    #     maps/<이름>.pgm/.yaml  2D 점유격자 (파티클필터·RViz·경로 그리기용)
+    #   → data/maps/<이름>.pbstream   Cartographer 원본 (pure localization 에 쓴다)
+    #     data/maps/<이름>.pgm/.yaml  2D 점유격자 (파티클필터·RViz·경로 그리기용)
     #
     #   ★ 궤적을 끝낸(finish) 뒤 저장한다. 공식 절차가 finish → write_state 다.
     #     끝낸 궤적은 더 자라지 않으므로 저장 후에는 mapping 창을 Ctrl+C 로 닫는다.
@@ -1678,7 +1683,7 @@ savemap)
         err "Cartographer 가 안 떠 있습니다 — 다른 터미널에서 ./drive.sh mapping 중이어야 합니다."
         exit 1
     fi
-    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
     NAME="${1:-map_$(date +%Y%m%d_%H%M%S)}"
     OUT="$MAP_DIR/$NAME"
     mkdir -p "$MAP_DIR"
@@ -1720,7 +1725,7 @@ savemap)
     ;;
 
 racereport)
-    # ./drive.sh racereport     가장 최근 라이다 주행을 mocap 정답으로 채점 (tools/race_report.py)
+    # ./drive.sh racereport     가장 최근 라이다 주행을 mocap 정답으로 채점 (tools/analysis/race_report.py)
     [ -f /tmp/mlcs_race_last ] || { err "라이다 주행 기록이 없습니다 — ./race.sh (source: lidar, log 켬)"; exit 1; }
     # shellcheck disable=SC1091
     . /tmp/mlcs_race_last
@@ -1730,27 +1735,27 @@ racereport)
     [ -s "$ALIGN" ] || { err "정답 기록이 비었습니다: $ALIGN  (Motive 가 켜져 있었나요?)"; exit 1; }
     log "주행 $DRV"
     log "정답 $ALIGN"
-    python3 "$SCRIPT_DIR/tools/race_report.py" --drive "$DRV" --align "$ALIGN" \
+    python3 "$SCRIPT_DIR/tools/analysis/race_report.py" --drive "$DRV" --align "$ALIGN" \
         --map "$MAP" --track "$TRACK"
     ;;
 
 maptrack)
     # ./drive.sh maptrack [맵] [트랙이름] [옵션...]
     #   라이다 맵 → 트랙 → prep_*.csv → 프리뷰를 한 번에
-    #   (tools/track_from_map.py → preview_track.py)
-    #   맵을 안 주면 maps/ 에서 가장 최근 맵. 트랙 이름 기본 <맵>_track.
+    #   (tools/track/track_from_map.py → preview_track.py)
+    #   맵을 안 주면 data/maps/ 에서 가장 최근 맵. 트랙 이름 기본 <맵>_track.
     #   옵션은 이름 뒤에 — 예:  ./drive.sh maptrack comp1 comp1_track --reverse
     #
     #   ★ 기본은 최소 곡률선 + 저자 전처리 없음 (2026-11-08). 가운데 선은 벽이 들쭉날쭉한
     #     연구실 맵에서 꺾였고, 저자 전처리는 코너 반경을 0.72~0.85 배로 줄여 세 맵이 다
     #     떨어졌다. 예전 방식(가운데 선 + 저자 전처리)은 --center
-    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
     MAPARG=""; TNAME=""
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then MAPARG="$1"; shift; fi
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then TNAME="$1"; shift; fi
     if [ -z "$MAPARG" ]; then
         MAPARG="$(ls -t "$MAP_DIR"/*.yaml 2>/dev/null | grep -v '\.mocap\.yaml$' | head -1)"
-        [ -n "$MAPARG" ] || { err "maps/ 에 맵이 없습니다 — ./drive.sh mapping → savemap 먼저"; exit 1; }
+        [ -n "$MAPARG" ] || { err "data/maps/ 에 맵이 없습니다 — ./drive.sh mapping → savemap 먼저"; exit 1; }
         log "맵을 안 줘서 가장 최근 맵을 씁니다: $(basename "$MAPARG")"
     fi
     MBASE="$(basename "${MAPARG%.yaml}")"
@@ -1773,7 +1778,7 @@ maptrack)
     fi
 
     log "① 맵 → 트랙  ($MBASE → $TNAME)"
-    python3 "$SCRIPT_DIR/tools/track_from_map.py" "$MAPARG" "$TNAME" "${MT_ARGS[@]+"${MT_ARGS[@]}"}" || {
+    python3 "$SCRIPT_DIR/tools/track/track_from_map.py" "$MAPARG" "$TNAME" "${MT_ARGS[@]+"${MT_ARGS[@]}"}" || {
         echo
         err "트랙을 못 만들었습니다 — 위 메시지를 보세요. 자주 쓰는 옵션:"
         echo "    --reverse            반대 방향으로 돈다"
@@ -1789,36 +1794,36 @@ maptrack)
     echo
     if [ "$CENTER" = 1 ]; then
         log "② 저자 전처리 → prep_$TNAME.csv"
-        python3 "$SCRIPT_DIR/tools/prep_track.py" "$TNAME" \
+        python3 "$SCRIPT_DIR/tools/track/prep_track.py" "$TNAME" \
             || warn "전처리 실패 — 트랙 파일은 저장됐습니다. ./drive.sh preptrack $TNAME 으로 다시"
     else
         log "② 저자 전처리 건너뜀 — prep_$TNAME.csv 는 ①에서 이 선으로 썼습니다"
     fi
     echo
     log "③ 프리뷰 그림"
-    python3 "$SCRIPT_DIR/tools/preview_track.py" "$TNAME" || true
+    python3 "$SCRIPT_DIR/tools/track/preview_track.py" "$TNAME" || true
     echo
-    log "${GRN}완료${RST} — 트랙: lab_map/data/tracks/$TNAME/   (map 프레임)"
-    echo "    맵 위 그림:  lab_map/data/tracks/$TNAME/map_track.png"
+    log "${GRN}완료${RST} — 트랙: src/mlcs_mpc/mlcs_mpc/env/track/data/$TNAME/   (map 프레임)"
+    echo "    맵 위 그림:  src/mlcs_mpc/mlcs_mpc/env/track/data/$TNAME/map_track.png"
     echo "    ★ map 프레임 트랙이라 라이다 위치추정(./drive.sh localize $MBASE)으로 달려야 맞습니다"
     echo "    연구실에서 mocap 으로 달리려면:  ./drive.sh mocaptrack $TNAME $MBASE"
     ;;
 
 localize)
     # ./drive.sh localize [맵]
-    #   저장한 맵(maps/<맵>.pbstream)으로 Cartographer 위치추정만 (맵은 안 바뀜)
+    #   저장한 맵(data/maps/<맵>.pbstream)으로 Cartographer 위치추정만 (맵은 안 바뀜)
     #   /tracked_pose, map→odom TF 가 나온다. 조이스틱 병행.
     #   맵을 안 주면 가장 최근 맵.
     load_ros; require_ws_pkg mlcs_mpc
     CARTO_DIR="$SCRIPT_DIR/src/mlcs_mpc/config/cartographer"
-    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
     if [ -n "${1:-}" ]; then
         PB="$MAP_DIR/$(basename "${1%.*}").pbstream"
         [ -f "$1" ] && [ "${1##*.}" = pbstream ] && PB="$1"
     else
         PB="$(ls -t "$MAP_DIR"/*.pbstream 2>/dev/null | head -1)"
     fi
-    [ -n "$PB" ] && [ -f "$PB" ] || { err "pbstream 이 없습니다: ${PB:-maps/*.pbstream}  (./drive.sh savemap 으로 만든다)"; exit 1; }
+    [ -n "$PB" ] && [ -f "$PB" ] || { err "pbstream 이 없습니다: ${PB:-data/maps/*.pbstream}  (./drive.sh savemap 으로 만든다)"; exit 1; }
     MBASE="$(basename "${PB%.pbstream}")"
     if mocap_bridge_running; then
         err "mocap_bridge 가 떠 있습니다 — map 프레임 TF 가 Cartographer 와 겹칩니다. ./drive.sh stop"
@@ -1847,7 +1852,7 @@ localize)
     ;;
 
 align)
-    # 연구실용 — 라이다 맵 좌표계 ↔ mocap 좌표계 (tools/map_mocap_align.py)
+    # 연구실용 — 라이다 맵 좌표계 ↔ mocap 좌표계 (tools/track/map_mocap_align.py)
     #
     #   ./drive.sh align [맵]              기록 → Ctrl+C 하면 자동으로
     #                                       · 맵의 변환이 아직 없으면 → 맞춘다 (fit)
@@ -1857,10 +1862,10 @@ align)
     #   ./drive.sh align list              맵별 변환·기록 목록
     #
     #   맵 기본값: localize 로 띄운 맵 → 없으면 가장 최근 맵
-    #   기록: ~/mlcs_data/align/<맵>_<시각>.csv   변환: maps/<맵>.mocap.yaml
-    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    #   기록: ~/mlcs_data/align/<맵>_<시각>.csv   변환: data/maps/<맵>.mocap.yaml
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
     ALIGN_DIR="${MLCS_DATA:-$HOME/mlcs_data}/align"
-    AL="$SCRIPT_DIR/tools/map_mocap_align.py"
+    AL="$SCRIPT_DIR/tools/track/map_mocap_align.py"
     SUB="rec"
     case "${1:-}" in fit|eval|list|rec) SUB="$1"; shift ;; esac
 
@@ -1873,11 +1878,11 @@ align)
         basename "$(ls -t "$MAP_DIR"/*.pbstream 2>/dev/null | head -1)" .pbstream
     }
     align_fit () {      # $1 = 기록, $2 = 맵
-        log "변환 맞추기 → maps/$2.mocap.yaml"
+        log "변환 맞추기 → data/maps/$2.mocap.yaml"
         python3 "$AL" fit "$1" "$MAP_DIR/$2"
     }
     align_eval () {
-        log "검증 — maps/$2.mocap.yaml 로 이 기록의 라이다 위치 오차"
+        log "검증 — data/maps/$2.mocap.yaml 로 이 기록의 라이다 위치 오차"
         python3 "$AL" eval "$1" "$MAP_DIR/$2.mocap.yaml"
     }
 
@@ -1902,7 +1907,7 @@ align)
         [ -n "$LOGF" ] || LOGF="$(ls -t "$ALIGN_DIR/${MB}"_*.csv 2>/dev/null | head -1)"
         [ -n "$LOGF" ] && [ -f "$LOGF" ] || { err "$MB 의 기록이 없습니다 ($ALIGN_DIR/${MB}_*.csv)"; exit 1; }
         if [ "$SUB" = eval ] && [ ! -f "$MAP_DIR/$MB.mocap.yaml" ]; then
-            err "maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align fit"
+            err "data/maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align fit"
             exit 1
         fi
         "align_$SUB" "$LOGF" "$MB"
@@ -1957,7 +1962,7 @@ mocaptrack)
     #   map 프레임 트랙(maptrack 결과) → mocap 프레임 (<트랙>_mocap). 연구실에서
     #   mocap 위치로 같은 트랙을 달릴 때. --to map 이면 반대 방향.
     #   맵 기본값: 트랙을 만든 맵 (track.json 에 적혀 있다)
-    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/maps}"
+    MAP_DIR="${MLCS_MAPS:-$SCRIPT_DIR/data/maps}"
     [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { err "사용법: ./drive.sh mocaptrack <트랙> [맵]"; exit 1; }
     TR="$1"; shift
     MB=""
@@ -1965,14 +1970,14 @@ mocaptrack)
     TO="mocap"
     for a in "$@"; do [ "$a" = map ] && TO=map; done
     if [ -z "$MB" ]; then
-        TJ="$SCRIPT_DIR/lab_map/data/tracks/$TR/track.json"
+        TJ="$SCRIPT_DIR/src/mlcs_mpc/mlcs_mpc/env/track/data/$TR/track.json"
         MB="$(python3 -c "import json,os,sys;f=json.load(open(sys.argv[1])).get('coordinate_frame',{});print(os.path.basename(f.get('map_yaml','')).rsplit('.',1)[0])" "$TJ" 2>/dev/null)"
     fi
     [ -n "$MB" ] || { err "어느 맵의 트랙인지 모르겠습니다 — ./drive.sh mocaptrack $TR <맵>"; exit 1; }
-    [ -f "$MAP_DIR/$MB.mocap.yaml" ] || { err "maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align"; exit 1; }
+    [ -f "$MAP_DIR/$MB.mocap.yaml" ] || { err "data/maps/$MB.mocap.yaml 이 없습니다 — 먼저 ./drive.sh align"; exit 1; }
     case " $* " in *" --to "*) ;; *) set -- --to "$TO" "$@" ;; esac
-    log "트랙 $TR → $TO 프레임  (변환 maps/$MB.mocap.yaml)"
-    python3 "$SCRIPT_DIR/tools/map_mocap_align.py" apply "$MAP_DIR/$MB.mocap.yaml" "$TR" "$@"
+    log "트랙 $TR → $TO 프레임  (변환 data/maps/$MB.mocap.yaml)"
+    python3 "$SCRIPT_DIR/tools/track/map_mocap_align.py" apply "$MAP_DIR/$MB.mocap.yaml" "$TR" "$@"
     ;;
 
 stop)

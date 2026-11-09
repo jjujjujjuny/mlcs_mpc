@@ -1,16 +1,16 @@
 # ═══════════════════════════════════════════════════════════════════
 #  레이스 설정 — 숫자를 고치고 저장한 뒤  ./race.sh
 #
-#  여기 없는 값은 src/mlcs_mpc/config/hmpc.yaml 을 따른다.
+#  여기 없는 값은 src/mlcs_mpc/config/mpcc.yaml 을 따른다.
 #  ★ 표시가 붙은 값은 바꾸면 생성 코드를 다시 만든다 (첫 실행 약 20초, 자동).
 # ═══════════════════════════════════════════════════════════════════
 
 # 위치를 어디서 받나. lidar = Cartographer 위치추정 (대회), mocap = 연구실 mocap.
 source: lidar
-# 라이다로 달릴 때 쓸 맵 (maps/<이름>.pbstream). 맵핑을 시작한 자리·방향 근처에서 출발한다.
+# 라이다로 달릴 때 쓸 맵 (data/maps/<이름>.pbstream). 맵핑을 시작한 자리·방향 근처에서 출발한다.
 map: "comp1"        # ★ 따옴표 필수 — 1108_5 는 YAML 에서 숫자 11085 가 된다
 
-# 트랙 이름 (lab_map/data/tracks/<이름>/) 또는 prep csv 경로.
+# 트랙 이름 (src/mlcs_mpc/mlcs_mpc/env/track/data/<이름>/) 또는 prep csv 경로.
 #   lidar 면 그 맵에서 만든 트랙 (./drive.sh maptrack <맵>), mocap 이면 *_mocap 트랙.
 track: "comp1_track"
 
@@ -20,7 +20,7 @@ drive: true
 # 기록 태그. 비우면 ('') 기록하지 않는다. → ~/mlcs_data/drive_<시각>_<태그>.csv
 log: race
 
-hmpc:
+mpcc:
   # ── 속도 ─────────────────────────────────────────────────────────
   v_max: 1.0            # m/s. 0.7 에서 시작해 0.2 씩. 상한은 모터 (vesc.yaml speed_max, 약 4.86). MPC 가 코너에서 알아서 감속한다
   friction: 0.41        # ★ 모델 접지력. 0.41 (실측·기본)으로 되돌림 (11-08 밤).
@@ -49,9 +49,9 @@ hmpc:
   ws_dec_max: 0.0       # ★ 바퀴 감속도 한계 m/s². tau 를 작게 둘 때만 쓴다 (./drive.sh actuator)
 
   # ── 동역학 모델 ──────────────────────────────────────────────────
-  hyper_model: ''       # '' = 상수 파라미터 (hmpc.yaml, 재동정 H). HyperPM 시변 파라미터를 쓰려면
-                        #   "src/mlcs_mpc/config/hyper/J_ep10.npz". 1초 예측 오차 20~45% 작다 (mocap 평가).
-                        #   ★ 처음엔 offline_ocp --hyper 로 확인하고 낮은 v_max 에서 H 와 번갈아 비교할 것
+  param_model: ''       # '' = 상수 파라미터 (mpcc.yaml, 재동정 H). 학습 모델 (HyperPM) 시변 파라미터를 쓰려면
+                        #   "hyperpm:src/mlcs_mpc/config/hyper/J_ep10.npz". 1초 예측 오차 20~45% 작다 (mocap 평가).
+                        #   ★ 처음엔 env/mpc/offline.py --param-model 로 확인하고 낮은 v_max 에서 H 와 번갈아 비교할 것
 
   # ── 감시 ─────────────────────────────────────────────────────────
   solve_timeout: 0.15   # 이보다 답이 늦으면 솔버 고장으로 차를 세운다 s

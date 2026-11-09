@@ -66,7 +66,7 @@ def generate_launch_description():
             description='LB 로 수동↔자율 토글. 수동 전용이면 false'),
         DeclareLaunchArgument(
             'start_auto', default_value='false',
-            description='자율 모드로 시작 (hmpc: B 를 누르기 전까지는 정지)'),
+            description='자율 모드로 시작 (mpcc: B 를 누르기 전까지는 정지)'),
         DeclareLaunchArgument(
             'rally', default_value='false',
             description='랠리 모드 — 십자키로 최대 속도·조향 조절'),
