@@ -9,7 +9,7 @@
 | 용도 | 방법 |
 |---|---|
 | 터미널 | `ssh mlcs@<젯슨>` → `tmux new -A -s race` (끊겨도 주행은 계속) |
-| RViz | 젯슨 `./drive.sh bridge` + 노트북 `tools/zenoh/laptop.sh` |
+| RViz | 젯슨 `./race.sh` (브리지 자동) 또는 `./drive.sh bridge` + 노트북 `tools/zenoh/laptop.sh` |
 
 - 젯슨 ROS 는 `ROS_LOCALHOST_ONLY=1` 이다 (`drive.sh` 의 `load_ros`). 밖으로 나가는 길은 브리지 하나뿐이라 와이파이가 흔들려도 주행 노드끼리는 영향이 없고, 같은 공유기의 다른 팀 ROS 와 섞이지 않는다.
 - 보낼 토픽과 주파수는 [jetson.json5](jetson.json5) 에서 고친다. 지금은 `/tf` `/tf_static` `/map`(0.5Hz) `/scan`(10Hz) `/tracked_pose`(20Hz) `/mpc/*` `/hmpc/status` 마커들. 노트북 → 젯슨은 `/initialpose` 하나 (RViz 2D Pose Estimate).
@@ -55,8 +55,8 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
    tmux new -A -s race
    ```
 
-2. tmux 창 1: 주행 (`./race.sh` 또는 시험이면 `./drive.sh bench`)
-   tmux 창 2 (`Ctrl+b` → `c`): `cd ~/mlcs_mpc && ./drive.sh bridge`
+2. 주행: `./race.sh` — **브리지가 같이 뜨고 같이 내려간다** (끄려면 `MLCS_BRIDGE=0 ./race.sh`).
+   주행 없이 RViz 연결만 시험하려면 tmux 창 2 (`Ctrl+b` → `c`)에서 `cd ~/mlcs_mpc && ./drive.sh bridge`
 
 3. 노트북 다른 터미널:
 
@@ -74,7 +74,7 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 
 ## 아직 남은 것
 
-- [ ] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop` (젯슨 사용자가 직접)
+- [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
+- [x] `race.sh` (drive.sh hmpc) 가 브리지를 코어 0-3 에 자동으로 띄움, `./drive.sh stop` 이 같이 내림
 - [ ] 젯슨 mDNS 이름: 호스트명은 `mlcs-car` 로 바꿨지만 avahi 가 아직 `ubuntu.local` 로 광고한다 → `sudo systemctl restart avahi-daemon` 하면 `mlcs-car.local` 로 접속 가능. 그 전에는 IP 로
 - [ ] 젯슨에 `yax_5G` 와이파이 프로필 등록 (비밀번호 필요)
-- [ ] 노트북 시험이 되면 `race.sh` 가 브리지를 자동으로 함께 띄우게

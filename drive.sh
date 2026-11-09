@@ -696,6 +696,28 @@ stop_bag () {
     BAG_PID=""
 }
 
+# ── 노트북 RViz 브리지 (Zenoh) ─────────────────────────────────────────────
+#   주행과 같이 띄우고 같이 내린다. 끄려면 MLCS_BRIDGE=0.
+#   노트북이 없어도 접속을 기다릴 뿐이라 비용이 없다 (실측 CPU ≈0%, 9MB).
+#   ★ 코어 0-3 — 솔버 코어(5)·hmpc_node(4)를 건드리지 않는다.
+start_bridge () {
+    [ "${MLCS_BRIDGE:-1}" = "1" ] || return 0
+    local zb="$SCRIPT_DIR/tools/zenoh/aarch64/zenoh-bridge-ros2dds"
+    if [ ! -x "$zb" ]; then
+        warn "노트북 브리지 실행 파일이 없어 건너뜁니다 (tools/zenoh/README.md)"
+        return 0
+    fi
+    if pgrep -f "^$zb" >/dev/null 2>&1; then
+        log "노트북 브리지가 이미 떠 있습니다 — 그대로 씁니다"
+        return 0
+    fi
+    taskset -c 0-3 "$zb" -c "$SCRIPT_DIR/tools/zenoh/jetson.json5" >"$(run_log bridge)" 2>&1 &
+    PIDS="$PIDS $!"
+    local wip
+    wip="$(ip -4 -br addr show wlP1p1s0 2>/dev/null | awk '{print $3}' | cut -d/ -f1)"
+    log "노트북 브리지  ${GRN}tcp/${wip:-<와이파이 IP 없음>}:7447${RST}  → 노트북에서 ./laptop.sh ${wip:-<IP>}"
+}
+
 bringup_running () {
     pgrep -f '/lib/vesc_driver/vesc_driver_node' >/dev/null 2>&1
 }
@@ -1096,7 +1118,7 @@ hmpc)
                 >/tmp/mlcs_rviz.log 2>&1 &
             PIDS="$PIDS $!"
         else
-            warn "DISPLAY 가 없어 RViz 를 못 띄웁니다 — NoMachine 화면의 터미널에서 실행하세요"
+            log "DISPLAY 가 없어 젯슨 RViz 는 띄우지 않습니다 — 노트북 RViz 로 보세요 (브리지)"
         fi
         log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_HMPC_MAP})"
         log "맵핑 시작 자리·방향 근처에 두면 위치를 알아서 잡습니다 — RViz 에서 맞는지 보고 B"
@@ -1106,6 +1128,7 @@ hmpc)
         start_bringup
         log "위치: mocap"
     fi
+    start_bridge
     HM_BENCH=true
     if [ "${MLCS_HMPC_DRIVE:-0}" = "1" ]; then
         HM_BENCH=false
@@ -2031,6 +2054,7 @@ stop)
     kill_matching 'natnet_ros2.launch'
     kill_matching '/lib/vesc_driver/'
     kill_matching '/lib/vesc_ackermann/'
+    kill_matching 'tools/zenoh/aarch64/zenoh-bridge-ros2dds'
     kill_matching '/lib/ackermann_mux/'
     # lidar / mapping 모드가 띄우는 것들 (래퍼 'ros2 run ...' 까지)
     kill_matching '/lib/cartographer_ros/'
