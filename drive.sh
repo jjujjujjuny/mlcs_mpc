@@ -1118,6 +1118,10 @@ hmpc)
     if [ -n "${MLCS_HMPC_PARAMS:-}" ]; then
         HM_ARGS+=(extra_params:="$MLCS_HMPC_PARAMS")
     fi
+    if [ "${MLCS_OBSTACLES:-0}" = "1" ] && [ "$STATE_SOURCE" = lidar ]; then
+        log "장애물: ${GRN}라이다${RST} (lidar_obstacles, 맵 ${MLCS_HMPC_MAP})"
+        HM_ARGS+=(obstacles:=true map_yaml:="$MAP_DIR/${MLCS_HMPC_MAP}.yaml")
+    fi
     if [ -n "${MLCS_HMPC_VMAX:-}" ]; then
         log "속도 상한: ${GRN}${MLCS_HMPC_VMAX} m/s${RST} (MLCS_HMPC_VMAX)"
         HM_ARGS+=(v_max:="$MLCS_HMPC_VMAX")

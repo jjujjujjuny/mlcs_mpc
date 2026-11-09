@@ -57,6 +57,24 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Obstacles
+      Enabled: true
+      Topic:
+        Value: /obstacle/markers
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Opponent corridor
+      Enabled: true
+      Topic:
+        Value: /hmpc/opponent_markers
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
     - Class: rviz_default_plugins/Pose
       Name: tracked_pose
       Enabled: true

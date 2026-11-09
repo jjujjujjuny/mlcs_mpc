@@ -60,11 +60,22 @@ hm = str(h.get('hyper_model') or '')
 if hm and not os.path.isfile(hm if os.path.isabs(hm) else os.path.join(root, hm)):
     err(f'hyper_model 파일이 없습니다: {hm}')
 
-yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 drive = bool(c.get('drive', False))
 source = str(c.get('source') or 'mocap')
 if source not in ('lidar', 'mocap'):
     err(f'source 는 lidar 또는 mocap: {source}')
+# 장애물: off | watch (찾기만 — RViz 로 확인, MPC 는 모름) | lidar (찾아서 피함)
+#   lidar_obstacles 노드 → /obstacle/pose → hmpc 의 상대 로직 (opponent.py)
+obs = str(c.get('obstacles') or 'off')
+if obs not in ('off', 'watch', 'lidar'):
+    err(f'obstacles 는 off, watch, lidar 중 하나: {obs}')
+if obs != 'off' and source != 'lidar':
+    err(f'obstacles: {obs} 는 source: lidar 에서만 (맵과 비교해 찾는다)')
+if obs == 'lidar':
+    if h.get('opponent_topic'):
+        err('obstacles: lidar 이면 hmpc.opponent_topic 은 비워 두세요 (자동으로 /obstacle/pose)')
+    h['opponent_topic'], h['opponent_msg'] = '/obstacle/pose', 'pose'
+yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 mp = c.get('map') or ''
 if isinstance(mp, int):
     err(f'map 을 따옴표로 감싸 주세요 (예: map: "1108_5"). 지금은 숫자 {mp} 로 읽혔습니다')
@@ -74,7 +85,7 @@ if source == 'lidar':
         err(f'라이다 주행 맵이 없습니다: maps/{mp}.pbstream')
     if '_mocap' in t:
         err(f'라이다 주행인데 mocap 프레임 트랙입니다: {t}')
-    if h.get('opponent_topic'):
+    if h.get('opponent_topic') and obs != 'lidar':
         print('echo "⚠ 라이다 주행에서 opponent_topic 을 켰습니다 — 상대 pose 가 map 좌표계가 아니면 통로가 엉뚱한 곳에 생깁니다" >&2')
 elif '_mocap' not in t:
     print('echo "⚠ mocap 주행인데 트랙 이름에 _mocap 이 없습니다 — 좌표계를 확인하세요" >&2')
@@ -84,13 +95,16 @@ print(f'export MLCS_HMPC_PARAMS={shlex.quote(out)}')
 print(f'export MLCS_HMPC_DRIVE={1 if drive else 0}')
 print(f'export MLCS_HMPC_SOURCE={source}')
 print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
+print(f'export MLCS_OBSTACLES={0 if obs == "off" else 1}')
 print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'트랙   {t}  (길이 {d["s"][-1]:.1f} m, 최소 반경 {r_min:.2f} m)',
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
          f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속',
-         f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}']
-lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model')]
+         f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}',
+         f'장애물 ' + {'off': '끔', 'watch': '찾기만 (RViz /obstacle/markers — MPC 는 안 피함)',
+                       'lidar': '★ 라이다로 찾아 피함 (lidar_obstacles → /obstacle/pose)'}[obs]]
+lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model', 'opponent_topic', 'opponent_msg')]
 if v_max > 3.0:
     lines.append('⚠ v_max 3 m/s 초과 — 동정 데이터는 3 m/s 까지다. 모델 밖이니 offline_ocp 로 먼저 확인하고 조금씩 올릴 것')
 print('RACE_SUMMARY=' + shlex.quote('\n'.join(lines)))
