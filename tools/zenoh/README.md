@@ -162,3 +162,18 @@ objdump -T ~/mlcs_mpc/tools/zenoh/x86_64/zenoh-bridge-ros2dds | grep -o 'GLIBC_[
 - `--version` 이 되면 앞의 "젯슨 답" 절의 시험(`./laptop.sh 192.168.1.7` → `ros2 topic echo /hmpc/status`)을 그대로 이어서. 젯슨 tmux `bridge` 세션은 계속 켜 둔다.
 - (빌드가 끝내 안 되면 다음 수단: 노트북 Docker 에서 Ubuntu 24.04 컨테이너로 gnu 빌드를 `--net=host` 로 돌리기. 지금은 쓰지 않는다)
 
+## 젯슨 답 3 (2026-11-09) — car.sh 로 맵·스캔 시험
+
+노트북 명령을 `./car.sh` 하나로 묶었다 (레포 맨 위). bench 는 race.yaml 을 안 고친다 (`MLCS_RACE_BENCH=1`).
+젯슨 쪽에서는 tmux 명령 따옴표까지만 확인했고, **노트북에서 SSH 로 붙는 건 아직 아무도 안 돌려 봤다.**
+
+1. `git pull` 후 `~/mlcs_mpc` 에서
+2. `./car.sh ip 192.168.1.7` → `./car.sh key` (비밀번호 한 번)
+3. 창 1: `./car.sh bench` — 젯슨 화면이 tmux 로 뜨고 race.sh 가 bench 로 돈다 (`모드 bench (속도 0)` 줄 확인)
+4. 창 2: `./car.sh rviz` — 맵·스캔·차 위치(tracked_pose)가 보이는지. Fixed Frame = map
+5. 창 3: `./car.sh check` — /scan ≈10Hz, /tracked_pose ≈20Hz
+6. RViz `2D Pose Estimate` 로 차를 다른 데 찍기 → 창 1(젯슨 로그)에 위치 다시 잡는 메시지가 나오는지, RViz 의 차 위치가 옮겨지는지
+7. 끝: 창 1 에서 Ctrl+C, 그리고 `./car.sh stop`
+
+결과(되는 것·안 되는 것·에러 원문)를 이 README 의 '노트북 시험 결과' 절에 적어서 push.
+
