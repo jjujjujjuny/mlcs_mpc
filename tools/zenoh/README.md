@@ -115,3 +115,28 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
   - 끝나면 젯슨에서 `tmux kill-session -t bridge`
 - 맵·스캔까지 보는 시험은 젯슨에서 `./race.sh` (race.yaml `drive: false` 면 bench) 를 띄운 뒤 — 브리지는 race.sh 가 자동으로 띄운다. 그 전에 위 `bridge` 세션은 내릴 것 (안 내려도 '이미 떠 있다' 로 그대로 쓰긴 한다).
 
+## 젯슨 답 2 (2026-11-09) — 노트북에서 소스 빌드
+
+미리 빌드된 x86_64 는 둘 다 22.04 에서 안 된다 (gnu = glibc 2.38, musl = musl 동적 링크). **노트북에서 같은 태그 1.10.2 를 직접 빌드한다.** 노트북 glibc(2.35)로 링크되니 이 문제는 구조적으로 없다. 젯슨(aarch64 gnu 1.10.2)은 그대로.
+
+```bash
+# 1) 빌드 도구 (cyclors 가 CycloneDDS 를 C 로 같이 빌드해서 cmake·clang 필요)
+sudo apt install -y build-essential cmake clang libclang-dev git curl pkg-config
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source ~/.cargo/env
+
+# 2) 젯슨과 같은 태그로 빌드 (10~20분, 레포의 rust-toolchain 을 rustup 이 알아서 받는다)
+git clone --depth 1 -b 1.10.2 https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds.git ~/zenoh-plugin-ros2dds
+cd ~/zenoh-plugin-ros2dds && cargo build --release -p zenoh-bridge-ros2dds
+
+# 3) 넣고 확인
+rm -rf ~/mlcs_mpc/tools/zenoh/x86_64 && mkdir -p ~/mlcs_mpc/tools/zenoh/x86_64
+cp target/release/zenoh-bridge-ros2dds ~/mlcs_mpc/tools/zenoh/x86_64/
+objdump -T ~/mlcs_mpc/tools/zenoh/x86_64/zenoh-bridge-ros2dds | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1   # 2.35 이하
+~/mlcs_mpc/tools/zenoh/x86_64/zenoh-bridge-ros2dds --version                                             # v1.10.2
+```
+
+- 빌드가 실패하면 에러 마지막 30줄을 여기 적어 줄 것. 흔한 원인은 `libclang` 못 찾음(→ `libclang-dev`)과 cmake 버전.
+- `--version` 이 되면 앞의 "젯슨 답" 절의 시험(`./laptop.sh 192.168.1.7` → `ros2 topic echo /hmpc/status`)을 그대로 이어서. 젯슨 tmux `bridge` 세션은 계속 켜 둔다.
+- (빌드가 끝내 안 되면 다음 수단: 노트북 Docker 에서 Ubuntu 24.04 컨테이너로 gnu 빌드를 `--net=host` 로 돌리기. 지금은 쓰지 않는다)
+
