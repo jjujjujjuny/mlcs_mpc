@@ -115,7 +115,10 @@ def main():
                       track_width=c.get('track_width', 0.25),
                       track_slack=c.get('track_slack', 0.0),
                       ws_acc_max=c.get('ws_acc_max', 0.0),
-                      ws_dec_max=c.get('ws_dec_max', 0.0))
+                      ws_dec_max=c.get('ws_dec_max', 0.0),
+                      wall_heading=c.get('wall_heading', 0.0),
+                      wall_heading_r=c.get('wall_heading_r', 0.25),
+                      bounds_param=c.get('bounds_param', False))
     # ★ 마찰은 상태 x[6] 로 들어간다 (생성 코드 밖). 예전에는 노드 값을 안 받고 make_cfg 기본값으로
     #   덮어써서 hmpc.yaml 의 friction 이 적용되지 않았다 (2026-11-08 발견).
     fric = float(c.get('friction', cfg['friction']))
@@ -155,11 +158,13 @@ def main():
     x_dry[3], x_dry[6], x_dry[7] = 1.0, fric, 1.02
     for _ in range(3):
         restart(x_dry)
+        w = np.full(N + 1, cfg['track_width'])
+        B0 = oo.bound_params(N, -w, w, 0.0, 0.0, solver.heading) if solver.bounds_param else np.zeros((N + 1, 0))
         for k in range(N + 1):
-            solver.set(k, 'p', np.concatenate([params, [0.0]]))
+            solver.set(k, 'p', np.concatenate([params, [0.0], B0[k]]))
         solver.set(0, 'lbx', x_dry)
         solver.set(0, 'ubx', x_dry)
-        if cfg['track_hard']:
+        if cfg['track_hard'] and not solver.bounds_param:
             oo.set_hard_bounds(solver, N, cfg['track_width'], 0.0)
         solver.solve()
 
@@ -201,15 +206,17 @@ def main():
             if n_hyper % 300 == 0:
                 print(f'HyperPM 300회: 평균 {ms_hyper / 300:.2f} ms, 쓴 비율 {a_sum / 300:.2f}', flush=True)
                 ms_hyper, a_sum = 0.0, 0.0
-            for k in range(N + 1):
-                solver.set(k, 'p', np.concatenate([P_k[k], [kappa[k]]]))
-        else:
-            for k in range(N + 1):
-                solver.set(k, 'p', np.concatenate([params, [kappa[k]]]))
+        # 경계: bounds_param 이면 p 에 같이 (constraints_set 120~240 번 생략, 주기당 ~5 ms), 아니면 따로
+        B = (oo.bound_params(N, n_lo, n_hi, x[1], x[2], solver.heading) if solver.bounds_param
+             else np.zeros((N + 1, 0)))
+        if hyper is None:
+            P_k = np.broadcast_to(params, (N + 1, len(params)))
+        for k in range(N + 1):
+            solver.set(k, 'p', np.concatenate([P_k[k], [kappa[k]], B[k]]))
         solver.set(0, 'lbx', x)
         solver.set(0, 'ubx', x)
-        if cfg['track_hard']:
-            oo.set_wall_bounds(solver, N, n_lo, n_hi, x[1])
+        if cfg['track_hard'] and not solver.bounds_param:
+            oo.set_wall_bounds(solver, N, n_lo, n_hi, x[1], x[2])
         t0 = time.perf_counter()
         st = solver.solve()
         xs = np.array([solver.get(k, 'x') for k in range(N + 1)])

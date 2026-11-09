@@ -184,9 +184,11 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
     # ── 파라미터 ────────────────────────────────────────────────────────
     #   p[0:30] 차량+타이어,  p[30] 이 지점의 경로 곡률 kappa
-    p = cs.MX.sym('p', 31)
+    nb = bound_param_count(cfg)
+    p = cs.MX.sym('p', 31 + nb)
     p_dyn = p[0:30]
     kappa = p[30]
+    pb = p[31:]             # (bounds_param) 스테이지별 경계 [중심 하·상, (앞 끝 하·상, 뒤 끝 하·상)]
 
     # ── 동역학 ──────────────────────────────────────────────────────────
     #   원본 naive 모델은 (vx, vy, r, friction) 만 다룬다.
@@ -258,7 +260,7 @@ def build_ocp(dyn_fun, N, dt, cfg):
     ocp.constraints.lbu = np.array([cfg['min_ws_ref'], -cfg['max_steer_ref']])
     ocp.constraints.ubu = np.array([cfg['max_ws_ref'], +cfg['max_steer_ref']])
     ocp.constraints.idxbu = np.array([0, 1])
-    if cfg['track_hard']:
+    if cfg['track_hard'] and not cfg.get('bounds_param', False):
         # ★ 트랙 경계를 비용이 아니라 상태 경계로 (|n| ≤ track_width). 저자는 비용(배리어)이다.
         #   폭은 실행 중에 스테이지별로 바꾼다 (ocp_worker 의 경계 일정 참고).
         w = cfg['track_width']
@@ -309,7 +311,57 @@ def build_ocp(dyn_fun, N, dt, cfg):
         ocp.cost.zl_0 = ocp.cost.zu_0 = np.array([zg])
         ocp.cost.Zl_0 = ocp.cost.Zu_0 = np.array([zg * 0.1])
 
-    ocp.parameter_values = np.concatenate([default_params(), [0.0]])
+    if cfg['track_hard'] and cfg.get('bounds_param', False):
+        # ★ 경계를 파라미터로 (2026-11-09). 스테이지마다 lbx/ubx·lh/uh 를 constraints_set 으로 넣으면
+        #   파이썬 호출 120~240 번에 주기당 5~10 ms 가 든다 (젯슨 실측). 경계 값을 p[31:] 에 넣고
+        #   h = [n − lo, hi − n (, 앞·뒤 끝도)] ≥ 0 으로 두면 이미 하는 p 설정 한 번으로 끝난다.
+        #   (상자 경계보다 QP 가 약간 무거울 수 있다 — 비교해서 씀)
+        rows = [n - pb[0], pb[1] - n]
+        if cfg.get('wall_heading', 0.0) > 0:
+            # 헤딩 돌출: 차체 앞·뒤 끝 h_f = n + L_f sin μ, h_r = n − L_r sin μ (cos μ ≤ 1 근사)
+            Lf, Lr = cfg['wall_heading'], cfg['wall_heading_r']
+            hf, hr = n + Lf * cs.sin(mu), n - Lr * cs.sin(mu)
+            rows += [hf - pb[2], pb[3] - hf, hr - pb[4], pb[5] - hr]
+        h = cs.vertcat(*rows)
+        nh = len(rows)
+        model.con_h_expr = h
+        model.con_h_expr_e = h
+        ocp.constraints.lh = ocp.constraints.lh_e = np.zeros(nh)
+        ocp.constraints.uh = ocp.constraints.uh_e = np.full(nh, 1e4)
+        if cfg['track_slack'] > 0:
+            # 슬랙 순서는 [g, h] (bx 슬랙은 없다). 터미널은 [h]
+            z = cfg['track_slack']
+            ocp.constraints.idxsh = np.arange(nh)
+            ocp.constraints.idxsh_e = np.arange(nh)
+            zl = list(ocp.cost.zl) if len(ocp.constraints.idxsg) else []
+            Zl = list(ocp.cost.Zl) if len(ocp.constraints.idxsg) else []
+            ocp.cost.zl = ocp.cost.zu = np.array(zl + [z] * nh)
+            ocp.cost.Zl = ocp.cost.Zu = np.array(Zl + [z * 0.1] * nh)
+            ocp.cost.zl_e = ocp.cost.zu_e = np.full(nh, z)
+            ocp.cost.Zl_e = ocp.cost.Zu_e = np.full(nh, z * 0.1)
+    elif cfg['track_hard'] and cfg.get('wall_heading', 0.0) > 0:
+        # ★ 헤딩 돌출 (2026-11-09). 점 모델은 차가 비스듬할 때 앞 모서리가 옆으로 더 나가는 걸 모른다
+        #   (1109_3 벽 닿음 16건: 중심-벽 20 cm, |μ| 중앙 28°). 앞·뒤 끝의 횡위치
+        #       h_f = n + L_f sin μ,   h_r = n − L_r sin μ      (cos μ ≤ 1 근사 — 약간 보수적)
+        #   를 스테이지 1..N 에서 벽 경계 [lo, hi] (= 벽 − 반폭·여유) 안에 둔다. 경계는 실행 중 lh/uh.
+        Lf, Lr = cfg['wall_heading'], cfg['wall_heading_r']
+        h = cs.vertcat(n + Lf * cs.sin(mu), n - Lr * cs.sin(mu))
+        model.con_h_expr = h
+        model.con_h_expr_e = h
+        w = cfg['track_width']
+        ocp.constraints.lh = ocp.constraints.lh_e = np.array([-w, -w])
+        ocp.constraints.uh = ocp.constraints.uh_e = np.array([+w, +w])
+        if cfg['track_slack'] > 0:
+            # 슬랙 순서는 [bx, g, h] — 앞에 있는 것 뒤에 붙인다. 터미널은 [bx, h]
+            z = cfg['track_slack']
+            ocp.constraints.idxsh = np.array([0, 1])
+            ocp.constraints.idxsh_e = np.array([0, 1])
+            ocp.cost.zl = ocp.cost.zu = np.r_[np.asarray(ocp.cost.zl, float), z, z]
+            ocp.cost.Zl = ocp.cost.Zu = np.r_[np.asarray(ocp.cost.Zl, float), z * 0.1, z * 0.1]
+            ocp.cost.zl_e = ocp.cost.zu_e = np.r_[np.asarray(ocp.cost.zl_e, float), z, z]
+            ocp.cost.Zl_e = ocp.cost.Zu_e = np.r_[np.asarray(ocp.cost.Zl_e, float), z * 0.1, z * 0.1]
+
+    ocp.parameter_values = np.concatenate([default_params(), [0.0], np.tile([-1.0, 1.0], nb // 2)])
 
     # 솔버 — 원본과 같은 조합
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
@@ -326,7 +378,8 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
 def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
              wheel_speed_tau=0.046122448979591835, track_hard=False, track_width=0.25,
-             track_slack=0.0, ws_acc_max=0.0, ws_dec_max=0.0):
+             track_slack=0.0, ws_acc_max=0.0, ws_dec_max=0.0, wall_heading=0.0, wall_heading_r=0.25,
+             bounds_param=False):
     """OCP 설정. 기본값은 저자 config_car.yaml 이다. 우리 차 시정수는 config/hmpc.yaml."""
     return dict(
         wheel_speed_tau=wheel_speed_tau,
@@ -340,6 +393,11 @@ def make_cfg(cost='author', rk_steps=RK_STEPS, steering_tau=0.0436734693877551,
         track_slack=track_slack,
         # > 0 이면 바퀴 가속도 한계 m/s² (0 = 끔, 저자). tools/actuator_id.py 로 잰다
         ws_acc_max=ws_acc_max, ws_dec_max=ws_dec_max, ws_rate_slack=1000.0,
+        # > 0 이면 차체 앞·뒤 끝 (무게중심에서 wall_heading / wall_heading_r m) 도 벽 경계 안에 (헤딩 돌출).
+        #   이때 벽 경계의 여유 (wall_margin) 는 차 반폭 + 여유 (0.20~0.23) 로 준다. 0 = 끔 (중심 점만)
+        wall_heading=wall_heading, wall_heading_r=wall_heading_r,
+        # True 면 n 경계 (와 헤딩 끝) 를 상자 경계 대신 p 에 넣은 h 제약으로 (주기당 constraints_set 생략)
+        bounds_param=bounds_param,
         q_progress=1.0,
         min_ws_ref=0.01, max_ws_ref=7.0, max_steer_ref=0.5,
         # 우리 트랙 기준 목표 속도 (track.yaml 의 target_speed 와 맞춘다)
@@ -356,7 +414,9 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     tag = (f'N{N}_{cfg["cost"]}_{"guard" if guard else "noguard"}_rk{cfg["rk_steps"]}'
            + ('_hard' if cfg.get('track_hard') else '')
            + ('_slack' if cfg.get('track_hard') and cfg.get('track_slack', 0) > 0 else '')
-           + ('_wsrate' if cfg.get('ws_acc_max', 0) > 0 or cfg.get('ws_dec_max', 0) > 0 else ''))
+           + ('_wsrate' if cfg.get('ws_acc_max', 0) > 0 or cfg.get('ws_dec_max', 0) > 0 else '')
+           + ('_head' if cfg.get('track_hard') and cfg.get('wall_heading', 0) > 0 else '')
+           + ('_bp' if cfg.get('track_hard') and cfg.get('bounds_param', False) else ''))
     build = os.path.join(build_dir, tag)
     os.makedirs(build, exist_ok=True)
     ocp = build_ocp(dyn_fun, N, dt, cfg)
@@ -375,6 +435,11 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     with open(stamp_file, 'w') as f:
         f.write(stamp)
     print(f'  ✓ {time.perf_counter()-t0:.1f}초', flush=True)
+    if cfg.get('track_hard') and cfg.get('wall_heading', 0) > 0 and not cfg.get('bounds_param', False):
+        solver.wall_heading = (cfg['wall_heading'], cfg['wall_heading_r'])
+    solver.bounds_param = bound_param_count(cfg) > 0
+    solver.heading = ((cfg['wall_heading'], cfg['wall_heading_r'])
+                      if cfg.get('track_hard') and cfg.get('wall_heading', 0) > 0 else None)
     return solver
 
 
@@ -404,8 +469,13 @@ def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=N
         rate = np.clip(rate, -(ws_dec or np.inf), ws_acc or np.inf)
         return np.array([x[7] + rate * tau, u[1]])
 
+    npar = f.size_in(2)[0]
+
     def step(x, u0, p):
         x = np.asarray(x, float)
+        p = np.asarray(p, float)
+        if len(p) < npar:       # 경계 파라미터는 동역학에 안 쓰인다
+            p = np.r_[p, np.zeros(npar - len(p))]
         for _ in range(substeps):
             u = actuate(x, u0)
             k1 = np.array(f(x, u, p)).ravel()
@@ -415,6 +485,25 @@ def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=N
             x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
         return x
     return step
+
+
+def bound_param_count(cfg):
+    """bounds_param 이면 p 뒤에 붙는 경계 값 수 (중심 2, 헤딩이면 +4). 아니면 0."""
+    if not (cfg.get('track_hard') and cfg.get('bounds_param', False)):
+        return 0
+    return 6 if cfg.get('wall_heading', 0.0) > 0 else 2
+
+
+def bound_params(N, lo, hi, n0, mu0=0.0, heading=None):
+    """스테이지 0..N 의 경계 파라미터 (N+1, 2 또는 6). lo/hi 는 스테이지 0..N (벽 − 여유).
+    wall_bounds 와 같게 지금 값이 범위 밖이면 relax 스테이지 동안 그 값에서 줄여 간다 (앞·뒤 끝도 각자).
+    스테이지 0 에는 h 가 없어 값은 쓰이지 않는다 (1 의 값을 둔다)."""
+    cols = [wall_bounds(N, lo, hi, n0)]
+    if heading:
+        cols.append(wall_bounds(N, lo, hi, n0 + heading[0] * math.sin(mu0)))
+        cols.append(wall_bounds(N, lo, hi, n0 - heading[1] * math.sin(mu0)))
+    B = np.column_stack([v for lh in cols for v in lh])         # (N, 2·m)
+    return np.vstack([B[:1], B])
 
 
 def hard_bounds(N, w, n0, relax=10):
@@ -446,10 +535,19 @@ def wall_bounds(N, lo, hi, n0, relax=10):
     return np.minimum(lo, n0 * f) - 1e-3, np.maximum(hi, n0 * f) + 1e-3
 
 
-def set_wall_bounds(solver, N, lo, hi, n0):
+def set_wall_bounds(solver, N, lo, hi, n0, mu0=0.0):
     for k, a, b in zip(range(1, N + 1), *wall_bounds(N, lo, hi, n0)):
         solver.constraints_set(k, 'lbx', np.array([a]))
         solver.constraints_set(k, 'ubx', np.array([b]))
+    hd = getattr(solver, 'wall_heading', None)
+    if hd:
+        # 앞·뒤 끝도 같은 벽 경계. 지금 끝이 경계 밖이면 그 값에서 줄여 간다 (wall_bounds 의 relax)
+        f0, r0 = n0 + hd[0] * math.sin(mu0), n0 - hd[1] * math.sin(mu0)
+        fl, fh = wall_bounds(N, lo, hi, f0)
+        rl, rh = wall_bounds(N, lo, hi, r0)
+        for k in range(1, N + 1):
+            solver.constraints_set(k, 'lh', np.array([fl[k - 1], rl[k - 1]]))
+            solver.constraints_set(k, 'uh', np.array([fh[k - 1], rh[k - 1]]))
 
 
 def track_walls(path, margin):
@@ -574,8 +672,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             hyper.observe(t_now, x)
             P_k, _ = hyper.stage_params(t_now, x)
             P_used.append(P_k[0] / hyper.net.p_const)
-        for k in range(N + 1):
-            solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])]]))
+        if not solver.bounds_param:
+            for k in range(N + 1):
+                solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])]]))
         # hmpc_node 의 make_state 와 같게: 솔버에 주는 vx·바퀴 속도는 v_floor (0.25) 아래로 안 내린다.
         #   정지 장애물 뒤에 서면 vx 가 0 이 되는데, 그대로 주면 슬립 분모가 0 근처라 풀이가 멈춘다.
         xs = np.array(x, float)
@@ -594,12 +693,23 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                 cap = np.full(N, v_top) if cap is None else cap
                 for k in range(N):
                     solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.max_steer]))
-            set_wall_bounds(solver, N, lo, hi, x[1])
+            if solver.bounds_param:
+                B = bound_params(N, lo, hi, x[1], x[2], solver.heading)
+                for k in range(N + 1):
+                    solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])], B[k]]))
+            else:
+                set_wall_bounds(solver, N, lo, hi, x[1], x[2])
             lo0, hi0 = walls(x[0])[1:]
             wall_hist.append((x[1] - lo0 - 1e-9 < 0) or (x[1] - hi0 > 1e-9))
             s_hist.append(x[0])
         elif cfg['track_hard']:
-            set_hard_bounds(solver, N, cfg['track_width'], x[1])
+            if solver.bounds_param:
+                w = np.full(N + 1, cfg['track_width'])
+                B = bound_params(N, -w, w, x[1], x[2], solver.heading)
+                for k in range(N + 1):
+                    solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])], B[k]]))
+            else:
+                set_hard_bounds(solver, N, cfg['track_width'], x[1])
         if trail_skip:
             if not trail_stopped:
                 opp['trail_stops'] = opp.get('trail_stops', 0) + 1
@@ -739,6 +849,12 @@ def main():
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
                     help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
+    ap.add_argument('--bounds-param', action='store_true',
+                    help='n 경계를 p 에 넣은 h 제약으로 (주기당 constraints_set 생략). 기본은 상자 경계')
+    ap.add_argument('--wall-heading', type=float, default=0.0, metavar='LF',
+                    help='--walls 와: 차체 앞 끝 (무게중심에서 LF m) 도 벽 경계 안에 (헤딩 돌출). 0 = 끔. '
+                         '이때 --walls 는 반폭+여유 (0.20~0.23)')
+    ap.add_argument('--wall-heading-r', type=float, default=0.25, help='차체 뒤 끝 (무게중심에서) m')
     ap.add_argument('--no-trail-stop', action='store_true',
                     help='뒤따름 상한이 낮아도 그대로 풂 (예전 동작). 기본은 hmpc_node 처럼 풀지 않고 세움')
     ap.add_argument('--no-anchor', action='store_true',
@@ -774,7 +890,9 @@ def main():
                    track_hard=args.track_hard is not None,
                    track_width=args.track_hard if args.track_hard is not None else 0.25,
                    track_slack=args.track_slack,
-                   ws_acc_max=args.ws_acc_max, ws_dec_max=args.ws_dec_max)
+                   ws_acc_max=args.ws_acc_max, ws_dec_max=args.ws_dec_max,
+                   wall_heading=args.wall_heading, wall_heading_r=args.wall_heading_r,
+                   bounds_param=args.bounds_param)
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
@@ -812,7 +930,7 @@ def main():
             solver.set(0, 'lbx', x0)
             solver.set(0, 'ubx', x0)
             for k in range(args.N + 1):
-                solver.set(k, 'p', np.concatenate([params, [0.0]]))
+                solver.set(k, 'p', np.concatenate([params, [0.0], np.tile([-1.0, 1.0], bound_param_count(cfg) // 2)]))
             st = solver.solve()
             print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
             continue

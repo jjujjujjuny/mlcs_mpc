@@ -157,6 +157,11 @@ class HmpcNode(Node):
         # 바퀴 가속도 한계 m/s² (0 = 끔). tau 는 작게 두고 이것으로 '바로 못 선다' 를 알려 준다
         d('ws_acc_max', 0.0)
         d('ws_dec_max', 0.0)
+        # 헤딩 돌출: 차체 앞·뒤 끝 (무게중심에서 m) 도 벽 경계 안에. 0 = 끔. 켜면 wall_margin 은 반폭+여유
+        # 경계를 p 에 (상자 경계 constraints_set 대신). 주기당 ~5 ms 줄인다 (offline 42.9 → 38.3 ms)
+        d('bounds_param', False)
+        d('wall_heading', 0.0)
+        d('wall_heading_r', 0.25)
         d('trail_stop_speed', 0.3)      # 뒤따름 속도 상한이 이보다 낮으면 풀지 않고 세운다 m/s
         d('trail_go_speed', 0.4)        # 세운 뒤 상한이 이보다 높아지면 다시 푼다 m/s
         d('track_hard', True)
@@ -258,6 +263,10 @@ class HmpcNode(Node):
             config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), steering_tau=float(gp('steering_tau')),
                         wheel_speed_tau=float(gp('wheel_speed_tau')),
                         ws_acc_max=float(gp('ws_acc_max')), ws_dec_max=float(gp('ws_dec_max')),
+                        # 헤딩 돌출은 walls 경계에서만 (fixed 면 앞뒤 끝이 생성 기본 ±track_width 에 묶인다)
+                        wall_heading=float(gp('wall_heading')) if self.walls else 0.0,
+                        wall_heading_r=float(gp('wall_heading_r')),
+                        bounds_param=bool(gp('bounds_param')),
                         track_hard=bool(gp('track_hard')), track_width=float(gp('track_width')),
                         track_slack=float(gp('track_slack')),
                         mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
