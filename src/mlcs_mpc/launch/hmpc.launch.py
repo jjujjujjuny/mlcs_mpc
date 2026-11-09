@@ -30,9 +30,11 @@ def generate_launch_description():
             over['v_max'] = float(vmax)
         src = LaunchConfiguration('source').perform(context).strip()
         if src == 'lidar':
-            # require_ready: RViz 로 시작 위치를 찍기 전(relocalize)에는 출발하지 않는다
+            # 시작 위치 찍기(require_ready)는 끔 — Cartographer 가 출발 자리에서 알아서 잡는다 (2026-11-09).
+            #   위치 튐도 정지하지 않고 무시 (stop_on_jump 끔). 위치가 끊기면(timeout) 여전히 정지.
             bridge = Node(package='mlcs_mpc', executable='lidar_bridge', name='lidar_bridge',
-                          output='screen', parameters=[{'require_ready': True}])
+                          output='screen', parameters=[{'require_ready': False,
+                                                        'stop_on_jump': False}])
         else:
             bridge = Node(package='mlcs_mpc', executable='mocap_bridge', name='mocap_bridge',
                           output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')])

@@ -1091,8 +1091,8 @@ hmpc)
             warn "DISPLAY 가 없어 RViz 를 못 띄웁니다 — NoMachine 화면의 터미널에서 실행하세요"
         fi
         log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_HMPC_MAP})"
-        warn "${BLD}RViz 상단 '2D Pose Estimate' 로 차 위치·방향을 찍으세요${RST} — 찍기 전에는 B 를 눌러도 출발 안 함"
-        echo "    LT 끝까지 = 지금 위치 근처에서 맵에 다시 맞춤 (차가 멈춰 있을 때)"
+        log "맵핑 시작 자리·방향 근처에 두면 위치를 알아서 잡습니다 — RViz 에서 맞는지 보고 B"
+        echo "    어긋나 있으면 RViz '2D Pose Estimate' 로 찍거나 LT 끝까지 (차가 멈춰 있을 때)"
     else
         start_natnet
         start_bringup

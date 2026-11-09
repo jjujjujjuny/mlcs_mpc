@@ -50,6 +50,9 @@ class LidarBridge(Node):
         # true 면 relocalize 가 위치를 설정(/localization/ready)하기 전에는 /mocap/valid=false.
         #   시작 위치를 안 주면 Cartographer 가 맵 전체를 헤매며 수 m 씩 튄다 (2026-11-08).
         d('require_ready', False)
+        # false 면 위치 튐(프레임 간 이동이 max_step_speed 초과)을 경고만 하고 정지 신호는 내지 않는다.
+        #   Cartographer 보정으로 고속에서 13 cm 튀어 멈춘 적 있음 (2026-11-09, v_max 2.5). 비상정지는 사람이.
+        d('stop_on_jump', True)
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
         self.map_frame, self.base_frame = gp('map_frame'), gp('base_frame')
         self.timeout = float(gp('timeout'))
@@ -61,6 +64,8 @@ class LidarBridge(Node):
                                  recover_time=float(gp('recover_time')))
         self.bad = False
         self.require_ready = bool(gp('require_ready'))
+        self.stop_on_jump = bool(gp('stop_on_jump'))
+        self.last_jump_log = -1e9
         self.ready = not self.require_ready
         self.last_stamp = self.last_rx = None
         self.prev_yaw = None
@@ -99,6 +104,12 @@ class LidarBridge(Node):
 
         p, o = msg.pose.position, msg.pose.orientation
         good, why = self.health.update(stamp, p.x, p.y, p.z, o.x, o.y, o.z, o.w)
+        if not self.stop_on_jump:
+            if why and now - self.last_jump_log > 1.0:
+                self.get_logger().warn(f'라이다 위치 튐 ({why}) — 무시하고 계속')
+                self.last_jump_log = now
+            why, good = '', True
+            self.health.bad_until = None
         if why:
             self.get_logger().error(f'✗ 라이다 위치 불량 ({why}) — 컨트롤러 정지 신호 발행')
         if self.bad and good:
