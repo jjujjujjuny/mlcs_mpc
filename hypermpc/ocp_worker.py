@@ -63,6 +63,26 @@ def read_exact(fd, n):
     return buf
 
 
+def solve_stat(solver, key):
+    """acados 통계 하나. qp_iter 는 SQP 반복별 배열이라 합한다. 못 읽으면 -1."""
+    try:
+        v = np.atleast_1d(solver.get_stats(key))
+        return int(np.sum(v))
+    except Exception:
+        return -1
+
+
+def slack_n_max(solver, N, cfg):
+    """n 경계 슬랙의 최대값 m (경계를 얼마나 넘는 해인가). 슬랙이 없으면 0, 못 읽으면 -1."""
+    if not (cfg.get('track_hard') and cfg.get('track_slack', 0) > 0):
+        return 0.0
+    try:
+        # 첫 슬랙 칸이 n 경계다 (offline_ocp: idxsbx = [0], 그 뒤에 ws-rate 슬랙)
+        return float(max(max(solver.get(k, 'sl')[0], solver.get(k, 'su')[0]) for k in range(1, N + 1)))
+    except Exception:
+        return -1.0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--fd-in', type=int, required=True)
@@ -71,6 +91,8 @@ def main():
     ap.add_argument('--hypermpc', default=os.path.expanduser('~/hypermpc_code'))
     ap.add_argument('--build-dir', default=os.path.expanduser('~/hmpc_build'))
     ap.add_argument('--no-guard', action='store_true', help='시험 전용. 슬립 0 에서 solve 가 멈춘다')
+    ap.add_argument('--stats-csv', default='/tmp/mlcs_hmpc_solve_stats.csv',
+                    help='주기별 풀이 통계 (t, status, ms, sqp_iter, qp_iter, 재시작 풀이 수, n 슬랙 최대). 빈 값이면 끔')
     a = ap.parse_args()
     c = json.loads(a.config)
 
@@ -138,6 +160,12 @@ def main():
     req_len = 8 * (3 + 9 + 3 * (N + 1) + N)
     ubu_k = np.full(N, np.inf)      # 지금 스테이지별로 걸려 있는 속도 상한 (바뀔 때만 다시 넣는다)
     os.write(a.fd_out, b'R')
+    stats = None
+    if a.stats_csv:
+        new = not os.path.exists(a.stats_csv)
+        stats = open(a.stats_csv, 'a', buffering=1)     # 워커가 다시 떠도 앞 기록을 지우지 않는다
+        if new:
+            stats.write('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max\n')
     while True:
         raw = read_exact(a.fd_in, req_len)
         if raw is None:
@@ -178,6 +206,7 @@ def main():
         t0 = time.perf_counter()
         st = solver.solve()
         xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
+        n_resolve = 0
         if cmd == 1.0:
             for dv in RESTART_WS:
                 if (st == 0 and np.all(np.isfinite(xs))) or time.perf_counter() - t0 > RESTART_BUDGET:
@@ -187,6 +216,7 @@ def main():
                 solver.set(0, 'lbx', x)     # 경계·파라미터는 reset 이 지우지 않지만 첫 스테이지는 다시 둔다
                 solver.set(0, 'ubx', x)
                 st = solver.solve()
+                n_resolve += 1
                 xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
                 print(f'재시작 다시 풀기: status {int(st0)} → 추측 +{dv} m/s 로 status {int(st)}', flush=True)
         ms = (time.perf_counter() - t0) * 1000
@@ -198,6 +228,10 @@ def main():
                 hyper.plan = None
         res = np.concatenate([[rid, st, ms], solver.get(0, 'u'), solver.get(1, 'x'), s_pred])
         os.write(a.fd_out, res.tobytes())
+        if stats is not None:
+            # 응답을 보낸 뒤에 쓴다 (노드를 기다리게 하지 않는다). 젯슨 11-09: 느린 풀이를 반복 수로 가르려고
+            stats.write(f'{t_req:.4f},{int(st)},{ms:.2f},{solve_stat(solver, "sqp_iter")},'
+                        f'{solve_stat(solver, "qp_iter")},{n_resolve},{slack_n_max(solver, N, cfg):.4f}\n')
 
 
 if __name__ == '__main__':
