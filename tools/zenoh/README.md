@@ -25,17 +25,18 @@ printenv ROS_DISTRO     # humble
 which rviz2
 ```
 
-**2. 브리지 실행 파일 받기** (레포에는 없다, 26MB)
+**2. 브리지 실행 파일 받기** (레포에는 없다)
+
+★ 노트북은 **musl** 빌드를 쓴다. gnu 빌드 1.10.2 는 glibc 2.38 을 요구해서 22.04(2.35)에서 안 뜬다 (2026-11-09 노트북 실측). musl 은 glibc 를 안 쓴다. 젯슨은 aarch64 gnu 그대로 (GLIBC 2.30 까지만 요구, 실행 확인).
 
 ```bash
 cd ~/mlcs_mpc/tools/zenoh     # 레포 위치에 맞게
 mkdir -p x86_64 && cd /tmp
-curl -L -o zb.zip https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/1.10.2/zenoh-plugin-ros2dds-1.10.2-x86_64-unknown-linux-gnu-standalone.zip
+curl -L -o zb.zip https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/1.10.2/zenoh-plugin-ros2dds-1.10.2-x86_64-unknown-linux-musl-standalone.zip
 unzip -o zb.zip -d ~/mlcs_mpc/tools/zenoh/x86_64
 ~/mlcs_mpc/tools/zenoh/x86_64/zenoh-bridge-ros2dds --version    # v1.10.2
 ```
 
-인터넷이 없으면 젯슨에 이미 받아 둔 것을 복사한다: `scp -r mlcs@<젯슨IP>:~/mlcs_mpc/tools/zenoh/x86_64 ~/mlcs_mpc/tools/zenoh/`
 **버전은 양쪽 1.10.2 로 맞출 것** (젯슨 aarch64 도 1.10.2).
 
 **3. 노트북 `~/.bashrc`** — 노트북 RViz 와 브리지가 노트북 안에서만 만나게 한다.
@@ -89,3 +90,17 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 - [x] `race.sh` (drive.sh hmpc) 가 브리지를 코어 0-3 에 자동으로 띄움, `./drive.sh stop` 이 같이 내림
 - [ ] 젯슨 mDNS 이름: 호스트명은 `mlcs-car` 로 바꿨지만 avahi 가 아직 `ubuntu.local` 로 광고한다 → `sudo systemctl restart avahi-daemon` 하면 `mlcs-car.local` 로 접속 가능. 그 전에는 IP 로
 - [ ] 젯슨에 `yax_5G` 와이파이 프로필 등록 (비밀번호 필요)
+
+## 젯슨 답 (2026-11-09 22:52)
+
+- 노트북은 **musl 빌드**로: 위 2단계 명령을 고쳐 두었다 (`x86_64-unknown-linux-musl-standalone`, 같은 1.10.2). 받은 뒤 `--version` 이 `v1.10.2` 로 뜨는지 먼저.
+- 젯슨의 쓸모없는 x86_64 gnu 사본은 지웠다 (scp 로 가져오는 길도 README 에서 뺐다).
+- **지금 젯슨에 시험용 브리지가 떠 있다** — tmux 세션 `bridge` (창 1 브리지, 창 2 시험 토픽). 주행 노드는 없다.
+  - 시험 토픽: `/hmpc/status` (std_msgs/String, 1Hz, "젯슨 브리지 시험 메시지")
+  - 노트북 확인 순서:
+    1. `cd ~/mlcs_mpc/tools/zenoh && ./laptop.sh 192.168.1.7` (RViz 가 뜬다 — 지금은 맵·스캔이 없어 비어 있는 게 정상)
+    2. 다른 터미널: `ros2 topic echo /hmpc/status` → 1초마다 시험 메시지가 나오면 연결 성공
+    3. 노트북 와이파이 껐다 켜기 → 메시지가 다시 나오는지
+  - 끝나면 젯슨에서 `tmux kill-session -t bridge`
+- 맵·스캔까지 보는 시험은 젯슨에서 `./race.sh` (race.yaml `drive: false` 면 bench) 를 띄운 뒤 — 브리지는 race.sh 가 자동으로 띄운다. 그 전에 위 `bridge` 세션은 내릴 것 (안 내려도 '이미 떠 있다' 로 그대로 쓰긴 한다).
+
