@@ -59,9 +59,9 @@
     axis_dpad_y: 7            # 위 = +1
     rally_start_speed: 1.0
     rally_start_steer: 0.20
-    rally_speed_step:  0.05
+    rally_speed_step:  0.2         # 11-09: 0.05 → 0.2 (4.8 까지 19번)
     rally_steer_step:  0.01
-    rally_speed_limit: 3.0
+    rally_speed_limit: 4.8        # 11-09: 급제동 데이터용으로 모터 상한 (vesc speed_max 23250/4781.5 = 4.86) 까지
     rally_steer_limit: 0.40
     wheelbase: 0.33           # 반경·횡가속도 표시용
 

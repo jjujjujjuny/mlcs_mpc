@@ -353,7 +353,7 @@ joy_session () {
     echo "    RB + RT        후진"
     echo "    L스틱          조향"
     if [ "$RALLY" = 1 ]; then
-        echo "    십자키 위/아래  최대 속도 +/- 0.05 m/s  (RT 끝까지 = 이 값)"
+        echo "    십자키 위/아래  최대 속도 +/- 0.2 m/s   (RT 끝까지 = 이 값)"
         echo "    십자키 오른/왼  최대 조향 +/- 0.01 rad  (스틱 끝까지 = 이 값)"
     fi
     echo "    START          비상 정지"
