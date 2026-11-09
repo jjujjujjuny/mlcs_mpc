@@ -117,6 +117,22 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 - 와이파이 끄고 켜기 ✓: `nmcli radio wifi off` 10초 → `on`. 와이파이 재연결에 1분 넘게 걸렸지만, 붙은 뒤에는 브리지를 다시 띄우지 않아도 메시지가 다시 들어옴
 - 아직 안 한 것: 맵·스캔·차 위치 표시, `/scan` 10Hz, `2D Pose Estimate` 가 젯슨에 도착하는지 (젯슨에서 bench 를 띄운 다음)
 
+### car.sh 시험 (젯슨 답 3, 2026-11-09 23:30)
+
+모두 됨 ✓
+- `./car.sh ip 192.168.1.7` ✓, `./car.sh key` ✓ (이후 비밀번호 없이 SSH)
+- `./car.sh bench` ✓ 젯슨 tmux 로 뜨고 `모드 bench (속도 0)` 줄 나옴
+- `./car.sh rviz` ✓ 맵·스캔·차 위치(tracked_pose) 보임, Fixed Frame = map
+- `./car.sh check` ✓
+  ```
+  /scan              9.9 Hz
+  /tracked_pose     19.5 Hz
+  /tf              210.4 Hz
+  ```
+- `2D Pose Estimate` ✓ 5번 찍음. RViz 차 위치가 옮겨지고, 젯슨 로그에 위치 다시 잡는 메시지 나옴
+- RViz 로그에 맵 크기가 시험 중 바뀜: `234 x 365` → `297 x 309` → `298 x 309` (`/map` 이 도중에 다시 들어옴 — 의도한 것인지 젯슨에서 확인 바람)
+- RViz 에러 2줄은 시작할 때 한 번씩만 나옴: `Lookup would require extrapolation into the future ... [laser] to frame [map]` (시작 직후 tf), `GLSL link result : active samplers with a different type refer to the same texture image unit` (노트북 그래픽)
+
 ## 아직 남은 것
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
