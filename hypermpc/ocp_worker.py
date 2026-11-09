@@ -24,6 +24,13 @@ ocp_worker.py — HyperMPC OCP 를 풀기만 하는 프로세스. hmpc_node 가 
 
   파이프가 닫히면 (노드가 죽으면) 끝난다.
 
+■ 재시작 다시 풀기
+
+  cmd 1 은 매번 x 를 전 구간에 깐 같은 추측에서 RTI 한 번으로 푼다. 그래서 한 번 깨지면 노드가 보내는
+  다음 재시작도 똑같이 깨지고, max_bad_solves 번이면 솔버 고장으로 래치된다 (2026-11-09 젯슨 노드 시험:
+  새 H 에서 정지 뒤 재출발이 줄줄이 실패). 재시작이 깨지면 RESTART_BUDGET 안에서 조금 빠른 속도로 깐
+  추측으로 다시 푼다 (응답 ms 는 전부 합친 값, 노드 restart_timeout 0.5 s 안).
+
 ■ HyperPM (설정 hyper = .npz 경로, 비우면 끔)
 
   매 요청마다 지금 x 를 관측 기록에 넣고, 직전 해의 바퀴 속도·조향 궤적과 함께 네트워크로
@@ -41,6 +48,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import offline_ocp as oo  # noqa: E402
 from hyper_params import HyperStage  # noqa: E402
+
+RESTART_WS = (0.3, 0.6)     # 재시작이 깨지면 vx·ws 를 현재 + 이만큼으로 깔아 다시 푼다
+RESTART_BUDGET = 0.25       # [s] 다시 풀기는 재시작 요청 시작부터 이 시간 안에서만
 
 
 def read_exact(fd, n):
@@ -98,12 +108,15 @@ def main():
         solver.constraints_set(k, 'lbu', lbu)
         solver.constraints_set(k, 'ubu', ubu)
 
-    def restart(x0):
+    def restart(x0, dv=0.0):
         solver.reset()
+        xg = x0.copy()
+        xg[3] += dv
+        xg[7] += dv
         for k in range(N + 1):
-            solver.set(k, 'x', x0)
+            solver.set(k, 'x', xg)
         for k in range(N):
-            solver.set(k, 'u', np.array([np.clip(x0[7], lbu[0], ubu[0]), 0.0]))
+            solver.set(k, 'u', np.array([np.clip(xg[7], lbu[0], ubu[0]), 0.0]))
         for k in range(N):      # reset 이 경계까지 지우지는 않지만 다시 넣어 둔다
             solver.constraints_set(k, 'lbu', lbu)
             solver.constraints_set(k, 'ubu', ubu)
@@ -164,8 +177,19 @@ def main():
             oo.set_wall_bounds(solver, N, n_lo, n_hi, x[1])
         t0 = time.perf_counter()
         st = solver.solve()
-        ms = (time.perf_counter() - t0) * 1000
         xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
+        if cmd == 1.0:
+            for dv in RESTART_WS:
+                if (st == 0 and np.all(np.isfinite(xs))) or time.perf_counter() - t0 > RESTART_BUDGET:
+                    break
+                st0 = st
+                restart(x, dv)
+                solver.set(0, 'lbx', x)     # 경계·파라미터는 reset 이 지우지 않지만 첫 스테이지는 다시 둔다
+                solver.set(0, 'ubx', x)
+                st = solver.solve()
+                xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
+                print(f'재시작 다시 풀기: status {int(st0)} → 추측 +{dv} m/s 로 status {int(st)}', flush=True)
+        ms = (time.perf_counter() - t0) * 1000
         s_pred = xs[:, 0]
         if hyper is not None:
             if st == 0 and np.all(np.isfinite(xs)):

@@ -179,7 +179,8 @@ def check(name, ok, detail=''):
 def test_gates():
     x, y, h = track_start()
     car = FakeCar(x, y, h)
-    n = Harness(car)
+    # s_track 은 폭 0.46 이라 walls (wall_margin 0.22) 면 양쪽 1 cm 뿐이다 — 슬랙으로만 달려 게이트 시험이 안 된다.
+    n = Harness(car, 'track_bounds:=fixed')
     r = True
     car.spin(3.0)
     t = time.monotonic()
