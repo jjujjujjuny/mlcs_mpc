@@ -28,7 +28,9 @@ prep_hpm_dataset.py — 정리된 주행 로그를 HyperPM 학습 형식으로 �
   ④ delta 는 측정값이 없어서 명령으로 만든다. 원선회로 잰 조향 맵을 지나
      서보 속도 3.2 rad/s 로 제한한다 (config/vehicle.yaml).
   ⑤ 전진만 남긴다. 저자 데이터도 v_x ≥ 0.25 이다 — 후진·정지에서는 슬립률의
-     분모가 0 근처라 타이어 모델이 터진다.
+     분모가 0 근처라 타이어 모델이 터진다. 바퀴 속도는 음수여도 남긴다 (2026-11-09):
+     급제동 때 VESC 의 속도-0 PID 가 바퀴를 거꾸로 돌려 (rally 최소 −4.3 m/s) 잠김·역회전이
+     ws < 0 으로 나오는데, 예전 조건 ws ≥ 0 이 그 제동 구간을 통째로 버렸다. 분모는 v_x 라 괜찮다.
   ⑥ 벽 충돌을 잘라 낸다 (2026-11-09). 바퀴가 차보다 빠른데(σ > 0.05) 강하게 감속하거나
      (a_x < −2) 가속도 크기가 7 m/s² 를 넘으면 타이어 힘이 아니라 벽이다. 앞 0.3 s ·
      뒤 0.5 s 를 함께 버린다. 걸러지기 전 학습 윈도의 ~16% 가 충돌을 품고 있었고,
@@ -143,7 +145,9 @@ def impact_mask(df, pre=0.3, post=0.5):
 
 def forward_runs(df, a):
     """전진 구간만 잘라서 run 목록으로. 윈도(관측+예측)보다 짧으면 버린다."""
-    ok = ((df['v_x'] >= a.min_vx) & (df['omega_wheels'] >= 0.0)).to_numpy()
+    ok = (df['v_x'] >= a.min_vx).to_numpy()
+    if not a.keep_reverse_wheel:
+        ok &= (df['omega_wheels'] >= 0.0).to_numpy()
     if a.drop_impacts:
         ok &= ~impact_mask(df)
     d = np.diff(np.concatenate(([0], ok.astype(int), [0])))
@@ -183,6 +187,8 @@ def main():
     p.add_argument('--min-run', type=float, default=1.5,
                    help='이보다 짧은 run 은 버린다 [s] — 윈도 1.25 s')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--drop-reverse-wheel', dest='keep_reverse_wheel', action='store_false',
+                   help='바퀴 속도 < 0 인 칸을 버린다 (예전 동작)')
     p.add_argument('--keep-impacts', dest='drop_impacts', action='store_false',
                    help='벽 충돌 구간을 버리지 않는다 (예전 동작)')
     a = p.parse_args()
