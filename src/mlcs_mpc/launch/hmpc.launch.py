@@ -41,8 +41,10 @@ def generate_launch_description():
         nodes = [bridge]
         if src == 'lidar' and LaunchConfiguration('obstacles').perform(context).lower() in ('1', 'true'):
             # 라이다 장애물 — 저장한 맵과 비교 (obstacle_detect.py). /obstacle/pose → opponent_topic
+            # ★ 코어 0~3 (Cartographer 쪽). 런치 전체가 taskset -c 4 로 뜨므로 그대로 두면 hmpc_node 와
+            #   같은 코어를 쓴다 — 실차 11-09 검출 7~18 ms/스캔 때 풀이 p95 33.7 → 49.8 ms.
             nodes.append(Node(package='mlcs_mpc', executable='lidar_obstacles', name='lidar_obstacles',
-                              output='screen',
+                              output='screen', prefix='taskset -c 0-3',
                               parameters=[{'map_yaml': LaunchConfiguration('map_yaml').perform(context),
                                            'track_csv': track}]))
         return nodes + [

@@ -17,7 +17,8 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'src/mlcs_mpc'))
 from mlcs_mpc.hmpc_core import Track  # noqa: E402
-from mlcs_mpc.obstacle_detect import DetectParams, TrackBand, WallField, detect, scan_to_map  # noqa: E402
+from mlcs_mpc.obstacle_detect import DetectParams, TrackBand, WallField, detect_scan  # noqa: E402
+import dataclasses  # noqa: E402
 
 LASER = (0.27, 0.0, 0.0)
 ANG_MIN, ANG_INC, N_BEAM = -math.radians(135), math.radians(0.25), 1081
@@ -33,7 +34,8 @@ def raycast(walls, pose, boxes, noise=0.01, rng=None):
     t = np.arange(0.05, 10.0, 0.01)
     X = ox + np.cos(ang)[:, None] * t[None]
     Y = oy + np.sin(ang)[:, None] * t[None]
-    hit = walls.dist(X.ravel(), Y.ravel()).reshape(X.shape) <= 0.0
+    # 점유 칸 (검은 벽선) 에서 반사 — 실제 라이다는 진짜 벽에 닿는다. 지도의 미탐색 칸은 통과
+    hit = walls.dist(X.ravel(), Y.ravel(), occ_only=True).reshape(X.shape) <= 0.0
     for bx, by, hw, bh in boxes:
         u = np.cos(bh) * (X - bx) + np.sin(bh) * (Y - by)
         v = -np.sin(bh) * (X - bx) + np.cos(bh) * (Y - by)
@@ -73,8 +75,7 @@ def main():
                 if walls.dist(bx, by) < 0.2:
                     continue
                 r = raycast(walls, car, [(bx, by, 0.15, bh)], rng=rng)
-                pts, org = scan_to_map(r, ANG_MIN, ANG_INC, car, LASER, p)
-                det = detect(pts, org, walls, band, p)
+                det = detect_scan(r, ANG_MIN, ANG_INC, car, LASER, walls, band, p)[0]
                 if not det:
                     miss += 1
                     continue
@@ -89,24 +90,50 @@ def main():
     print('   ' + ('✓' if ok else '✗'))
     ok_all &= ok
 
-    # ② ③ 상자 없음 — 위치추정 오차별 헛것 (스캔 프레임 중 하나라도 잡힌 비율)
-    print('■ ②③ 상자 없음 — 위치추정 오차별 헛것 (트랙 40곳)')
-    rows = [(0.0, 0.0), (0.05, 0.0), (0.10, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 3.0), (0.10, 2.0), (0.0, 5.0)]
-    fp_ok = {}
+    # ② ③ 상자 없음 — 위치추정 오차별 헛것 (트랙 40곳), 스캔 맞춤 끔 / 켬
+    print('■ ②③ 상자 없음 — 위치추정 오차별 헛것 있는 프레임 (트랙 40곳)   맞춤 끔 → 켬')
+    p_off = dataclasses.replace(p, refine=False)
+    rows = [(0.0, 0.0), (0.10, 0.0), (0.0, 3.0), (0.0, 5.0), (0.10, 2.0), (0.20, 5.0), (0.30, 8.0)]
+    fp = {}
     for dxy, dyaw in rows:
-        bad = 0
+        bad = [0, 0]
         for s0 in np.linspace(0, tr.length, 40, endpoint=False):
             car = pose_at(s0)
             r = raycast(walls, car, [], rng=rng)
             k = rng.uniform(0, 2 * math.pi)
             est = (car[0] + dxy * math.cos(k), car[1] + dxy * math.sin(k),
                    car[2] + math.radians(dyaw) * rng.choice((-1, 1)))
-            pts, org = scan_to_map(r, ANG_MIN, ANG_INC, est, LASER, p)
-            bad += bool(detect(pts, org, walls, band, p))
-        fp_ok[(dxy, dyaw)] = bad / 40
-        print(f'   위치 {dxy * 100:4.0f} cm  yaw {dyaw:3.0f}°  → 헛것 있는 프레임 {bad}/40')
-    ok = fp_ok[(0.0, 0.0)] == 0 and fp_ok[(0.05, 0.0)] <= 0.05
-    print('   ' + ('✓' if ok else '✗') + ' (오차 0 / 5 cm 에서 헛것 없음 — 그 이상은 참고값)')
+            for j, pp in enumerate((p_off, p)):
+                bad[j] += bool(detect_scan(r, ANG_MIN, ANG_INC, est, LASER, walls, band, pp)[0])
+        fp[(dxy, dyaw)] = bad
+        print(f'   위치 {dxy * 100:4.0f} cm  yaw {dyaw:3.0f}°  → {bad[0]:2d}/40 → {bad[1]:2d}/40')
+    ok = fp[(0.0, 0.0)][1] == 0 and fp[(0.20, 5.0)][1] <= 2 and fp[(0.10, 2.0)][1] <= 1
+    print('   ' + ('✓' if ok else '✗') + ' (맞춤 켬: 오차 0 에서 0, 10 cm·2° 에서 ≤ 1, 20 cm·5° 에서 ≤ 2)')
+    ok_all &= ok
+
+    # ④ 위치추정이 틀린 채로 상자 찾기 (맞춤 켬) — 상자가 맞춤을 끌고 가지 않는지
+    print('■ ④ 위치 20 cm · yaw 5° 틀린 채로 상자 찾기 (트랙 8곳 × 2.0 m 앞 × 옆 0/±0.2, 맞춤 켬)')
+    errs, miss = [], 0
+    for s0 in np.linspace(0, tr.length, 8, endpoint=False):
+        car = pose_at(s0)
+        for n in (-0.2, 0.0, 0.2):
+            bx, by, bh = pose_at(s0 + 2.0, n)
+            if walls.dist(bx, by) < 0.2:
+                continue
+            r = raycast(walls, car, [(bx, by, 0.15, bh)], rng=rng)
+            k = rng.uniform(0, 2 * math.pi)
+            est = (car[0] + 0.2 * math.cos(k), car[1] + 0.2 * math.sin(k), car[2] + math.radians(5) * rng.choice((-1, 1)))
+            det = detect_scan(r, ANG_MIN, ANG_INC, est, LASER, walls, band, p)[0]
+            if not det:
+                miss += 1
+                continue
+            errs.append(min(math.hypot(d[0] - bx, d[1] - by) for d in det))
+    errs = np.array(errs)
+    found = len(errs) / max(len(errs) + miss, 1)
+    print(f'   찾음 {len(errs)}/{len(errs) + miss} ({found * 100:.0f}%), 중심 오차 평균 {errs.mean() * 100:.1f} '
+          f'p95 {np.percentile(errs, 95) * 100:.1f} cm')
+    ok = found > 0.8 and np.percentile(errs, 95) < 0.15
+    print('   ' + ('✓' if ok else '✗'))
     ok_all &= ok
     print('모두 통과' if ok_all else '실패')
     return 0 if ok_all else 1

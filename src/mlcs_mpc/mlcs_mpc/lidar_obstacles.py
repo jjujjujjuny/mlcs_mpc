@@ -28,7 +28,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from mlcs_mpc.hmpc_core import Track
-from mlcs_mpc.obstacle_detect import DetectParams, TrackBand, WallField, detect, scan_to_map
+from mlcs_mpc.obstacle_detect import DetectParams, TrackBand, WallField, detect_scan
 
 BEST_EFFORT = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
@@ -67,6 +67,8 @@ class LidarObstacles(Node):
         self.c_hits, self.c_win, self.c_rad = int(gp('confirm_hits')), float(gp('confirm_window')), \
             float(gp('confirm_radius'))
         self.pose = None            # (x, y, yaw, 받은 시각)
+        self.corr = (0.0, 0.0, 0.0) # 스캔 맞춤 보정 (dx, dy, dyaw) — 다음 스캔의 탐색 시작점
+        self.last_fit = 0.0         # 지난 스캔의 맞춤 비율 — 낮으면 다음엔 넓게 찾는다
         self.hist = []              # [(시각, cx, cy)]
         self.n_scan = self.n_pub = 0
         self.t_cost = 0.0
@@ -76,7 +78,9 @@ class LidarObstacles(Node):
             path = os.path.join(gp('log_dir'), time.strftime('obstacles_%Y%m%d_%H%M%S.csv'))
             self.log = open(path, 'w', buffering=1)
             # 스캔마다: 자세 + 후보 수 + (확정이면) 낸 위치. 후보는 가까운 순 3개까지
-            self.log.write('stamp,x,y,yaw,n_cand,pub,ox,oy,c1x,c1y,c1n,c2x,c2y,c2n,c3x,c3y,c3n\n')
+            # cdx..cdyaw = 스캔 맞춤 보정, fit / fit0 = 벽에 붙은 스캔 점 비율 (보정 뒤 / 앞)
+            self.log.write('stamp,x,y,yaw,n_cand,pub,ox,oy,c1x,c1y,c1n,c2x,c2y,c2n,c3x,c3y,c3n,'
+                           'cdx,cdy,cdyaw,fit,fit0\n')
             self.get_logger().info(f'기록 → {path}')
         self.tf_buf = Buffer()
         TransformListener(self.tf_buf, self)
@@ -112,8 +116,11 @@ class LidarObstacles(Node):
             return
         self._laser_tf(s.header.frame_id)
         t0 = time.perf_counter()
-        pts, org = scan_to_map(s.ranges, s.angle_min, s.angle_increment, self.pose[:3], self.laser, self.p)
-        dets = detect(pts, org, self.walls, self.band, self.p)
+        # 넓은 탐색은 10 스캔마다 또는 맞춤이 나빠졌을 때만 (평소는 지난 보정 둘레만 — 3배 빠름)
+        coarse = self.n_scan % 10 == 0 or self.last_fit < 0.7
+        dets, used, self.corr, fit = detect_scan(s.ranges, s.angle_min, s.angle_increment, self.pose[:3],
+                                                 self.laser, self.walls, self.band, self.p, self.corr, coarse)
+        self.last_fit = fit[0] if fit[0] == fit[0] else 1.0
         self.t_cost += time.perf_counter() - t0
         self.n_scan += 1
         for c in dets:
@@ -136,7 +143,8 @@ class LidarObstacles(Node):
             c = [f'{o[0]:.3f},{o[1]:.3f},{o[3]}' for o in dets[:3]] + [',,'] * (3 - min(len(dets), 3))
             ob = f'1,{best[0]:.3f},{best[1]:.3f}' if best is not None else '0,,'
             self.log.write(f'{s.header.stamp.sec + s.header.stamp.nanosec * 1e-9:.4f},{self.pose[0]:.3f},'
-                           f'{self.pose[1]:.3f},{self.pose[2]:.4f},{len(dets)},{ob},{",".join(c)}\n')
+                           f'{self.pose[1]:.3f},{self.pose[2]:.4f},{len(dets)},{ob},{",".join(c)},'
+                           f'{self.corr[0]:.3f},{self.corr[1]:.3f},{self.corr[2]:.4f},{fit[0]:.3f},{fit[1]:.3f}\n')
         self._markers(s.header.stamp, dets, best)
 
     def _markers(self, stamp, dets, best):
