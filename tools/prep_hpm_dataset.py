@@ -29,6 +29,10 @@ prep_hpm_dataset.py — 정리된 주행 로그를 HyperPM 학습 형식으로 �
      서보 속도 3.2 rad/s 로 제한한다 (config/vehicle.yaml).
   ⑤ 전진만 남긴다. 저자 데이터도 v_x ≥ 0.25 이다 — 후진·정지에서는 슬립률의
      분모가 0 근처라 타이어 모델이 터진다.
+  ⑥ 벽 충돌을 잘라 낸다 (2026-11-09). 바퀴가 차보다 빠른데(σ > 0.05) 강하게 감속하거나
+     (a_x < −2) 가속도 크기가 7 m/s² 를 넘으면 타이어 힘이 아니라 벽이다. 앞 0.3 s ·
+     뒤 0.5 s 를 함께 버린다. 걸러지기 전 학습 윈도의 ~16% 가 충돌을 품고 있었고,
+     모델이 그 −10 m/s² 를 타이어로 설명하려고 종방향 Dx 를 키웠다 (잠김 감속 −12.8 vs 실측 −1.3).
 
 ■ 로그 시점별 보정 (2026-11-05 원선회 측정)
 
@@ -122,9 +126,26 @@ def convert_segment(s, a, stamp):
     return out.iloc[edge:-edge]
 
 
+def impact_mask(df, pre=0.3, post=0.5):
+    """벽 충돌로 보이는 칸 (앞 pre · 뒤 post 초 포함). 타이어로는 낼 수 없는 가속도를 찾는다."""
+    vx, vy, r = (df[c].to_numpy() for c in ('v_x', 'v_y', 'r'))
+    w = min(21, len(vx) // 2 * 2 - 1)
+    if w < 5:
+        return np.zeros(len(vx), dtype=bool)
+    ax = savgol_filter(vx, w, 2, deriv=1, delta=DT) - vy * r
+    ay = savgol_filter(vy, w, 2, deriv=1, delta=DT) + vx * r
+    sl = (df['omega_wheels'].to_numpy() - vx) / np.maximum(vx, 0.3)
+    bad = ((ax < -2.0) & (sl > 0.05)) | (np.hypot(ax, ay) > 7.0)
+    a, b = int(round(post / DT)), int(round(pre / DT))
+    # 칸 i 가 나쁘면 [i − pre, i + post] 를 버린다
+    return np.convolve(bad.astype(float), np.ones(a + b + 1), 'full')[a:a + len(vx)] > 0
+
+
 def forward_runs(df, a):
     """전진 구간만 잘라서 run 목록으로. 윈도(관측+예측)보다 짧으면 버린다."""
     ok = ((df['v_x'] >= a.min_vx) & (df['omega_wheels'] >= 0.0)).to_numpy()
+    if a.drop_impacts:
+        ok &= ~impact_mask(df)
     d = np.diff(np.concatenate(([0], ok.astype(int), [0])))
     n_min = int(round(a.min_run / DT))
     return [df.iloc[i:j] for i, j in zip(np.where(d == 1)[0], np.where(d == -1)[0])
@@ -162,6 +183,8 @@ def main():
     p.add_argument('--min-run', type=float, default=1.5,
                    help='이보다 짧은 run 은 버린다 [s] — 윈도 1.25 s')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--keep-impacts', dest='drop_impacts', action='store_false',
+                   help='벽 충돌 구간을 버리지 않는다 (예전 동작)')
     a = p.parse_args()
 
     files = sorted(glob.glob(os.path.join(a.clean_dir, '*_clean.csv')))
