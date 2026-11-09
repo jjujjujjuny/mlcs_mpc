@@ -72,6 +72,17 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 
 결과(되는 것, 안 되는 것, 에러 메시지)를 레포에 적어 주면 젯슨에서 이어서 본다.
 
+## 노트북 시험 결과 (2026-11-09, hj-gram)
+
+- 1단계 환경 확인 ✓: Ubuntu 22.04.5, `ROS_DISTRO=humble`, `/opt/ros/humble/bin/rviz2`. 젯슨 192.168.1.7 ping 3ms.
+- 2단계 브리지 받기 ✗: README 의 curl 로 받은 `x86_64-unknown-linux-gnu-standalone` 1.10.2 가 실행되지 않는다.
+  ```
+  ./x86_64/zenoh-bridge-ros2dds: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by ./x86_64/zenoh-bridge-ros2dds)
+  ```
+  노트북 glibc 는 2.35 (`ldd --version`). 젯슨의 x86_64 사본도 같은 파일이면 같은 에러일 것.
+- 3단계 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` ✓
+- 4·5단계 접속 시험: 브리지가 안 떠서 못 함. (이때 젯슨 7447 은 닫혀 있었다)
+
 ## 아직 남은 것
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
