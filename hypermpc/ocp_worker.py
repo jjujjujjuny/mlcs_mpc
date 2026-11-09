@@ -16,12 +16,19 @@ ocp_worker.py — HyperMPC OCP 를 풀기만 하는 프로세스. hmpc_node 가 
   acados 가 C 에서 stdout 에 직접 쓰므로 stdout 은 통신에 쓸 수 없다.
 
     시작  → b'R' 한 바이트
-    요청  [id, cmd, x(9), kappa(N+1), n_lo(N+1), n_hi(N+1), v_cap(N)]   cmd 1 이면 초기 추측을 x 로 다시 깐다
+    요청  [id, cmd, t, x(9), kappa(N+1), n_lo(N+1), n_hi(N+1), v_cap(N)]   cmd 1 이면 초기 추측을 x 로 다시 깐다
+          t: 노드 시각 [s]. HyperPM 관측 기록과 직전 해의 시각 맞춤에만 쓴다
           n_lo/n_hi: 스테이지별 벽 경계 (MPCC, 상대 차 통로 포함). track_hard 일 때만 쓴다
           v_cap: 스테이지 0..N-1 의 바퀴 속도 명령 상한 (상대 뒤따르기). v_max 보다 크면 v_max
     응답  [id, status, ms, u(2), x1(9), s(N+1)]
 
   파이프가 닫히면 (노드가 죽으면) 끝난다.
+
+■ HyperPM (설정 hyper = .npz 경로, 비우면 끔)
+
+  매 요청마다 지금 x 를 관측 기록에 넣고, 직전 해의 바퀴 속도·조향 궤적과 함께 네트워크로
+  스테이지별 동역학 파라미터 (N+1, 30) 를 만든다 (hyper_params.py). 추론은 풀이 시간(ms)에
+  포함하지 않지만 노드의 제한 시간 안에는 들어간다. 출력이 유한하지 않으면 상수 params 를 쓴다.
 """
 import argparse
 import json
@@ -33,6 +40,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import offline_ocp as oo  # noqa: E402
+from hyper_params import HyperStage  # noqa: E402
 
 
 def read_exact(fd, n):
@@ -78,6 +86,12 @@ def main():
     solver = oo.make_solver(dyn_fun, N, c['dt'], cfg, a.build_dir, guard=not a.no_guard)
     params = np.array(c['params'], dtype=float)
     assert params.size == 30
+    hyper = None
+    if c.get('hyper'):
+        hyper = HyperStage(c['hyper'], N, c['dt'], params, v_min=float(c.get('hyper_v_min', 0.0)),
+                           blend=float(c.get('hyper_blend', 0.0)))
+        print(f'HyperPM {c["hyper"]} (v_min {hyper.v_min}, blend {hyper.blend})', flush=True)
+    n_hyper, a_sum, ms_hyper = 0, 0.0, 0.0
     lbu = np.array([cfg['min_ws_ref'], -c['max_steer']])
     ubu = np.array([c['v_max'], c['max_steer']])
     for k in range(N):
@@ -108,7 +122,7 @@ def main():
             oo.set_hard_bounds(solver, N, cfg['track_width'], 0.0)
         solver.solve()
 
-    req_len = 8 * (2 + 9 + 3 * (N + 1) + N)
+    req_len = 8 * (3 + 9 + 3 * (N + 1) + N)
     ubu_k = np.full(N, np.inf)      # 지금 스테이지별로 걸려 있는 속도 상한 (바뀔 때만 다시 넣는다)
     os.write(a.fd_out, b'R')
     while True:
@@ -116,19 +130,34 @@ def main():
         if raw is None:
             return 0
         req = np.frombuffer(raw, dtype=np.float64)
-        rid, cmd, x = req[0], req[1], req[2:11]
-        kappa, n_lo, n_hi = req[11:11 + 3 * (N + 1)].reshape(3, N + 1)
-        v_cap = np.clip(req[11 + 3 * (N + 1):], lbu[0], ubu[0])
+        rid, cmd, t_req, x = req[0], req[1], req[2], req[3:12]
+        kappa, n_lo, n_hi = req[12:12 + 3 * (N + 1)].reshape(3, N + 1)
+        v_cap = np.clip(req[12 + 3 * (N + 1):], lbu[0], ubu[0])
         x = x.copy()
         x[6] = fric
         if cmd == 1.0:
             restart(x)
             ubu_k[:] = ubu[0]
+            if hyper is not None:
+                hyper.plan = None       # 다시 깐 추측은 계획이 아니다. 관측 기록은 둔다
         for k in np.flatnonzero(v_cap != ubu_k):
             solver.constraints_set(int(k), 'ubu', np.array([v_cap[k], ubu[1]]))
             ubu_k[k] = v_cap[k]
-        for k in range(N + 1):
-            solver.set(k, 'p', np.concatenate([params, [kappa[k]]]))
+        if hyper is not None:
+            th = time.perf_counter()
+            hyper.observe(t_req, x)
+            P_k, a = hyper.stage_params(t_req, x)
+            ms_hyper += (time.perf_counter() - th) * 1000
+            n_hyper += 1
+            a_sum += a
+            if n_hyper % 300 == 0:
+                print(f'HyperPM 300회: 평균 {ms_hyper / 300:.2f} ms, 쓴 비율 {a_sum / 300:.2f}', flush=True)
+                ms_hyper, a_sum = 0.0, 0.0
+            for k in range(N + 1):
+                solver.set(k, 'p', np.concatenate([P_k[k], [kappa[k]]]))
+        else:
+            for k in range(N + 1):
+                solver.set(k, 'p', np.concatenate([params, [kappa[k]]]))
         solver.set(0, 'lbx', x)
         solver.set(0, 'ubx', x)
         if cfg['track_hard']:
@@ -136,7 +165,13 @@ def main():
         t0 = time.perf_counter()
         st = solver.solve()
         ms = (time.perf_counter() - t0) * 1000
-        s_pred = [solver.get(k, 'x')[0] for k in range(N + 1)]
+        xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
+        s_pred = xs[:, 0]
+        if hyper is not None:
+            if st == 0 and np.all(np.isfinite(xs)):
+                hyper.set_plan(t_req, xs)
+            else:
+                hyper.plan = None
         res = np.concatenate([[rid, st, ms], solver.get(0, 'u'), solver.get(1, 'x'), s_pred])
         os.write(a.fd_out, res.tobytes())
 

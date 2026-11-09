@@ -77,6 +77,18 @@
     #   11-08 race 로그 (VESC 제동 꺼짐): 가속 2.0 / 감속 1.5 → 바퀴 2 s 예측 RMSE 0.54 → 0.16 m/s
     ws_acc_max: 0.0
     ws_dec_max: 0.0
+
+    # ── HyperPM 시변 파라미터 (2026-11-09) ───────────────────────────
+    # .npz (저장소 기준 경로) 를 주면 위 상수 대신 매 주기 네트워크가 스테이지별 파라미터를 낸다
+    #   (hypermpc/hyper_params.py, tools/export_hyper.py). 비우면 ('') 상수. 생성 코드는 그대로.
+    #   J_ep10 = 11-08 mocap 로그 전부 (dummy-ncr2sxjz 10 에폭). 1초 예측 손실 H → J:
+    #     밤 레이스 0.0077 → 0.0055, 제동 0.0209 → 0.0153, 아침 race 0.0264 → 0.0213, 11-07 0.0054 → 0.0029.
+    #   실측 라이다 상태 오차를 입력에 넣어도 0.0058 / 0.0164 / 0.0216 (H 보다 여전히 18~30% 낫다).
+    #   파라미터는 네트워크 기준값 × [0.5, 1.5] 안에서만 움직인다. 출력이 비정상이면 위 상수를 쓴다.
+    #   ★ 실차 전에 offline_ocp --hyper 로 status 4 가 늘지 않는지 볼 것.
+    hyper_model: ''
+    hyper_v_min: 0.0      # 이 vx 아래는 상수 (0 = 항상 네트워크. MPC 상태 vx 는 v_floor 0.25 아래로 안 내려간다)
+    hyper_blend: 0.0      # v_min ~ v_min+blend 에서 상수와 섞는다
     control_rate: 30.0
     track_csv: lab_map/data/tracks/s_track/prep_s_track.csv   # 저장소 기준 경로
 

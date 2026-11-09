@@ -56,6 +56,10 @@ r_min = 1.0 / max(np.abs(d['curvature']).max(), 1e-9)
 fric = float(h.get('friction', known['friction']))
 v_corner = (fric * 9.81 * r_min) ** 0.5
 
+hm = str(h.get('hyper_model') or '')
+if hm and not os.path.isfile(hm if os.path.isabs(hm) else os.path.join(root, hm)):
+    err(f'hyper_model 파일이 없습니다: {hm}')
+
 yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 drive = bool(c.get('drive', False))
 source = str(c.get('source') or 'mocap')
@@ -84,8 +88,9 @@ print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'트랙   {t}  (길이 {d["s"][-1]:.1f} m, 최소 반경 {r_min:.2f} m)',
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
-         f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속']
-lines += [f'       {k} = {v}' for k, v in h.items() if k != 'v_max']
+         f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속',
+         f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}']
+lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model')]
 if v_max > 3.0:
     lines.append('⚠ v_max 3 m/s 초과 — 동정 데이터는 3 m/s 까지다. 모델 밖이니 offline_ocp 로 먼저 확인하고 조금씩 올릴 것')
 print('RACE_SUMMARY=' + shlex.quote('\n'.join(lines)))

@@ -78,6 +78,9 @@ import casadi as cs
 import yaml
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from hyper_params import HyperStage  # noqa: E402
+
 
 # ── 원본 naive 동역학을 가져온다 ────────────────────────────────────────────
 SLIP_EPS = 1e-12    # hpm/mlcs_car_model.py 의 SafePacejkaTireModel 과 같은 값
@@ -529,9 +532,14 @@ def _opp_cycle(o, i, dt, qs, x, lo, hi, v_max):
 
 
 def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=None, plant=None,
-                 plant_friction=None, opp=None):
-    """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC). opp 면 가상 상대 (make_opponent)."""
+                 plant_friction=None, opp=None, hyper=None, plant_hyper=None):
+    """폐루프로 laps 번 푼다. walls 가 있으면 지점별 벽 경계 (MPCC). opp 면 가상 상대 (make_opponent).
+
+    hyper: MPC 가 HyperPM 스테이지별 파라미터를 쓴다 (hyper_params.HyperStage, 노드 워커와 같다).
+    plant_hyper: 차(plant) 가 HyperPM 의 지금 파라미터로 움직인다. 없으면 차는 params (상수).
+    """
     N = args.N
+    P_used = []
     wall_hist, s_hist, trace = [], [], []
     v_top = args.v_max if args.v_max is not None else cfg['max_ws_ref']
     restart(solver, N, x0)
@@ -546,8 +554,14 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         t_cycle = time.perf_counter()
         qs = np.array([x[0] + x[3] * k * args.dt if i == 0 else solver.get(k, 'x')[0]
                        for k in range(N + 1)])
+        t_now = i * args.dt
+        P_k = np.tile(params, (N + 1, 1))
+        if hyper is not None:
+            hyper.observe(t_now, x)
+            P_k, _ = hyper.stage_params(t_now, x)
+            P_used.append(P_k[0] / hyper.net.p_const)
         for k in range(N + 1):
-            solver.set(k, 'p', np.concatenate([params, [kappa_of_s(qs[k])]]))
+            solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])]]))
         solver.set(0, 'lbx', x)
         solver.set(0, 'ubx', x)
         if cfg['track_hard'] and walls is not None:
@@ -568,6 +582,14 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         t1 = time.perf_counter()
         u0 = solver.get(0, 'u')
         bad = st != 0 or not np.all(np.isfinite(u0))
+        for hs in (hyper, plant_hyper):
+            if hs is None:
+                continue
+            xs = np.array([solver.get(k, 'x') for k in range(N + 1)])
+            if bad or not np.all(np.isfinite(xs)):
+                hs.plan = None
+            else:
+                hs.set_plan(t_now, xs)
         if bad and not args.apply_bad:
             # hmpc_node 와 같게: 비정상 해는 버리고 정지 명령 (바퀴 0, 조향 0), 다음엔 다시 깐다.
             # 노드는 max_bad_solves(3) 번 이어지면 래치해 멈춘다 — 여기서는 세기만 하고 계속 돈다.
@@ -583,7 +605,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             xp = np.array(x, float)
             if plant_friction is not None:      # 차만 다른 마찰 (MPC 는 x0 의 값을 믿는다)
                 xp[6] = plant_friction
-            x_next = plant(xp, u0, np.concatenate([params, [kappa_of_s(x[0])]]))
+            p_plant = params
+            if plant_hyper is not None:
+                plant_hyper.observe(t_now, x)
+                p_plant = plant_hyper.stage_params(t_now, x)[0][0]
+            x_next = plant(xp, u0, np.concatenate([p_plant, [kappa_of_s(x[0])]]))
             x_next[6] = x[6]
         elif bad and not args.apply_bad:
             print(f'  ✗ {name}: {i} 번째 비정상 해 (status {st}) — --plant 없이는 버린 해의 다음 상태가 없어 멈춘다')
@@ -625,6 +651,10 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             np.save(args.trace, np.array(trace))
     print(f'  마지막 상태 vx {x[3]:.3f}  vy {x[4]:.3f}  r {x[5]:.3f}  n {x[1]:.3f}  '
           f'ws {x[7]:.3f}  delta {x[8]:.3f}')
+    if P_used:
+        R_ = np.array(P_used)
+        print(f'  HyperPM 파라미터/기준 (스테이지 0) 최소 ×{R_.min():.2f} 최대 ×{R_.max():.2f}, '
+              f'주기간 변화 p99 {np.percentile(np.abs(np.diff(R_, axis=0)), 99) * 100:.2f}%')
     if opp is not None:
         print(f'  상대 {opp["v"]:.2f} m/s, d {opp["d"]:+.2f}: 추월 {opp["passes"]}번, '
               f'최소 중심 거리 {opp["min_dist"]:.2f} m, 겹침(충돌) {opp["hits"]} 주기, 모드 {opp["modes"]}')
@@ -664,6 +694,10 @@ def main():
                     help='--walls 와 함께: 속도 V 로 도는 가상 상대 (추월·뒤따르기 시험). --v-max 도 줄 것')
     ap.add_argument('--opp-d', type=float, default=0.0, help='가상 상대의 선에서 횡위치 m (왼쪽 +)')
     ap.add_argument('--opp-gap', type=float, default=2.0, help='가상 상대가 앞서 출발하는 거리 m')
+    ap.add_argument('--hyper', default=None, metavar='NPZ',
+                    help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
+    ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
+                    help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
     ap.add_argument('--apply-bad', action='store_true',
                     help='status≠0 해도 그대로 적용 (예전 동작). 기본은 노드처럼 버리고 정지 명령')
     ap.add_argument('--ws-acc-max', type=float, default=0.0,
@@ -745,8 +779,10 @@ def main():
             x0[6] = args.friction
         opp = (make_opponent(args.track, args.opponent, args.opp_d, args.opp_gap)
                if (walls is not None and args.opponent is not None) else None)
+        hyper = HyperStage(args.hyper, args.N, args.dt, params) if args.hyper else None
+        plant_hyper = HyperStage(args.plant_hyper, args.N, args.dt, params) if args.plant_hyper else None
         run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant,
-                     plant_friction=args.plant_friction, opp=opp)
+                     plant_friction=args.plant_friction, opp=opp, hyper=hyper, plant_hyper=plant_hyper)
     return 0
 
 

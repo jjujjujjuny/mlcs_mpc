@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+test_hyper_params.py — HyperPM numpy 이식 시험 (torch·acados·ROS 불필요)
+
+  python3 hypermpc/test_hyper_params.py [config/hyper/*.npz]
+
+  .npz 에는 export_hyper.py 가 torch 로 계산한 기준 출력이 들어 있다. 차에서 numpy 결과가
+  그것과 같은지, 스테이지 보간·fallback 이 맞는지 본다.
+"""
+import glob
+import os
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from hyper_params import HyperParams, HyperStage  # noqa: E402
+
+N, DT = 60, 0.033
+
+
+def x_state(vx=2.0, ws=2.05, delta=0.1):
+    return np.array([0.0, 0.0, 0.0, vx, 0.05, 1.0, 0.41, ws, delta])
+
+
+def check(path):
+    fails = []
+
+    def ok(cond, what):
+        print(('  ✓ ' if cond else '  ✗ ') + what)
+        if not cond:
+            fails.append(what)
+
+    print(f'■ {path}')
+    net = HyperParams(path)
+    z = np.load(path)
+    if 'ref_out' in z.files:
+        out = net.predict(z['ref_M'], z['ref_P'])
+        err = np.max(np.abs(out - z['ref_out']) / np.abs(z['ref_out']))
+        ok(err < 1e-4, f'torch 기준과 같다 (상대 오차 {err:.1e})')
+    else:
+        print('  - 기준 출력 없음 (export_hyper 에 검증 csv 를 주지 않았다)')
+
+    M = np.tile([2.0, 0.05, 1.0, 2.05, 0.1], (net.W, 1))
+    P = np.tile([2.0, 0.1], (net.H, 1))
+    p = net.predict(M, P)
+    s = net.scaler
+    r = p / net.p_const
+    ok(p.shape == (net.H, net.n_par) and np.all(np.isfinite(p)), f'출력 {p.shape} 유한')
+    ok(r.min() >= 1 - s - 1e-9 and r.max() <= 1 + s + 1e-9,
+       f'기준값 × [{1 - s:.1f}, {1 + s:.1f}] 안 (×{r.min():.2f} ~ ×{r.max():.2f})')
+
+    fb = net.p_const * 0.9
+    hs = HyperStage(path, N, DT, fb)
+    P0, a = hs.stage_params(0.0, x_state())
+    ok(a == 0.0 and np.allclose(P0, fb), '관측 전에는 fallback')
+
+    for i in range(20):
+        hs.observe(i * DT, x_state())
+    Pk, a = hs.stage_params(19 * DT, x_state())
+    ok(Pk.shape == (N + 1, net.n_par) and a == 1.0, f'스테이지 파라미터 {Pk.shape}, 비율 {a}')
+    t_last = net.tp * (net.H - 1)
+    beyond = np.arange(N + 1) * DT > t_last
+    p_nn = net.predict(hs.M(19 * DT), hs.P(19 * DT, x_state()))
+    ok(np.allclose(Pk[beyond], p_nn[-1]), f'{t_last:.2f} s 뒤 스테이지는 마지막 값 유지 ({beyond.sum()}개)')
+    ok(np.allclose(Pk[0], p_nn[0]), '스테이지 0 = 네트워크 첫 칸')
+
+    xs = np.tile(x_state(), (N + 1, 1))
+    xs[:, 7] = np.linspace(2.0, 3.0, N + 1)
+    hs.set_plan(19 * DT, xs)
+    Pp = hs.P(19 * DT + DT, x_state())
+    want = np.interp(DT + net.tp * np.arange(net.H), DT * np.arange(N + 1), xs[:, 7])
+    ok(np.allclose(Pp[:, 0], want), 'P 는 직전 해를 지난 시간만큼 당겨 쓴다')
+
+    bad = x_state()
+    bad[4] = np.nan
+    hs.observe(20 * DT, bad)
+    Pn, a = hs.stage_params(20 * DT, bad)
+    ok(a == 0.0 and np.allclose(Pn, fb), 'NaN 입력이면 fallback')
+
+    hs2 = HyperStage(path, N, DT, fb, v_min=0.5, blend=0.3)
+    for i in range(20):
+        hs2.observe(i * DT, x_state(vx=0.3))
+    ok(hs2.stage_params(19 * DT, x_state(vx=0.3))[1] == 0.0, 'v_min 아래는 fallback')
+    ok(abs(hs2.weight(0.65) - 0.5) < 1e-9, 'v_min~v_min+blend 는 섞는다')
+    return fails
+
+
+def main():
+    paths = sys.argv[1:] or sorted(glob.glob(os.path.join(HERE, '..', 'src/mlcs_mpc/config/hyper/*.npz')))
+    if not paths:
+        print('✗ .npz 가 없습니다')
+        return 1
+    fails = []
+    for p in paths:
+        fails += check(p)
+    print(f'\n{"전부 통과" if not fails else f"✗ {len(fails)}개 실패"}')
+    return 1 if fails else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

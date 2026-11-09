@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 아직 상수 파라미터다.
+hmpc_node — HyperMPC 정식화의 OCP 로 차를 모는 노드. 동역학 파라미터는 상수 (hmpc.yaml) 이거나
+  HyperPM 시변 파라미터 (hyper_model 에 .npz 를 주면, hypermpc/hyper_params.py) 다.
 
   구독: /mpc/state, /mocap/valid, /mpc/enabled, /mpc/manual, /sensors/core, (opponent_topic)
   발행: /drive, /mpc/solve_time, /hmpc/status, /hmpc/opponent, /hmpc/opponent_markers
@@ -117,8 +118,8 @@ class Worker:
             pass
         self.alive = False
 
-    def send(self, rid, cmd, x, kappa, n_lo, n_hi, v_cap):
-        data = np.concatenate([[rid, cmd], x, kappa, n_lo, n_hi, v_cap]).tobytes()
+    def send(self, rid, cmd, t, x, kappa, n_lo, n_hi, v_cap):
+        data = np.concatenate([[rid, cmd, t], x, kappa, n_lo, n_hi, v_cap]).tobytes()
         return os.write(self.to_child, data) == len(data)
 
     def kill(self):
@@ -182,6 +183,10 @@ class HmpcNode(Node):
                              0.304115174, 0.50421894, 0.05])
         d('tire_front', [0.05, 2.0, 0.35, 1.4, 1.0, 1.2, 30.0, 1.3, 1.0, 0.5])
         d('tire_rear', [0.05, 2.0, 0.35, 1.4, 1.0, 1.2, 30.0, 1.3, 1.0, 0.5])
+        # HyperPM. 비우면 상수 파라미터. 상대 경로는 repo_root 기준 (config/hyper/*.npz)
+        d('hyper_model', '')
+        d('hyper_v_min', 0.0)
+        d('hyper_blend', 0.0)
         d('state_timeout', 0.2)
         d('vesc_timeout', 0.3)
         d('require_enable', True)
@@ -236,6 +241,14 @@ class HmpcNode(Node):
         else:
             self.get_logger().info(f'경계: 선에서 ±{self.track_width:.2f} m (fixed)')
         params = list(gp('vehicle_params')) + list(gp('tire_front')) + list(gp('tire_rear'))
+        if gp('hyper_model'):
+            hp = rel(gp('hyper_model'))
+            if not os.path.isfile(hp):
+                raise FileNotFoundError(f'hyper_model 이 없습니다: {hp}')
+            self.get_logger().info(f'★ HyperPM 시변 파라미터: {hp} (v_min {gp("hyper_v_min")}). '
+                                   '상수 파라미터는 출력이 비정상일 때만 쓴다')
+        else:
+            self.get_logger().info('동역학: 상수 파라미터 (hmpc.yaml)')
         self.worker_args = dict(
             python=gp('worker_python'), script=rel(gp('worker_script')),
             config=dict(N=self.N, dt=self.dt, rk_steps=int(gp('rk_steps')), steering_tau=float(gp('steering_tau')),
@@ -244,7 +257,9 @@ class HmpcNode(Node):
                         track_hard=bool(gp('track_hard')), track_width=float(gp('track_width')),
                         track_slack=float(gp('track_slack')),
                         mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
-                        max_steer=self.map_act[-1], params=params, core=int(gp('solver_core'))),
+                        max_steer=self.map_act[-1], params=params, core=int(gp('solver_core')),
+                        hyper=rel(gp('hyper_model')) if gp('hyper_model') else '',
+                        hyper_v_min=float(gp('hyper_v_min')), hyper_blend=float(gp('hyper_blend'))),
             extra=[a for a in gp('worker_extra_args') if a], N=self.N)
         self.log_file = open(gp('worker_log'), 'ab')
 
@@ -543,7 +558,7 @@ class HmpcNode(Node):
             slow = self.twist[0] < self.slow_speed
             self.limit = self.restart_timeout if not self.running or slow else self.solve_timeout
             try:
-                ok = self.worker.send(self.rid, cmd, x, kappa, n_lo, n_hi, v_cap)
+                ok = self.worker.send(self.rid, cmd, now, x, kappa, n_lo, n_hi, v_cap)
             except OSError:
                 ok = False
             if not ok:
