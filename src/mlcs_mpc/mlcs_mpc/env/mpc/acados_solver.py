@@ -63,7 +63,10 @@ def make_solver(model, track_grid, cfg, build_dir, log=print):
              and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
     log(f'■ {"이전 빌드 사용" if reuse else "코드 생성 + 빌드 중"}: {build}')
     t0 = time.perf_counter()
-    solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse, generate=not reuse, verbose=False)
+    # 우리 md5 스탬프가 같으면 acados 의 자체 해시 재검사를 건너뛴다. 그 해시가 어긋나
+    # '이전 빌드 사용' 인데도 생성 4 s + 빌드 10 s 를 다시 해, 워커 재시작이 ~14 s 걸렸다 (젯슨 cProfile).
+    solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse, generate=not reuse, verbose=False,
+                             check_reuse_possible=not reuse)
     with open(stamp_file, 'w') as f:
         f.write(stamp)
     log(f'  ✓ {time.perf_counter() - t0:.1f}초')
