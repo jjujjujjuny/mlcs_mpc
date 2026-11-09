@@ -18,10 +18,16 @@ acados_ocp — MPCC OCP (Frenet 컨투어링) 를 세운다. 빌드·옵션은 a
               항은 HyperMPC 논문 비용과 같다 (가중치는 config/mpcc.yaml)
     tracking  성능: 진행 ṡ, 횡방향, 목표 속도   정규화: 조향 입력 (예전 간이 비용)
   경계: track_hard 면 |n| 상태 경계 (스테이지별 값은 실행 중에 — bounds.py), 아니면 배리어 비용.
+
+■ 횡가속도 |vx·r| ≤ ay (config.ay_on) — MPCC 는 벽 안에서 선을 고르며 코너를 한계까지 쓴다. 모델 마찰 한계
+  (μg ≈ 4.0) 에 붙으면 실차는 미끄러지므로 그 아래로 묶는다. 값은 실행 중에 (bounds.set_input_bounds) — 실차
+  ay_max, 시뮬 ay_max_sim. 정상 선회 근사 vx·r 이고 슬랙 (L1 ay_slack) 이라 못 지키는 순간에도 QP 해가 있다.
 """
 import casadi as cs
 import numpy as np
 from acados_template import AcadosModel, AcadosOcp
+
+from mlcs_mpc.env.config import AY_OFF
 
 NX, NU, NP = 9, 2, 30
 
@@ -169,6 +175,24 @@ def build_ocp(model, track_grid, cfg, name='mpcc_car'):
         #   acados 가 zl_0 를 못 채운다 (젯슨 빌드에서 ValueError, 2026-11-08) — 직접 준다.
         ocp.cost.zl_0 = ocp.cost.zu_0 = np.array([zg])
         ocp.cost.Zl_0 = ocp.cost.Zu_0 = np.array([zg * 0.1])
+
+    if cfg.ay_on():
+        # 슬랙 순서는 [bx, g, h] — 앞에 붙은 슬랙 뒤에 붙인다. 스테이지 0 (x0 고정, bx 슬랙 없음) 은 [g, h].
+        ay = vx * r
+        am.con_h_expr = am.con_h_expr_0 = ay
+        c = ocp.constraints
+        c.lh = c.lh_0 = np.array([-AY_OFF])
+        c.uh = c.uh_0 = np.array([+AY_OFF])
+        c.idxsh = c.idxsh_0 = np.array([0])
+        n_prev = int(cfg.track_hard and cfg.track_slack > 0) + int(cfg.ws_acc_max > 0 or cfg.ws_dec_max > 0)
+        za = cfg.ay_slack
+        zl = list(ocp.cost.zl)[:n_prev] if n_prev else []
+        Zl = list(ocp.cost.Zl)[:n_prev] if n_prev else []
+        ocp.cost.zl = ocp.cost.zu = np.array(zl + [za])
+        ocp.cost.Zl = ocp.cost.Zu = np.array(Zl + [za * 0.1])
+        g0 = cfg.ws_acc_max > 0 or cfg.ws_dec_max > 0
+        ocp.cost.zl_0 = ocp.cost.zu_0 = np.array(([cfg.ws_rate_slack] if g0 else []) + [za])
+        ocp.cost.Zl_0 = ocp.cost.Zu_0 = np.array(([cfg.ws_rate_slack * 0.1] if g0 else []) + [za * 0.1])
 
     ocp.parameter_values = np.asarray(model.p, dtype=float)
     return ocp

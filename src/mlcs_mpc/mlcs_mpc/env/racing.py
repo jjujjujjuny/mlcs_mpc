@@ -59,6 +59,7 @@ def load_params(args, extra=None):
         p[k] = v
     track = args.track or str(race.get('track') or '') or os.path.join(REPO, p['track_csv'])
     p['repo_root'] = REPO
+    p['sim_mode'] = True        # 여기는 시뮬레이터 (main.py, main_sim.py) — 시뮬용 한계 (ay_max_sim)
     return p, over, find(track)
 
 

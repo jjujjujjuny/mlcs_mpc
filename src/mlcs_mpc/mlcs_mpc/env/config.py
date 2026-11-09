@@ -11,6 +11,8 @@ config — MPCC 설정. 값은 모두 config/mpcc.yaml 에서 온다 (race.yaml 
 """
 from dataclasses import asdict, dataclass, fields
 
+AY_OFF = 100.0      # 횡가속도 제약을 끈 것과 같은 경계 m/s² (빌드 초기값, 상한 0 일 때)
+
 
 @dataclass
 class MpccConfig:
@@ -27,6 +29,12 @@ class MpccConfig:
     ws_acc_max: float = 0.0     # ★ 바퀴 가속도 한계 m/s² (0 = 끔)
     ws_dec_max: float = 0.0     # ★ 바퀴 감속도 한계 m/s² (0 = 끔)
     ws_rate_slack: float = 1000.0      # ★ 위 한계를 넘는 양의 L1 벌점
+    # 횡가속도 |vx·r| 상한 m/s² (0 = 끔). 실차는 ay_max, 시뮬 (sim_mode) 은 ay_max_sim. 값은 실행 중에 넣는다
+    #   (생성 코드에는 제약이 있는지만 — 둘 중 하나라도 > 0 이면 들어간다)
+    ay_max: float = 3.5
+    ay_max_sim: float = 6.0
+    ay_slack: float = 1000.0    # ★ 넘는 양의 L1 벌점
+    sim_mode: bool = False      # 시뮬로 띄울 때만 true (launch source:=sim, env/racing.py)
 
     # ── 트랙 경계 ──────────────────────────────────────────────────────
     track_hard: bool = True     # ★ true = |n| 상태 경계 (실행 중 스테이지별), false = 배리어 비용
@@ -38,8 +46,8 @@ class MpccConfig:
     # ── 비용 ★ — 성능 (무엇을 잘하게) ──────────────────────────────────
     cost: str = 'mpcc'          # mpcc (진행 −s 최대화) | tracking (목표 속도 추종, 예전 간이 비용)
     q_progress: float = 1.0     # 진행 (mpcc −s, tracking −ṡ)
-    q_n: float = 5.0            # 기준 라인 횡방향 오차 n² (논문 0.02)
-    q_mu: float = 1.0           # 기준 라인 헤딩 오차 mu² (논문 0.002)
+    q_n: float = 0.02           # 기준 라인 횡방향 오차 n² (논문 값 — MPCC. 키우면 센터라인 추종)
+    q_mu: float = 0.002         # 기준 라인 헤딩 오차 mu² (논문 값)
     q_mu_e: float = 5.0         # 끝 스테이지 헤딩 오차 mu²
     v_target: float = 1.2       # tracking: 목표 속도 (가중치 q_speed_diff)
 
@@ -55,6 +63,14 @@ class MpccConfig:
     # 생성 코드의 입력 경계 초기값 (실행 중에 v_max, max_steer_actual 로 다시 넣는다)
     build_v_max: float = 7.0    # ★
     build_steer: float = 0.5    # ★
+
+    def ay_on(self):
+        """생성 코드에 횡가속도 제약을 넣나."""
+        return self.ay_max > 0 or self.ay_max_sim > 0
+
+    def ay_limit(self):
+        """지금 쓸 횡가속도 상한 (0 = 끔)."""
+        return self.ay_max_sim if self.sim_mode else self.ay_max
 
     @classmethod
     def names(cls):
@@ -83,9 +99,10 @@ class MpccConfig:
 
     def build_key(self):
         """생성 코드에 들어가는 값만 (★). acados_solver 가 이것으로 다시 빌드할지 정한다."""
-        skip = {'v_max', 'v_min', 'max_steer_actual', 'track_bounds', 'wall_margin', 'track_width'}
+        skip = {'v_max', 'v_min', 'max_steer_actual', 'track_bounds', 'wall_margin', 'track_width',
+                'ay_max', 'ay_max_sim', 'sim_mode'}
         return tuple((k, v) for k, v in sorted(self.to_dict().items()) if k not in skip) + \
-            (('track_width', self.track_width),) * (not self.track_hard)
+            (('track_width', self.track_width),) * (not self.track_hard) + (('ay_on', self.ay_on()),)
 
 
 def read_params(*paths):

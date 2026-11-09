@@ -36,6 +36,7 @@ def generate_launch_description():
         if src == 'sim':
             # mlcs_sim 의 sim_node 가 /mpc/state·/mocap/valid·/sensors/core 를 직접 낸다
             bridge = None
+            over['sim_mode'] = True     # 시뮬용 한계 (ay_max_sim)
         elif src == 'lidar':
             # require_ready: RViz 로 시작 위치를 찍기 전(relocalize)에는 출발하지 않는다
             bridge = Node(package='mlcs_mpc', executable='lidar_bridge', name='lidar_bridge',

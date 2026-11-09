@@ -3,6 +3,8 @@ bounds — 실행 중에 스테이지별로 넣는 경계와 초기 추측. 워�
 """
 import numpy as np
 
+from mlcs_mpc.env.config import AY_OFF
+
 
 def hard_bounds(N, w, n0, relax=10):
     """스테이지 1..N 의 |n| 상한.
@@ -40,11 +42,16 @@ def set_wall_bounds(solver, N, lo, hi, n0):
 
 
 def set_input_bounds(solver, N, cfg, v_cap=None):
-    """바퀴 속도 [v_min, v_max] (v_cap 이 있으면 스테이지별 상한), 실제 조향 ±max_steer_actual."""
+    """바퀴 속도 [v_min, v_max] (v_cap 이 있으면 스테이지별 상한), 실제 조향 ±max_steer_actual,
+    횡가속도 |vx·r| ≤ cfg.ay_limit() (제약이 빌드돼 있을 때, 0 이면 끈 것과 같다)."""
+    ay = (cfg.ay_limit() or AY_OFF) if cfg.ay_on() else None
     for k in range(N):
         v = cfg.v_max if v_cap is None else max(float(v_cap[k]), cfg.v_min)
         solver.constraints_set(k, 'lbu', np.array([cfg.v_min, -cfg.max_steer_actual]))
         solver.constraints_set(k, 'ubu', np.array([v, cfg.max_steer_actual]))
+        if ay is not None:
+            solver.constraints_set(k, 'lh', np.array([-ay]))
+            solver.constraints_set(k, 'uh', np.array([+ay]))
 
 
 def restart(solver, N, x0, cfg=None):
