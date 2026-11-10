@@ -521,7 +521,10 @@ start_natnet () {
         return
     fi
     local CLIENT_IP
-    CLIENT_IP="$(hostname -I | awk '{print $1}')"
+    # ★ Motive 로 가는 경로의 출발 주소 (2026-11-10). hostname -I 의 첫 주소는 재부팅마다 순서가 바뀌어
+    #   라이다 유선 (192.168.0.15) 이 잡히면 natnet 이 Motive (192.168.1.x) 에 못 붙는다
+    CLIENT_IP="$(ip -4 route get "$MOTIVE_IP" 2>/dev/null | grep -oP 'src \K\S+' | head -1)"
+    [ -n "$CLIENT_IP" ] || CLIENT_IP="$(hostname -I | awk '{print $1}')"
     log "mocap 드라이버 (Motive ${MOTIVE_IP} → ${CLIENT_IP})..."
     # 브링업과 같은 이유로 setsid — Ctrl+C 경로 밖에 둔다 (start_bringup 주석)
     setsid ros2 launch natnet_ros2 natnet_ros2.launch.py \
@@ -1355,7 +1358,7 @@ mocap)
         echo
         echo "  1) natnet 드라이버가 떠 있나요?"
         echo "       ros2 launch natnet_ros2 natnet_ros2.launch.py \\"
-        echo "           serverIP:=192.168.1.3 clientIP:=\$(hostname -I | awk '{print \$1}') \\"
+        echo "           serverIP:=192.168.1.3 clientIP:=\$(ip -4 route get 192.168.1.3 | grep -oP 'src \\K\\S+') \\"
         echo "           serverType:=unicast pub_rigid_body:=true activate:=true"
         echo
         echo "     ★ pub_rigid_body 와 activate 는 둘 다 기본값이 false 다."
