@@ -25,6 +25,7 @@
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
 #     savemap <이름>      맵핑 중 맵 저장 (백그라운드)
 #     maptrack <맵>       맵으로 트랙 만들기 (백그라운드)
+#     usage               drive.sh·race.sh·bat.sh 맨 위 사용법 주석 (명령어 탭을 열 때만)
 # ============================================================================
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -75,6 +76,14 @@ lists)
     light
     echo "maps=$(ls -t "$ROOT"/maps/*.pbstream 2>/dev/null | xargs -r -n1 basename | sed 's/\.pbstream$//' | paste -sd,)"
     echo "tracks=$(cd "$ROOT/lab_map/data/tracks" 2>/dev/null && ls -td -- */ | tr -d / | paste -sd,)"
+    ;;
+usage)
+    light
+    # 각 스크립트 첫 줄(#!) 다음부터 주석이 끝날 때까지. 탭에 옮겨 적지 않고 여기서 읽는다
+    for f in drive.sh race.sh bat.sh; do
+        echo "@@@ $f"
+        awk 'NR==1{next} /^#/{print; next} {exit}' "$ROOT/$f"
+    done
     ;;
 screen)
     light

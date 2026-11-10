@@ -76,6 +76,84 @@ def percentile(xs, q):
 
 
 # ─────────────────────────────────────────────────────────────────────
+#  명령어 탭 — 스크립트 맨 위 사용법 주석을 읽어 목적별로 묶는다
+#
+#  ★ 명령 문구는 여기 옮겨 적지 않는다 (명령이 바뀌면 주석만 고치면 되게). 여기 있는 것은
+#    '명령 이름 → 묶음' 표뿐이고, 표에 없는 새 명령은 '기타' 로 그대로 보인다.
+# ─────────────────────────────────────────────────────────────────────
+WHERE = {'car.sh': '노트북', 'drive.sh': '젯슨', 'race.sh': '젯슨', 'bat.sh': '젯슨'}
+GROUP_ORDER = ['노트북 준비·연결', '주행', '맵 → 트랙', '점검·확인', '정지',
+               '보정·데이터', '기타', '환경변수']
+GROUP_OF = {
+    'car.sh': {'ip': '노트북 준비·연결', 'key': '노트북 준비·연결', 'panel': '노트북 준비·연결',
+               'rviz': '노트북 준비·연결', 'term': '노트북 준비·연결',
+               'bench': '주행', 'race': '주행', 'check': '점검·확인', 'bat': '점검·확인',
+               'stop': '정지'},
+    'drive.sh': dict(
+        **{k: '주행' for k in ('joy', 'rally', 'bench', 'mpc', 'stanley', 'hmpc', 'go', 'halt', 'log')},
+        **{k: '맵 → 트랙' for k in ('mapping', 'savemap', 'maptrack', 'localize', 'drawtrack',
+                                    'stracks', 'preptrack', 'preview', 'trackinfo', 'record',
+                                    'laptrack', 'align', 'mocaptrack', 'racereport')},
+        **{k: '점검·확인' for k in ('topics', 'checkstate', 'lidar', 'rviz', 'bridge', 'mocap',
+                                    'natnet')},
+        **{k: '보정·데이터' for k in ('servo', 'cal', 'mocapcal', 'cleanlog', 'hpmdata',
+                                      'actuator')},
+        stop='정지'),
+    'race.sh': {'': '주행'},
+    'bat.sh': {'': '점검·확인'},
+}
+_CMD = re.compile(r'^(\s*)((?:[A-Z_]+=\S+\s+)*\./(\w+\.sh)\b.*)$')
+
+
+def parse_usage(script, text):
+    """사용법 주석 → (묶음, 위치, 명령, 설명) 목록과 따로 붙은 안내문 목록."""
+    entries, notes = [], []
+    env = False
+    cur = None
+    for raw in text.splitlines():
+        if not raw.startswith('#') or set(raw.strip('# ')) <= set('=─'):
+            continue                                      # 구분선
+        line = raw[1:].rstrip()
+        body = line.strip()
+        if not body:                                      # 빈 줄 = 구역 끝
+            cur, env = None, False
+            continue
+        if body == '사용법:':
+            cur = None
+            continue
+        if body.startswith('──'):                         # ── 라이다 맵 → 트랙 ── 같은 구분 줄
+            cur = None
+            continue
+        if body == '환경변수:':
+            env, cur = True, None
+            continue
+        m = _CMD.match(line)
+        if m and m.group(3) == script:
+            indent, rest = len(m.group(1)), m.group(2)
+            parts = re.split(r'\s{2,}', rest, maxsplit=1)
+            cmd, desc = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else '')
+            sub = re.match(r'(?:[A-Z_]+=\S+\s+)*\./\w+\.sh\s*(\S*)', cmd).group(1)
+            table = GROUP_OF.get(script, {})
+            group = table.get(sub.lstrip('-'), table.get('', '기타')) if not sub.startswith('<') \
+                else table.get('', '기타')
+            cur = [group, WHERE.get(script, '?'), cmd, desc, indent]
+            entries.append(cur)
+            continue
+        if env and re.match(r'[A-Z_]+=', body):
+            parts = re.split(r'\s{2,}', body, maxsplit=1)
+            entries.append(['환경변수', WHERE.get(script, '?'), parts[0],
+                            parts[1] if len(parts) > 1 else '', 0])
+            continue
+        indent = len(line) - len(line.lstrip())
+        if cur is not None and indent > cur[4]:           # 위 명령의 옵션·이어지는 설명
+            cur[3] = (cur[3] + '\n' + body).strip()
+            continue
+        cur = None
+        notes.append(body)
+    return [e[:4] for e in entries], notes
+
+
+# ─────────────────────────────────────────────────────────────────────
 #  ROS — 브리지로 온 토픽을 받아 둔다 (rclpy 가 없으면 보기만 빠진다)
 # ─────────────────────────────────────────────────────────────────────
 class RosLink:
@@ -400,8 +478,106 @@ class Panel(QtWidgets.QWidget):
             t.setFocusPolicy(QtCore.Qt.NoFocus)
             self.logs[key] = t
             self.tabs.addTab(t, label)
-        self.tabs.currentChanged.connect(lambda _i: self.poll_screen())
+        # 명령어 탭 — 탭을 열 때만 읽는다 (젯슨 쪽 1회 0.02 s CPU, 주기 조회 없음)
+        self.cmd_page = QtWidgets.QScrollArea()
+        self.cmd_page.setWidgetResizable(True)
+        self.tabs.addTab(self.cmd_page, '명령어')
+        self.tabs.currentChanged.connect(self._tab_changed)
         return self.tabs
+
+    def _tab_changed(self, _i):
+        if self.tabs.currentWidget() is self.cmd_page:
+            self.load_usage()
+        else:
+            self.poll_screen()
+
+    # ───────── 명령어 탭 ─────────
+    def load_usage(self):
+        try:
+            with open(os.path.join(ROOT, 'car.sh'), encoding='utf-8') as f:
+                lines = f.read().splitlines()[1:]
+            car = '\n'.join(lines[:next((i for i, l in enumerate(lines) if not l.startswith('#')),
+                                         len(lines))])
+        except OSError as e:
+            car = ''
+            self.note(f'car.sh 를 못 읽었습니다: {e}')
+
+        def done(ok, out):
+            blocks, cur = {}, None
+            for l in out.splitlines() if ok else []:
+                if l.startswith('@@@ '):
+                    cur = l[4:].strip()
+                    blocks[cur] = []
+                elif cur:
+                    blocks[cur].append(l)
+            blocks = {'car.sh': car, **{k: '\n'.join(v) for k, v in blocks.items()}}
+            self.show_usage(blocks, None if ok else (out.strip().splitlines() or ['응답 없음'])[-1])
+        self.ssh.run(['usage'], done, tag='usage')
+
+    def show_usage(self, blocks, ssh_err):
+        page = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(page)
+        warn = QtWidgets.QLabel(
+            '⚠ 젯슨 tmux 안(젯슨 터미널)에서는 car.sh 나 tmux 명령을 치지 마세요 — tmux 가 겹쳐 창이 '
+            '엉킵니다 (11-09 노트북 맵핑 시도). 노트북 명령은 노트북 터미널에서, 젯슨 명령은 젯슨 '
+            '터미널에서. 이 탭은 보기·복사 전용입니다.')
+        warn.setWordWrap(True)
+        warn.setStyleSheet('color:white; background:#e65100; padding:6px; border-radius:4px; font-weight:bold;')
+        v.addWidget(warn)
+        top = QtWidgets.QHBoxLayout()
+        src = f'{time.strftime("%H:%M:%S")} 에 읽음 — car.sh 는 노트북 레포, 나머지는 젯슨에서 (스크립트 맨 위 주석)'
+        if ssh_err:
+            src += f'   ✗ 젯슨에서 못 읽음: {ssh_err}'
+        lb = QtWidgets.QLabel(src)
+        lb.setStyleSheet('color:#888;')
+        top.addWidget(lb, 1)
+        top.addWidget(self._btn('젯슨 터미널 열기', self.open_term))
+        top.addWidget(self._btn('다시 읽기', self.load_usage))
+        v.addLayout(top)
+
+        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
+        groups, notes = {}, {}
+        for script in ('car.sh', 'drive.sh', 'race.sh', 'bat.sh'):
+            if script in blocks and blocks[script]:
+                ents, nts = parse_usage(script, blocks[script])
+                for e in ents:
+                    groups.setdefault(e[0], []).append(e)
+                notes[script] = nts
+        for g in GROUP_ORDER + sorted(set(groups) - set(GROUP_ORDER)):
+            if g not in groups:
+                continue
+            box = QtWidgets.QGroupBox(g)
+            grid = QtWidgets.QGridLayout(box)
+            grid.setColumnStretch(2, 1)
+            for r, (_g, where, cmd, desc) in enumerate(groups[g]):
+                badge = QtWidgets.QLabel(where)
+                badge.setStyleSheet(CHIP.format('#1565c0' if where == '노트북' else GREEN))
+                badge.setToolTip('노트북 터미널에서' if where == '노트북' else '젯슨에서 (젯슨 터미널 열기)')
+                c = QtWidgets.QLabel(cmd)
+                c.setFont(mono)
+                c.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+                d = QtWidgets.QLabel(desc)
+                d.setWordWrap(True)
+                d.setStyleSheet('color:#aaa;')
+                cp = nofocus(QtWidgets.QPushButton('복사'))
+                cp.clicked.connect(lambda _=False, t=cmd: self.copy(t))
+                grid.addWidget(badge, r, 0, QtCore.Qt.AlignTop)
+                grid.addWidget(c, r, 1, QtCore.Qt.AlignTop)
+                grid.addWidget(d, r, 2)
+                grid.addWidget(cp, r, 3, QtCore.Qt.AlignTop)
+            v.addWidget(box)
+        extra = [f'[{k}] ' + ' '.join(n) for k, n in notes.items() if n]
+        if extra:
+            nb = QtWidgets.QLabel('\n\n'.join(extra))
+            nb.setWordWrap(True)
+            nb.setStyleSheet('color:#888;')
+            v.addWidget(nb)
+        v.addStretch(1)
+        self.cmd_page.setWidget(page)
+
+    def copy(self, text):
+        QtWidgets.QApplication.clipboard().setText(text)
+        self.note(f'복사: {text}')
 
     # ───────── 로그 ─────────
     def note(self, text):
