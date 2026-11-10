@@ -662,7 +662,12 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     hist_x, hist_u = [x0.copy()], []      # 주기 시작마다의 참 상태, 그 주기에 낸 명령
     pred_dt = args.dt
     # 보상용 예측기는 MPC 가 믿는 모델 그대로, 워커와 같은 간격 (33 ms × RK4 2번)
-    predictor = make_plant(build_ocp.dyn_fun_used, cfg, pred_dt, substeps=2) if delay > 0 else None
+    need_pred = delay > 0 or float(getattr(args, 'delay_extra', 0.0) or 0.0) > 0
+    predictor = make_plant(build_ocp.dyn_fun_used, cfg, pred_dt, substeps=2) if need_pred else None
+
+    def predictor_x(xx, u_k):
+        return predictor(xx, u_k, np.concatenate([params, [kappa_of_s(xx[0])]]))
+    cmd_delay_k = int(round(float(getattr(args, 'plant_cmd_delay', 0.0) or 0.0) / args.dt))
     times, cycles, status, n_hist = [], [], [], []
     first_bad = None
     bad_run, trips, first_trip, need_restart = 0, 0, None, False
@@ -714,6 +719,20 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                         else xx + h_ / pred_dt * (predictor(xx, u_k, np.concatenate([params, [kappa_of_s(xx[0])]])) - xx)
                     t += h_
                 x = xx
+        dex = float(getattr(args, 'delay_extra', 0.0) or 0.0)
+        if delay <= 0 and dex > 0 and getattr(args, 'delay_comp', False) and hist_u:
+            # 노드와 같게: 상태를 dex 만큼 오래된 것으로 보고 그동안 낸 명령으로 앞으로 적분.
+            #   명령이 dex 늦게 먹는 차라면 = 아직 안 먹은 명령까지 반영된 dex 뒤 상태
+            xx, t_left = np.array(x_true, float), dex
+            kk = int(math.ceil(dex / args.dt))
+            for u_k in hist_u[-kk:]:
+                h_ = min(args.dt, t_left)
+                xn = predictor_x(xx, u_k)
+                xx = xn if h_ >= args.dt - 1e-9 else xx + h_ / args.dt * (xn - xx)
+                t_left -= h_
+                if t_left <= 1e-9:
+                    break
+            x = xx
         if need_restart:        # 노드: 비정상 해 뒤 다음 요청은 cmd 1 (초기 추측을 지금 상태로)
             xr = np.array(x, float)
             xr[3], xr[7] = max(xr[3], V_FLOOR), max(xr[7], V_FLOOR)
@@ -813,7 +832,11 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             if plant_hyper is not None:
                 plant_hyper.observe(t_now, x)
                 p_plant = plant_hyper.stage_params(t_now, x)[0][0]
-            x_next = plant(xp, u0, np.concatenate([p_plant, [kappa_of_s(x_true[0])]]))
+            u_pl = u0
+            if cmd_delay_k > 0:     # 차는 cmd_delay_k 주기 전 명령으로 움직인다 (실차 조향 미모델 지연 흉내)
+                seq = hist_u + [np.array(u0, float)]
+                u_pl = seq[-1 - cmd_delay_k] if len(seq) > cmd_delay_k else seq[0]
+            x_next = plant(xp, u_pl, np.concatenate([p_plant, [kappa_of_s(x_true[0])]]))
             x_next[6] = x_true[6]
             if x_next[3] < 0.02:
                 # ★ 차(plant) 가 거의 서면 타이어 식이 수치적으로 발산한다 (vx → −5 m/s, n 수십 m).
@@ -946,6 +969,10 @@ def main():
                     help='--plant: 차만 이 hmpc.yaml 의 차량·타이어 값으로 (MPC·예측은 --params-yaml) — 모델 불일치 시험')
     ap.add_argument('--state-delay-jitter', type=float, default=0.0,
                     help='--state-delay 를 주기마다 ± 이만큼 (s) 균등 무작위로')
+    ap.add_argument('--plant-cmd-delay', type=float, default=0.0,
+                    help='--plant: 차가 이만큼 (s, 주기 단위로 반올림) 늦은 명령으로 움직인다')
+    ap.add_argument('--delay-extra', type=float, default=0.0,
+                    help='--delay-comp 와 (state-delay 없이): 상태를 이만큼 앞으로 예측 (노드 delay_extra)')
     ap.add_argument('--state-delay', type=float, default=0.0,
                     help='--plant: OCP 에 이만큼 (s) 늦은 상태를 준다 (라이다 센서→명령 지연 흉내)')
     ap.add_argument('--delay-comp', action='store_true',
