@@ -175,6 +175,10 @@ class HmpcNode(Node):
         #   recv − stamp 는 5~6 ms 뿐인데, mocap 과 맞춰 잰 실제 지연 (map_mocap_align time_lag) 은 15~51 ms (11-10).
         #   race.sh 가 라이다 주행이면 25 ms 를 넣는다 (주행별 실측 17~27 ms, 맵 정렬 값은 재현 안 됨)
         d('delay_extra', 0.0)
+        # 액추에이터 지연 s: 조향 명령이 실제 곡률로 반영되는 데 모델 (τ 0.13) 보다 더 걸리는 시간.
+        #   11-10 실차 1108_7: 명령→곡률 187 ms vs offline 107 ms → 66~80 ms. offline 에서 70 ms 명령 지연 차를
+        #   0.07 보상으로 회복. 센서 지연 (delay_extra) 과 따로 두고 더한다
+        d('act_delay', 0.0)
         # ★ 교착 탈출 후진 (2026-11-10): MPC 로 달리는데 recover_wait 동안 0.1 m 도 못 가고 평균 vx < 0.15 면
         #   (급코너 안에서 바깥을 향해 서면 어떻게 가도 경계 침범이라 MPC 가 서 있기를 고른다) 조향
         #   sign(μ)·최대로 짧게 후진 → 정지 → 다시 풂. 같은 자리 (s 0.5 m) 에서 2번 넘게 막히면 고장 래치.
@@ -244,6 +248,7 @@ class HmpcNode(Node):
         self.v_floor = float(gp('v_floor'))
         self.delay_comp = bool(gp('delay_comp'))
         self.delay_extra = float(gp('delay_extra'))
+        self.act_delay = float(gp('act_delay'))
         self.recover_reverse = bool(gp('recover_reverse'))
         self.rec_speed, self.rec_time = float(gp('recover_speed')), float(gp('recover_time'))
         self.rec_dist, self.rec_wait = float(gp('recover_dist')), float(gp('recover_wait'))
@@ -611,13 +616,14 @@ class HmpcNode(Node):
             if self.delay_comp and self.t_meas is not None:
                 age = now - self.t_meas
                 t_tgt = now + self.solve_est
-                t_eff = self.t_meas - self.delay_extra      # 실제 측정 시각 (스탬프보다 이르다)
+                # 실제 측정 시각 (스탬프보다 센서 지연만큼 이르다) + 명령이 먹는 데 더 걸리는 시간만큼 더 앞으로
+                t_eff = self.t_meas - self.delay_extra - self.act_delay
                 d_pred = t_tgt - t_eff
-                if 0.0 <= age <= 0.3 and d_pred <= 0.15:
+                if 0.0 <= age <= 0.3 and d_pred <= 0.2:
                     dc = (1.0, t_eff, t_tgt)
                     s_shift = x[3] * d_pred
                 else:
-                    # 스탬프가 비었거나 시계가 다르거나 (mocap 다른 PC) 너무 오래됨 — 이 주기는 보상 없이
+                    # 스탬프가 비었거나 시계가 다르거나 (mocap 다른 PC) 너무 오래됨 (합계 0.2 s 초과) — 보상 없이
                     self.dc_skips += 1
                     if not self._warned_age:
                         self.get_logger().warn(f'지연 보상: 상태 스탬프가 이상함 (지금 − 스탬프 {age:.3f} s) '

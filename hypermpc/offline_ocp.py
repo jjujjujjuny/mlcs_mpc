@@ -444,6 +444,33 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
     return solver
 
 
+def make_step(dyn_fun, cfg, dt, substeps=2):
+    """OCP 모델을 dt 만큼 RK4 (substeps 번) 적분하는 casadi 함수 하나 → step(x, u, p) → x_next.
+    지연 보상 예측용. make_plant 처럼 모델을 파이썬에서 단계마다 부르면 스텝당 1.4 ms 라 100 ms 를 당기면
+    풀이와 합쳐 주기를 넘겼다 (노드 15 Hz, 11-10). 한 함수로 묶으면 0.19 ms, 결과는 같다."""
+    pc = dict(cfg)
+    pc['ws_acc_max'] = pc['ws_dec_max'] = 0.0
+    build_ocp(dyn_fun, 2, dt, pc)           # 식만 만든다 (빌드 안 함)
+    f = build_ocp.last_f
+    npar = f.size_in(2)[0]
+    X, U, P = cs.MX.sym('x', 9), cs.MX.sym('u', 2), cs.MX.sym('p', npar)
+    h, xx = dt / substeps, X
+    for _ in range(substeps):
+        k1 = f(xx, U, P)
+        k2 = f(xx + h / 2 * k1, U, P)
+        k3 = f(xx + h / 2 * k2, U, P)
+        k4 = f(xx + h * k3, U, P)
+        xx = xx + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+    F = cs.Function('pred_step', [X, U, P], [xx])
+
+    def step(x, u, p):
+        p = np.asarray(p, float)
+        if len(p) < npar:
+            p = np.r_[p, np.zeros(npar - len(p))]
+        return np.array(F(x, u, p)).ravel()
+    return step
+
+
 def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None):
     """OCP 와 같은 연속 모델을 RK4 로 dt 만큼 적분하는 '차'. → step(x, u, p) → x_next.
 
@@ -663,7 +690,7 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     pred_dt = args.dt
     # 보상용 예측기는 MPC 가 믿는 모델 그대로, 워커와 같은 간격 (33 ms × RK4 2번)
     need_pred = delay > 0 or float(getattr(args, 'delay_extra', 0.0) or 0.0) > 0
-    predictor = make_plant(build_ocp.dyn_fun_used, cfg, pred_dt, substeps=2) if need_pred else None
+    predictor = make_step(build_ocp.dyn_fun_used, cfg, pred_dt, substeps=2) if need_pred else None
 
     def predictor_x(xx, u_k):
         return predictor(xx, u_k, np.concatenate([params, [kappa_of_s(xx[0])]]))

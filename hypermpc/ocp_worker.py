@@ -70,7 +70,7 @@ STATS_STAGES = (0, 10, 20, 30)
 # 지연 보상 (2026-11-10): 요청 끝에 [켬, 상태 측정 시각, 목표 시각, (시각, ws_ref, δ) × DELAY_HIST] 가 붙는다.
 #   켜져 있으면 풀기 직전에 그 명령들로 모델을 적분해 x0 를 측정 시각 → 목표 시각 (지금 + 예상 풀이) 로 당긴다.
 DELAY_HIST = 8
-DELAY_MAX = 0.15           # 이보다 길면 보상하지 않는다 (자르지 않음 — 그만큼 오래된 상태는 예측도 못 믿는다)
+DELAY_MAX = 0.20           # 이보다 길면 보상하지 않는다 (자르지 않음). 라이다: 나이 + 풀이 + 센서 0.025 + 액추에이터 0.07
 
 
 def solve_stat(solver, key):
@@ -186,7 +186,7 @@ def main():
     req_len = 8 * (3 + 9 + 3 * (N + 1) + N + 3 + 3 * DELAY_HIST)
     # 예측 간격 33 ms × RK4 2번 — 80 ms 면 모델 평가 약 30번 (11 ms × 4 번이면 200 ms 에 주기를 넘겼다)
     pred_dt = c['dt']
-    predictor = oo.make_plant(dyn_fun, cfg, pred_dt, substeps=2)     # MPC 가 믿는 모델 그대로
+    predictor = oo.make_step(dyn_fun, cfg, pred_dt, substeps=2)      # MPC 가 믿는 모델 그대로 (casadi 한 함수)
 
     def predict(x, t0, t1, hist, kap):
         """x (t0 의 상태) 를 hist 의 명령 (시각부터 다음 시각까지 유지) 으로 t1 까지 적분."""

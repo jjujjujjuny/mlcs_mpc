@@ -106,6 +106,8 @@
     delay_comp: false
     # 스탬프에 안 보이는 추가 지연 s (라이다 주행이면 race.sh 가 25 ms 로 — 주행별 실측 17~27 ms)
     delay_extra: 0.0
+    # 액추에이터 지연 s (조향 명령 → 곡률이 모델보다 늦은 만큼, 실차 66~80 ms). delay_extra 와 더해 앞으로 예측
+    act_delay: 0.0
     # ★ 교착 탈출 후진: 1 s 동안 0.1 m 도 못 가고 평균 vx < 0.15 면 sign(μ)·최대 조향으로 0.45 m/s 후진
     #   (최대 0.8 s / 0.3 m) → MPC 다시. 같은 자리 2번 실패면 고장 래치. 대회 규칙상 후진 허용 (11-10 확인)
     recover_reverse: false

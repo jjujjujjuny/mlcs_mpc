@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════
-#  ★ mocap 비교용 — ./race.sh race_mocap_dc07.yaml   (지연 보상 + delay_extra 0.07, race_mocap.yaml 과 이것만 다름)
+#  ★ mocap 비교용 — ./race.sh race_mocap_dc07.yaml   (지연 보상 + act_delay 0.07, race_mocap.yaml 과 이것만 다름)
 #  레이스 설정 — 숫자를 고치고 저장한 뒤  ./race.sh
 #
 #  여기 없는 값은 src/mlcs_mpc/config/hmpc.yaml 을 따른다.
@@ -28,8 +28,8 @@ log: mocapDC07
 obstacles: off
 
 hmpc:
-  delay_comp: true        # ★ 비교: 지연 보상 켬 + 미모델 조향 지연 70 ms
-  delay_extra: 0.07
+  delay_comp: true        # ★ 비교: 지연 보상 켬 + 액추에이터 지연 70 ms (mocap 이라 센서 지연 delay_extra 는 0)
+  act_delay: 0.07
   recover_reverse: true   # ★ 교착 탈출 후진 (1 s 못 나아가면 1.2 m/s 로 최대 0.4 m · 1.2 s 후진 → MPC 다시, 같은 자리 3번)
   # ── 속도 ─────────────────────────────────────────────────────────
   v_max: 2.0            # m/s. 0.7 에서 시작해 0.2 씩. 상한은 모터 (vesc.yaml speed_max, 약 4.86). MPC 가 코너에서 알아서 감속한다
