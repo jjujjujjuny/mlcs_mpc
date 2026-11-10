@@ -116,11 +116,10 @@ import numpy as np
 # ★ 백엔드를 먼저 정한다. NoMachine 으로 보는 젯슨에는 TkAgg 가 있다.
 #   import pyplot 뒤에 use() 를 부르면 늦다.
 import matplotlib
-if not os.environ.get('DISPLAY'):
-    print('✗ DISPLAY 가 없습니다. 이 도구는 창을 띄웁니다 — '
-          'NoMachine 으로 젯슨 화면에 접속한 뒤 실행하세요.')
-    sys.exit(1)
-matplotlib.use('TkAgg')
+# ★ 화면이 없으면 Agg (그림 파일만). 예전에는 여기서 sys.exit 했는데, 이 파일을 import 하는
+#   track_from_map·race_report 까지 같이 죽었다 — 노트북 제어판(SSH)에서 트랙 만들기와
+#   레이스 채점이 그렇게 실패했다 (2026-11-10). 창이 꼭 필요한 손그리기 편집기는 main() 에서 막는다.
+matplotlib.use('TkAgg' if os.environ.get('DISPLAY') else 'Agg')
 import matplotlib.pyplot as plt                             # noqa: E402
 from matplotlib.collections import LineCollection           # noqa: E402
 from matplotlib.path import Path as MplPath                 # noqa: E402
@@ -955,6 +954,10 @@ class TrackDrawer:
 
 
 def main():
+    if not os.environ.get('DISPLAY'):
+        print('✗ DISPLAY 가 없습니다. 이 도구는 창을 띄웁니다 — '
+              'NoMachine 으로 젯슨 화면에 접속한 뒤 실행하세요.')
+        sys.exit(1)
     p = argparse.ArgumentParser(
         description='손클릭 레이싱 라인 → 스플라인 → 좌/우 벽',
         formatter_class=argparse.RawDescriptionHelpFormatter,

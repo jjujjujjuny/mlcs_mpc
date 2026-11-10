@@ -96,3 +96,21 @@ python3 -c 'import PyQt5' || sudo apt install -y python3-pyqt5
   한 뒤 실행하세요.
   채점을 못 했습니다 — 위 메시지를 보세요
   ```
+
+## 젯슨 답 (2026-11-10) — 노트북 시험 결과 반영
+
+1. **위치 다시잡기 결과를 제어판 위쪽 배너로** — `위치 다시잡기` 로그 탭의 relocalize 줄을 읽어서
+   - 거부: 빨강 `✗ 13:06:17 위치 다시잡기 거부 — 맞춤 점수 0.01 → 0.24 (기준 0.35 이상), 찍은 곳에서 72.5 cm · -17.2° 떨어진 곳이 그나마 맞음 …` (찍은 자리 점수가 0.1 미만이면 "위치나 방향이 크게 틀린 것" 도 붙인다)
+   - 성공: 초록 `✓ 위치 설정 (x, y, yaw) — 조이스틱 B 로 출발`
+   - 시각은 로그의 ROS 시각이라, 재접속으로 옛 줄이 다시 와도 언제 일인지 맞게 보인다
+   - 오늘 13:06 로그 5줄로 시험: 5번 모두 빨강 배너. 노트북만 바뀌고 젯슨 비용 없음
+   - 이번 5번 거부 자체는 정상 동작으로 본다 — 찍은 자리 점수가 0.00~0.07 이면 그 자리·방향에 맵 벽이 거의 안 겹친 것. 차가 1109_4 맵 위 그 자리에 있었는지부터
+2. **채점 실패 (DISPLAY 없음) 고침** — 원인은 race_report 가 아니라 `tools/draw_track.py`: import 되는 순간 DISPLAY 가 없으면 `sys.exit` 해서, 그걸 import 하는 도구가 전부 죽었다. `except Exception` 으로 안 잡힌다 (SystemExit).
+   - **제어판 '트랙 만들기'(maptrack)도 같은 이유로 실패했을 것이다** — `track_from_map` 이 draw_track 을 import 한다. DISPLAY 없이 `./drive.sh maptrack 1109_4 zz_headless_test` 를 끝까지 돌려 확인함 (임시 트랙은 지움)
+   - 이제 DISPLAY 가 없으면 Agg(그림 파일만). 창이 꼭 필요한 손그리기 편집기(`draw_track.py` 직접 실행)만 main() 에서 막는다. `test_draw_track.py`·`test_map_tools.py` DISPLAY 없이 통과
+   - 참고: 채점(`racereport`)은 mocap 정답 기록이 있어야 한다. 대회장(mocap 없음)에서는 원래 못 한다
+3. **닫을 때 `QProcess: Destroyed while process ("ssh") is still running.`** — 닫기 전에 돌고 있는 ssh(로그 tail 등)를 먼저 끝내고, 그 콜백(로그 재접속)이 돌지 않게 끊는다
+4. 8번(닫아도 주행 유지)은 다음에 bench 를 켜 둔 채로 닫아서 확인 부탁
+
+다시 확인할 것: `git pull` → `./car.sh panel` → RViz 에서 일부러 엉뚱한 곳을 찍어 빨강 배너, 제대로 찍어 초록 배너가 뜨는지. 닫을 때 경고가 없는지.
+

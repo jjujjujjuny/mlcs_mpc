@@ -55,6 +55,8 @@ LOG_TABS = [('screen', '화면'), ('hmpc', 'hmpc'), ('hmpc_worker', '솔버'),
             ('bridge', '브리지'), ('relocalize', '위치 다시잡기'), ('panel_job', '맵 저장·트랙'),
             ('local', '제어판')]
 TAIL_HEAD = re.compile(r'^==> /tmp/mlcs_(\w+)\.log <==$')
+# [ERROR] [1794235267.64] [relocalize]: RViz — 맞춤 3.1 s, 점수 0.01 → 0.24, ...
+RELOC_LINE = re.compile(r'^\[\w+\] \[(\d+\.\d+)\] \[relocalize\]: (.*)$')
 MAX_LOG_LINES = 2000
 
 
@@ -214,6 +216,15 @@ class Ssh(QtCore.QObject):
         return p
 
     def close(self):
+        # 돌고 있는 ssh 를 먼저 끝낸다 — 안 그러면 창을 닫을 때
+        # 'QProcess: Destroyed while process ("ssh") is still running.' (노트북 실측)
+        for p in self.findChildren(QtCore.QProcess):
+            try:
+                p.finished.disconnect()         # 닫는 중에 콜백(로그 재접속 등)이 돌지 않게
+            except TypeError:
+                pass
+            p.kill()
+            p.waitForFinished(500)
         subprocess.run(['ssh'] + self.base[:4] + ['-O', 'exit', f'{USER}@{self.host}'],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
 
@@ -245,6 +256,11 @@ class Panel(QtWidgets.QWidget):
 
         root = QtWidgets.QVBoxLayout(self)
         root.addLayout(self._chip_row())
+        # 위치 다시잡기 결과 — 거부돼도 RViz 에는 아무 변화가 없어서 여기 띄운다 (노트북 시험 11-10)
+        self.reloc = QtWidgets.QLabel('')
+        self.reloc.setWordWrap(True)
+        self.reloc.setVisible(False)
+        root.addWidget(self.reloc)
         mid = QtWidgets.QHBoxLayout()
         left = QtWidgets.QVBoxLayout()
         left.addWidget(self._run_box())
@@ -409,12 +425,43 @@ class Panel(QtWidgets.QWidget):
                     continue
                 if line:
                     self.logs[self.tail_tab].appendPlainText(line)
+                    if self.tail_tab == 'relocalize':
+                        self.reloc_line(line)
 
         def fin(*_):
             self.log_proc = None
             QtCore.QTimer.singleShot(5000, self.start_logs)
         p.readyRead.connect(read)
         p.finished.connect(fin)
+
+    def reloc_line(self, line):
+        """relocalize 로그 한 줄 → 배너. 시각은 로그의 ROS 시각이라, 재접속으로 옛 줄이
+        다시 와도 '언제 일인지' 가 맞게 보인다."""
+        m = RELOC_LINE.match(line)
+        if not m:
+            return
+        stamp, msg = float(m.group(1)), m.group(2)
+        when = time.strftime('%H:%M:%S', time.localtime(stamp))
+        if '적용하지 않습니다' in msg:
+            sc = re.search(r'점수 ([\d.]+) → ([\d.]+)', msg)
+            mv = re.search(r'이동 ([\d.]+) cm, yaw ([-+\d.]+)°', msg)
+            text = (f'✗ {when} 위치 다시잡기 거부 — 맞춤 점수 '
+                    + (f'{sc.group(1)} → {sc.group(2)}' if sc else '?') + ' (기준 0.35 이상)'
+                    + (f', 찍은 곳에서 {mv.group(1)} cm · {mv.group(2)}° 떨어진 곳이 그나마 맞음' if mv else '')
+                    + '.  차가 이 맵 위의 그 자리·방향에 있는지 보고 다시 찍으세요.'
+                    + ('  (찍은 자리 점수가 0 근처면 위치나 방향이 크게 틀린 것)' if sc and float(sc.group(1)) < 0.1 else ''))
+            color = RED
+        elif '✓ 위치 설정' in msg:
+            text, color = f'✓ {when} {msg.split("✓ ", 1)[1]}', GREEN
+        elif '진행 중' in msg:
+            text, color = f'… {when} {msg}', YELLOW
+        elif any(k in msg for k in ('실패', '없습니다')):
+            text, color = f'✗ {when} 위치 다시잡기: {msg}', RED
+        else:
+            return
+        self.reloc.setText(text)
+        self.reloc.setStyleSheet(CHIP.format(color) + ' font-weight:bold;')
+        self.reloc.setVisible(True)
 
     def poll_screen(self):
         if self.tabs.currentWidget() is not self.logs['screen']:
