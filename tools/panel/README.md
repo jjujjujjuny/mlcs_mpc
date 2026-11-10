@@ -126,3 +126,18 @@ python3 -c 'import PyQt5' || sudo apt install -y python3-pyqt5
 
 젯슨에서 해석기만 실제 주석으로 시험 (Qt 없이): drive.sh 41 + 환경변수 9, race.sh 3, bat.sh 2 + 환경변수 2, car.sh 10. 묶음: 맵 → 트랙 18, 주행 14, 점검·확인 11, 보정·데이터 6, 노트북 준비·연결 5, 정지 2, 기타 0. 화면(Qt)은 노트북이 처음.
 
+
+### 노트북 시험 2 (젯슨 답·젯슨 답 2, 2026-11-10 13:18~13:22, 커밋 008b90a)
+
+- 실행 ✓: `./car.sh panel` 에러 없음 (wayland 경고 한 줄뿐)
+- 1 위치 다시잡기 배너 ✓: 3번 찍음 → 거부 2번 빨강 (0.00→0.22, 0.00→0.21), 적용 1번 초록 (0.05→0.37, 54.1 cm, -6.5°), RViz 차 위치 옮겨짐
+- 2 닫을 때 경고: 보통은 ✓ 사라짐. **단, 띄우고 1분쯤 만에 바로 닫았을 때 한 번 다시 나옴** (진행 중이던 ssh 조회가 닫힌 뒤 끝나는 경우로 보임):
+  ```
+  QProcess: Destroyed while process ("ssh") is still running.
+  Traceback (most recent call last):
+    File "/home/hj/mlcs_mpc/tools/panel/car_panel.py", line 280, in fin
+      out = bytes(p.readAll()).decode('utf-8', 'replace')
+  RuntimeError: wrapped C/C++ object of type QProcess has been deleted
+  ```
+- 3 bench 켠 채로 제어판 닫기 ✓: 젯슨 race.sh·hmpc·Cartographer·relocalize·브리지 그대로 돎 (SSH 로 확인)
+- 4 `명령어` 탭 ✓: 묶음별로 보이고 복사 버튼 됨
