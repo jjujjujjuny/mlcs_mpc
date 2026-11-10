@@ -51,6 +51,16 @@ in_tmux () {
     exec ssh -t "$USER_AT@$HOST" "tmux new -s race 'cd ~/mlcs_mpc && $1; echo; echo \"[끝남 — 이 창은 exit 로 닫기]\"; exec bash -l'"
 }
 
+# VSCode(snap) 터미널은 snap 쪽 GTK·GSettings 경로를 물려줘서 Qt/RViz 창이 바로 죽는다
+# (GLib-GIO-ERROR ... 'antialiasing', exit 133 — 2026-11-10 jaeungubuntu). 창을 띄우기 전에 원래 값으로.
+unsnap () {
+    case "${SNAP_NAME:-}${GSETTINGS_SCHEMA_DIR:-}" in *code*|*/snap/*) ;; *) return 0 ;; esac
+    unset GSETTINGS_SCHEMA_DIR GTK_PATH GTK_EXE_PREFIX GTK_IM_MODULE_FILE GIO_MODULE_DIR
+    [ -n "${XDG_DATA_DIRS_VSCODE_SNAP_ORIG+x}" ]   && export XDG_DATA_DIRS="$XDG_DATA_DIRS_VSCODE_SNAP_ORIG"
+    [ -n "${XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG+x}" ] && export XDG_CONFIG_DIRS="$XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG"
+    return 0
+}
+
 case "${1:-help}" in
 ip)
     [ -n "${2:-}" ] || { err "사용법: ./car.sh ip 192.168.x.x"; exit 1; }
@@ -93,6 +103,7 @@ term)
     ;;
 rviz)
     need_car
+    unsnap
     exec "$HERE/tools/zenoh/laptop.sh" "$HOST"
     ;;
 panel)
@@ -112,6 +123,7 @@ panel)
     fi
     [ -f "$PD/install/setup.bash" ] && { set +u; source "$PD/install/setup.bash"; set -u; }
     python3 -c 'import PyQt5' 2>/dev/null || { err "PyQt5 가 없습니다: sudo apt install -y python3-pyqt5"; exit 1; }
+    unsnap
     exec python3 "$PD/car_panel.py" "$HOST"
     ;;
 check)

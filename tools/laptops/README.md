@@ -188,3 +188,28 @@ ssh -o BatchMode=yes mlcs@192.168.1.7 'hostname; uptime'     # mlcs-car 가 나�
 **동시 접속:** 이 시험 동안 hj-gram 에서도 제어판·RViz 가 떠 있었다 (사람 확인). 이 노트북 쪽에 문제 없었다. 다만 bench 를 안 해서 둘 다 토픽을 받는지는 아직 확인 안 됨.
 
 **남은 것:** bench 로 4번(토픽·라이다·배터리·RViz·정지) 확인, 일반 터미널에서 우회 없이 뜨는지 확인.
+
+### 젯슨 답 1 (2026-11-10) — VSCode(snap) 우회를 car.sh 에 넣음, 다음은 맵핑
+
+- **snap 문제는 `car.sh` 가 알아서 한다.** `./car.sh panel` 과 `./car.sh rviz` 가 창을 띄우기 전에 `unsnap` 을 부른다. `SNAP_NAME=code` 이거나 `GSETTINGS_SCHEMA_DIR` 이 snap 경로일 때만 시험 1 의 변수들을 지우고 `XDG_*_VSCODE_SNAP_ORIG` 로 되돌린다. 보통 터미널에서는 아무것도 바꾸지 않는다 (젯슨에서 snap 흉내 환경으로 확인). 이제 VSCode 터미널에서도 그냥 `git pull && ./car.sh panel`.
+- 시험 1 의 나머지는 모두 확인했다. 키(`jaeung@jaeungubuntu`)는 젯슨 `authorized_keys` 에 있다.
+
+**다음 시험: 제어판으로 맵핑** (사람이 차 옆에서 조이스틱을 들고 한다)
+1. `./car.sh panel` → `실행` 칸 `맵핑` → 상태 "mapping 실행 중"
+   - 점등 순서: 드라이버 → 라이다 → Cartographer → 브리지
+   - hmpc 는 꺼진 게 정상이다
+2. `RViz` 버튼 → Fixed Frame `map` 에서 맵이 자라는지 본다
+   - 노트북 `/map` 은 0.5 Hz 라 2초마다 바뀐다
+   - `/trajectory_node_list` 와 `/constraint_list` 는 보내지 않는다. RViz 에 그 두 개의 경고가 떠도 정상이다
+3. 차는 **조이스틱**으로 몬다 (맵핑 모드 최고 1.5 m/s). 트랙을 한두 바퀴 천천히 돈다
+4. `맵 만들기` 칸에 이름을 넣고 맵 저장 → `작업` 로그 탭에서 끝났는지 본다
+   - 이름은 영문·숫자·`_-`. 기존 이름(예: `1109_4`)과 겹치지 않게
+5. `정지 (Ctrl+C)` → "끝남"
+6. 원하면 `트랙 만들기` (같은 맵 이름) → `작업` 로그
+   - 트랙을 만들어도 race.yaml 은 안 바뀐다. 쓰려면 설정 칸에서 골라 `적용`
+
+적을 것:
+- 각 단계 ✓/✗
+- 맵 저장 로그 마지막 줄들
+- RViz 에서 맵이 자랐는지
+- 노트북→젯슨 ping (느려졌으면)
