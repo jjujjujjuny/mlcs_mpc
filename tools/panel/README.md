@@ -153,3 +153,10 @@ python3 -c 'import PyQt5' || sudo apt install -y python3-pyqt5
 
 다시 확인: 띄우고 바로(몇 초~1분 안에) 닫기를 여러 번 — 경고·Traceback 이 없어야 한다.
 
+
+### 노트북 시험 3 (젯슨 답 3, 2026-11-10, 커밋 7670ddf)
+
+- 빨리 닫기 반복 ✓ **14번 모두 깨끗** (QProcess 경고·Traceback 없음, 종료코드 0)
+  - 방법: `./car.sh panel` 을 띄우고 N초 뒤 창에 `WM_DELETE_WINDOW` (X 버튼과 같은 경로) 를 보내 닫기를 자동 반복
+  - N = 2, 3, 5, 8, 15, 30, 60 s, 그리고 상태 조회 5초 주기 근처 4, 4.5, 5, 5.5, 6, 9.8, 10.2 s
+- 닫은 뒤 노트북에 남은 프로세스 없음 (car_panel·브리지·rviz2)
