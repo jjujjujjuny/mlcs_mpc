@@ -38,6 +38,7 @@ ocp_worker.py — HyperMPC OCP 를 풀기만 하는 프로세스. hmpc_node 가 
   포함하지 않지만 노드의 제한 시간 안에는 들어간다. 출력이 유한하지 않으면 상수 params 를 쓴다.
 """
 import argparse
+import math
 import json
 import os
 import sys
@@ -69,7 +70,7 @@ STATS_STAGES = (0, 10, 20, 30)
 # 지연 보상 (2026-11-10): 요청 끝에 [켬, 상태 측정 시각, 목표 시각, (시각, ws_ref, δ) × DELAY_HIST] 가 붙는다.
 #   켜져 있으면 풀기 직전에 그 명령들로 모델을 적분해 x0 를 측정 시각 → 목표 시각 (지금 + 예상 풀이) 로 당긴다.
 DELAY_HIST = 8
-DELAY_MAX = 0.20           # 이보다 긴 지연은 이만큼만 (상태가 아주 오래됐으면 노드가 이미 멈춘다)
+DELAY_MAX = 0.15           # 이보다 길면 보상하지 않는다 (자르지 않음 — 그만큼 오래된 상태는 예측도 못 믿는다)
 
 
 def solve_stat(solver, key):
@@ -206,7 +207,7 @@ def main():
     stats = None
     if a.stats_csv:
         header = ('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max,'
-                  + ','.join(f'{c}{k}' for k in STATS_STAGES for c in ('s', 'n')) + ',delay_ms\n')
+                  + ','.join(f'{c}{k}' for k in STATS_STAGES for c in ('s', 'n')) + ',delay_ms,age_ms,dx0_s,dx0_n,dx0_mu\n')
         if os.path.exists(a.stats_csv):
             with open(a.stats_csv) as f:
                 old = f.readline()
@@ -230,12 +231,18 @@ def main():
         x = x.copy()
         x[6] = fric
         d_pred = 0.0
-        if dc_on > 0 and np.isfinite(t_meas) and t_tgt > t_meas:
-            d_pred = min(t_tgt - t_meas, DELAY_MAX)
+        age = (t_req - t_meas) if np.isfinite(t_meas) else math.nan
+        dx0 = np.zeros(3)
+        if dc_on > 0 and np.isfinite(t_meas) and 0.0 < t_tgt - t_meas <= DELAY_MAX:
             v_floor = min(x[3], x[7])       # 노드가 v_floor 로 올려 둔 값 — 적분 뒤에도 지킨다
-            x = predict(x, t_tgt - d_pred, t_tgt, hist, kappa[0])
-            x[6] = fric
-            x[3], x[7] = max(x[3], v_floor), max(x[7], v_floor)
+            xp = predict(x, t_meas, t_tgt, hist, kappa[0])
+            if np.all(np.isfinite(xp)):
+                d_pred = t_tgt - t_meas
+                dx0 = xp[0:3] - x[0:3]
+                x = xp
+                x[6] = fric
+                x[3], x[7] = max(x[3], v_floor), max(x[7], v_floor)
+            # NaN 이면 측정 x0 그대로 (d_pred 0 으로 기록)
         if cmd == 1.0:
             restart(x)
             ubu_k[:] = ubu[0]
@@ -295,7 +302,7 @@ def main():
             stats.write(f'{t_req:.4f},{int(st)},{ms:.2f},{solve_stat(solver, "sqp_iter")},'
                         f'{solve_stat(solver, "qp_iter")},{n_resolve},{slack_n_max(solver, N, cfg):.4f},'
                         + ','.join(f'{xs[min(k, N), 0]:.4f},{xs[min(k, N), 1]:.4f}' for k in STATS_STAGES)
-                        + f',{d_pred * 1000:.1f}\n')
+                        + f',{d_pred * 1000:.1f},{age * 1000:.1f},{dx0[0]:.4f},{dx0[1]:.4f},{dx0[2]:.4f}\n')
 
 
 if __name__ == '__main__':

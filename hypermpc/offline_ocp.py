@@ -655,6 +655,8 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     # ★ 지연 시험 (2026-11-10): 라이다 주행은 센서 → 명령이 60~100 ms. state_delay 면 OCP 에 그만큼
     #   늦은 상태를 주고, delay_comp 면 그동안 낸 명령으로 모델을 적분해 지금 시각으로 당긴다.
     delay = float(getattr(args, 'state_delay', 0.0) or 0.0)
+    jitter = float(getattr(args, 'state_delay_jitter', 0.0) or 0.0)
+    rng_d = np.random.default_rng(0)
     hist_x, hist_u = [x0.copy()], []      # 주기 시작마다의 참 상태, 그 주기에 낸 명령
     pred_dt = args.dt
     # 보상용 예측기는 MPC 가 믿는 모델 그대로, 워커와 같은 간격 (33 ms × RK4 2번)
@@ -665,8 +667,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     trail_stopped, trail_cmd, trail_skip, last_u = False, math.inf, False, np.zeros(2)
     for i in range(laps):
         if delay > 0:
-            # OCP 가 보는 상태 = delay 초 전의 참 상태 (주기 사이는 선형 보간)
-            tq = max(i * args.dt - delay, 0.0)
+            # OCP 가 보는 상태 = delay 초 전의 참 상태 (주기 사이는 선형 보간). jitter 면 주기마다 흔든다
+            d_i = max(delay + (rng_d.uniform(-jitter, jitter) if jitter > 0 else 0.0), 0.0)
+            tq = max(i * args.dt - d_i, 0.0)
             j = min(int(tq / args.dt), len(hist_x) - 1)
             a = tq / args.dt - j
             xa = hist_x[j]
@@ -777,7 +780,8 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             xp = np.array(x_true, float)
             if plant_friction is not None:      # 차만 다른 마찰 (MPC 는 x0 의 값을 믿는다)
                 xp[6] = plant_friction
-            p_plant = params
+            p_plant = getattr(args, 'plant_params', None)
+            p_plant = params if p_plant is None else p_plant
             if plant_hyper is not None:
                 plant_hyper.observe(t_now, x)
                 p_plant = plant_hyper.stage_params(t_now, x)[0][0]
@@ -880,6 +884,10 @@ def main():
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
                     help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
+    ap.add_argument('--plant-params-yaml', default=None,
+                    help='--plant: 차만 이 hmpc.yaml 의 차량·타이어 값으로 (MPC·예측은 --params-yaml) — 모델 불일치 시험')
+    ap.add_argument('--state-delay-jitter', type=float, default=0.0,
+                    help='--state-delay 를 주기마다 ± 이만큼 (s) 균등 무작위로')
     ap.add_argument('--state-delay', type=float, default=0.0,
                     help='--plant: OCP 에 이만큼 (s) 늦은 상태를 준다 (라이다 센서→명령 지연 흉내)')
     ap.add_argument('--delay-comp', action='store_true',
@@ -948,6 +956,7 @@ def main():
             solver.constraints_set(k, 'ubu', np.array([args.v_max, args.max_steer]))
 
     params = load_params(args.params_yaml) if args.params_yaml else default_params()
+    args.plant_params = load_params(args.plant_params_yaml) if args.plant_params_yaml else None
     kappa_track = None
     for name in args.scenario:
         x0 = initial_state(cfg)

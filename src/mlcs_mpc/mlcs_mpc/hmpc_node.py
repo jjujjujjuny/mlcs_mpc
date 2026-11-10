@@ -232,6 +232,8 @@ class HmpcNode(Node):
         self.t_meas = None                  # 지금 상태가 측정된 시각 (/mpc/state header stamp)
         self.cmd_hist = deque(maxlen=Worker.DELAY_HIST)     # 내보낸 명령 (시각, ws_ref, 실제 조향 δ)
         self.solve_est = 0.025              # 풀이 시간 평균 (지수) s — 목표 시각 = 지금 + 이것
+        self.dc_skips = 0                   # 스탬프가 이상해 보상을 건너뛴 주기 수
+        self._warned_age = False
         self.ws_dec_max = float(gp('ws_dec_max'))
         self.trail_stop_speed, self.trail_go_speed = float(gp('trail_stop_speed')), float(gp('trail_go_speed'))
         self.reverse_limit = float(gp('reverse_limit'))
@@ -567,19 +569,25 @@ class HmpcNode(Node):
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
                            self.lr, self.v_floor, self.friction)
             # 지연 보상: 워커가 x0 를 t_meas → t_tgt 로 당긴다. 경계·곡률을 읽는 s 도 그만큼 앞으로
-            dc = (0.0, math.nan, math.nan)
+            # 보상을 꺼도 측정 시각은 보낸다 — 워커 통계 age_ms 로 실제 상태 지연을 잰다
+            dc = (0.0, self.t_meas if self.t_meas is not None else math.nan, math.nan)
             s_shift = 0.0
             if self.delay_comp and self.t_meas is not None:
                 age = now - self.t_meas
-                if 0.0 <= age <= 0.3:
-                    t_tgt = now + self.solve_est
-                    d_pred = min(t_tgt - self.t_meas, 0.2)
-                    dc = (1.0, t_tgt - d_pred, t_tgt)
+                t_tgt = now + self.solve_est
+                d_pred = t_tgt - self.t_meas
+                if 0.0 <= age <= 0.3 and d_pred <= 0.15:
+                    dc = (1.0, self.t_meas, t_tgt)
                     s_shift = x[3] * d_pred
-                elif not getattr(self, '_warned_age', False):
-                    # 스탬프가 비었거나 시계가 다르다 — 엉뚱하게 당기지 않고 이 주기는 보상 없이
-                    self.get_logger().warn(f'지연 보상: 상태 스탬프가 이상함 (지금 − 스탬프 {age:.3f} s) — 보상 안 함')
-                    self._warned_age = True
+                else:
+                    # 스탬프가 비었거나 시계가 다르거나 (mocap 다른 PC) 너무 오래됨 — 이 주기는 보상 없이
+                    self.dc_skips += 1
+                    if not self._warned_age:
+                        self.get_logger().warn(f'지연 보상: 상태 스탬프가 이상함 (지금 − 스탬프 {age:.3f} s) '
+                                               '— 그 주기는 보상 안 함 (이후 횟수만 셈)')
+                        self._warned_age = True
+                    if self.dc_skips % 300 == 0:
+                        self.get_logger().warn(f'지연 보상 건너뜀 {self.dc_skips}번')
             if self.running and self.s_pred is not None:
                 # ★ 지난 풀이의 s 궤적을 지금 위치에 맞춘다 (2026-11-09). MERIT_BACKTRACKING 으로 스텝이
                 #   일부만 들어가면 풀이의 스테이지 0 이 x0 와 어긋나, 예측 s 가 실제보다 최대 0.4 m 뒤처진다
