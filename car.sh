@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  car.sh — ★ 노트북에서 쓰는 것. 젯슨 차를 한 단어로 다룬다.
+#  새 노트북이면 먼저 tools/laptops/README.md (설치 안내).
 #
+#     ./car.sh setup            새 노트북 준비 (패키지·브리지 빌드·SSH 키, 한 번만)
 #     ./car.sh ip 192.168.1.7   젯슨 주소 저장 (한 번만. 대회장에서 IP 바뀌면 다시)
-#     ./car.sh key              SSH 비밀번호 안 묻게 (한 번만)
+#     ./car.sh key              SSH 비밀번호 안 묻게 (한 번만, 젯슨 비밀번호 필요)
+#     ./car.sh pubkey           비밀번호를 모르면: 공개키를 레포에 넣는다 → push
 #
 #     ./car.sh panel            ★ 제어판 (상태·실행·정지·설정·맵 저장·로그를 한 창에서)
 #
@@ -58,7 +61,21 @@ ip)
 key)
     need_car
     [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
-    ssh-copy-id "$USER_AT@$HOST" && log "이제 비밀번호를 묻지 않습니다 ✓"
+    ssh-copy-id "$USER_AT@$HOST" && log "이제 비밀번호를 묻지 않습니다 ✓" \
+        || err "등록 실패 — 젯슨 비밀번호를 모르면 ./car.sh pubkey"
+    ;;
+setup)
+    exec "$HERE/tools/laptops/setup.sh"
+    ;;
+pubkey)
+    [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C "$(whoami)@$(hostname)"
+    name="${2:-$(whoami)@$(hostname)}"
+    [[ "$name" =~ ^[A-Za-z0-9@._-]+$ ]] || { err "이름 형식: $name"; exit 1; }
+    cp ~/.ssh/id_ed25519.pub "$HERE/tools/laptops/keys/$name.pub"
+    log "공개키 → ${GRN}tools/laptops/keys/$name.pub${RST}"
+    echo "  다음: git add tools/laptops/keys/$name.pub && git commit -m '노트북 키: $name' && git push"
+    echo "  그리고 젯슨에서: cd ~/mlcs_mpc && git pull && tools/laptops/add_keys.sh"
+    echo "  (비밀키 ~/.ssh/id_ed25519 는 절대 올리지 않는다 — .pub 만)"
     ;;
 bench)
     log "젯슨 ${GRN}bench${RST} (속도 0 — 조향만). 다른 창에서 ./car.sh rviz"
@@ -119,7 +136,7 @@ stop)
     ssh -t "$USER_AT@$HOST" '~/mlcs_mpc/drive.sh stop; tmux kill-session -t race 2>/dev/null; true'
     ;;
 *)
-    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'
     echo "  지금 젯슨 주소: $HOST"
     ;;
 esac
