@@ -48,6 +48,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 
 import numpy as np
 import rclpy
@@ -118,8 +119,14 @@ class Worker:
             pass
         self.alive = False
 
-    def send(self, rid, cmd, t, x, kappa, n_lo, n_hi, v_cap):
-        data = np.concatenate([[rid, cmd, t], x, kappa, n_lo, n_hi, v_cap]).tobytes()
+    DELAY_HIST = 8      # ocp_worker.DELAY_HIST 와 같아야 한다
+
+    def send(self, rid, cmd, t, x, kappa, n_lo, n_hi, v_cap, dc=(0.0, math.nan, math.nan), hist=None):
+        """dc = (지연 보상 켬, 상태 측정 시각, 목표 시각), hist = (시각, ws_ref, δ) × DELAY_HIST (NaN 은 빈 칸)."""
+        if hist is None:
+            hist = np.full((self.DELAY_HIST, 3), math.nan)
+        data = np.concatenate([[rid, cmd, t], x, kappa, n_lo, n_hi, v_cap, dc,
+                               np.asarray(hist, float).ravel()]).tobytes()
         return os.write(self.to_child, data) == len(data)
 
     def kill(self):
@@ -160,6 +167,10 @@ class HmpcNode(Node):
         # 헤딩 돌출: 차체 앞·뒤 끝 (무게중심에서 m) 도 벽 경계 안에. 0 = 끔. 켜면 wall_margin 은 반폭+여유
         # 경계를 p 에 (상자 경계 constraints_set 대신). 주기당 ~5 ms 줄인다 (offline 42.9 → 38.3 ms)
         d('bounds_param', False)
+        # ★ 지연 보상 (2026-11-10): 상태 측정 시각 (header stamp) → 지금 + 예상 풀이 시간 만큼, 그동안 낸
+        #   명령으로 워커가 모델을 적분해 x0 를 당긴다. 라이다 센서→명령 60~100 ms. offline 1109_4 v2.0 80 ms:
+        #   보상 없음 랩 6.60~7.52 / 벽밖 1.6% → 보상 6.24~6.30 / 0% (지연 0 은 6.24~6.47). 기본 끔
+        d('delay_comp', False)
         d('q_delta', 2.0)               # ★ 조향 명령과 조향 상태 차이 비용 (저자 2.0). 생성 코드에 들어간다
         d('wall_heading', 0.0)
         d('wall_heading_r', 0.25)
@@ -217,6 +228,10 @@ class HmpcNode(Node):
         self.max_dsteer = float(gp('max_steer_rate')) * self.period
         self.lr = list(gp('vehicle_params'))[1]
         self.v_floor = float(gp('v_floor'))
+        self.delay_comp = bool(gp('delay_comp'))
+        self.t_meas = None                  # 지금 상태가 측정된 시각 (/mpc/state header stamp)
+        self.cmd_hist = deque(maxlen=Worker.DELAY_HIST)     # 내보낸 명령 (시각, ws_ref, 실제 조향 δ)
+        self.solve_est = 0.025              # 풀이 시간 평균 (지수) s — 목표 시각 = 지금 + 이것
         self.ws_dec_max = float(gp('ws_dec_max'))
         self.trail_stop_speed, self.trail_go_speed = float(gp('trail_stop_speed')), float(gp('trail_go_speed'))
         self.reverse_limit = float(gp('reverse_limit'))
@@ -345,6 +360,7 @@ class HmpcNode(Node):
             self.pose = (p.position.x, p.position.y, yaw_from_quat(p.orientation))
             self.twist = (m.twist.twist.linear.x, m.twist.twist.linear.y, m.twist.twist.angular.z)
             self.t_state = self._now()
+            self.t_meas = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
 
     def _valid_cb(self, m):
         self.mocap_valid = bool(m.data)
@@ -463,6 +479,8 @@ class HmpcNode(Node):
                 return      # 고장 처리나 정지 뒤에 도착한 답
             self.pending_t = None
             self.solve_pub.publish(Float32(data=float(ms)))
+            if math.isfinite(ms) and ms > 0:
+                self.solve_est = 0.9 * self.solve_est + 0.1 * min(ms, 100.0) / 1000.0
             if not solution_ok(st, u, x1):
                 self.bad += 1
                 self.running = False
@@ -548,14 +566,28 @@ class HmpcNode(Node):
 
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
                            self.lr, self.v_floor, self.friction)
+            # 지연 보상: 워커가 x0 를 t_meas → t_tgt 로 당긴다. 경계·곡률을 읽는 s 도 그만큼 앞으로
+            dc = (0.0, math.nan, math.nan)
+            s_shift = 0.0
+            if self.delay_comp and self.t_meas is not None:
+                age = now - self.t_meas
+                if 0.0 <= age <= 0.3:
+                    t_tgt = now + self.solve_est
+                    d_pred = min(t_tgt - self.t_meas, 0.2)
+                    dc = (1.0, t_tgt - d_pred, t_tgt)
+                    s_shift = x[3] * d_pred
+                elif not getattr(self, '_warned_age', False):
+                    # 스탬프가 비었거나 시계가 다르다 — 엉뚱하게 당기지 않고 이 주기는 보상 없이
+                    self.get_logger().warn(f'지연 보상: 상태 스탬프가 이상함 (지금 − 스탬프 {age:.3f} s) — 보상 안 함')
+                    self._warned_age = True
             if self.running and self.s_pred is not None:
                 # ★ 지난 풀이의 s 궤적을 지금 위치에 맞춘다 (2026-11-09). MERIT_BACKTRACKING 으로 스텝이
                 #   일부만 들어가면 풀이의 스테이지 0 이 x0 와 어긋나, 예측 s 가 실제보다 최대 0.4 m 뒤처진다
                 #   (뒤따름 급감속 때, 평소는 2 cm 이하). 그대로 쓰면 벽 경계·곡률·상대 간격을 엉뚱한 곳에서
                 #   읽는다 — 정지 장애물 뒤에 0.4 m 까지 붙어 섰다 (offline 1109_3). 지금은 s_pred[1] ≈ x[0].
-                s = self.s_pred + (x[0] - self.s_pred[1])
+                s = self.s_pred + (x[0] + s_shift - self.s_pred[1])
             else:
-                s = x[0] + x[3] * self.dt * np.arange(self.N + 1)
+                s = x[0] + s_shift + x[3] * self.dt * np.arange(self.N + 1)
             kappa = self.track.kappa_at(s)
             if self.walls:
                 n_lo, n_hi = self.track.bounds_at(s, self.wall_margin)
@@ -597,7 +629,10 @@ class HmpcNode(Node):
             slow = self.twist[0] < self.slow_speed
             self.limit = self.restart_timeout if not self.running or slow else self.solve_timeout
             try:
-                ok = self.worker.send(self.rid, cmd, now, x, kappa, n_lo, n_hi, v_cap)
+                hist = np.full((Worker.DELAY_HIST, 3), math.nan)
+                if dc[0] > 0 and self.cmd_hist:
+                    hist[:len(self.cmd_hist)] = np.array(self.cmd_hist)
+                ok = self.worker.send(self.rid, cmd, now, x, kappa, n_lo, n_hi, v_cap, dc, hist)
             except OSError:
                 ok = False
             if not ok:
@@ -613,6 +648,9 @@ class HmpcNode(Node):
         m.drive.speed = 0.0 if self.bench else float(speed)
         m.drive.steering_angle = float(steer)
         self.drive_pub.publish(m)
+        # 지연 보상용 기록: 모델 단위 (바퀴 속도, 실제 조향각 — 서보 명령을 조향 맵으로 되돌림)
+        self.cmd_hist.append((self._now(), m.drive.speed,
+                              float(np.interp(float(steer), self.map_cmd, self.map_act))))
 
 
 def main(args=None):

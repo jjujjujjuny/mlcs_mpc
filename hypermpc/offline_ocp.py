@@ -213,6 +213,7 @@ def build_ocp(dyn_fun, N, dt, cfg):
     xdot = cs.MX.sym('xdot', 9)
 
     build_ocp.last_f = cs.Function('f', [x, u, p], [f_expl])   # make_plant 가 쓴다
+    build_ocp.dyn_fun_used = dyn_fun
 
     model = AcadosModel()
     model.name = 'hmpc_car'
@@ -650,11 +651,38 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     v_top = args.v_max if args.v_max is not None else cfg['max_ws_ref']
     restart(solver, N, x0)
     x = x0.copy()
+    x_true = x0.copy()          # 차(plant) 의 참 상태. x 는 OCP 에 주는 상태 (state_delay 면 늦은 것)
+    # ★ 지연 시험 (2026-11-10): 라이다 주행은 센서 → 명령이 60~100 ms. state_delay 면 OCP 에 그만큼
+    #   늦은 상태를 주고, delay_comp 면 그동안 낸 명령으로 모델을 적분해 지금 시각으로 당긴다.
+    delay = float(getattr(args, 'state_delay', 0.0) or 0.0)
+    hist_x, hist_u = [x0.copy()], []      # 주기 시작마다의 참 상태, 그 주기에 낸 명령
+    pred_dt = args.dt
+    # 보상용 예측기는 MPC 가 믿는 모델 그대로, 워커와 같은 간격 (33 ms × RK4 2번)
+    predictor = make_plant(build_ocp.dyn_fun_used, cfg, pred_dt, substeps=2) if delay > 0 else None
     times, cycles, status, n_hist = [], [], [], []
     first_bad = None
     bad_run, trips, first_trip, need_restart = 0, 0, None, False
     trail_stopped, trail_cmd, trail_skip, last_u = False, math.inf, False, np.zeros(2)
     for i in range(laps):
+        if delay > 0:
+            # OCP 가 보는 상태 = delay 초 전의 참 상태 (주기 사이는 선형 보간)
+            tq = max(i * args.dt - delay, 0.0)
+            j = min(int(tq / args.dt), len(hist_x) - 1)
+            a = tq / args.dt - j
+            xa = hist_x[j]
+            xb = hist_x[min(j + 1, len(hist_x) - 1)]
+            x = xa + a * (xb - xa)
+            if getattr(args, 'delay_comp', False):
+                # 보상: 그 시각부터 지금까지 낸 명령으로 모델 적분 (노드라면 내보낸 명령 기록으로 같은 일)
+                t, xx = tq, np.array(x, float)
+                while t < i * args.dt - 1e-9:
+                    k = min(int(t / args.dt), len(hist_u) - 1)
+                    u_k = hist_u[k] if k >= 0 and hist_u else np.array([xx[7], xx[8]])
+                    h_ = min(pred_dt, i * args.dt - t)
+                    xx = predictor(xx, u_k, np.concatenate([params, [kappa_of_s(xx[0])]])) if h_ >= pred_dt - 1e-9 \
+                        else xx + h_ / pred_dt * (predictor(xx, u_k, np.concatenate([params, [kappa_of_s(xx[0])]])) - xx)
+                    t += h_
+                x = xx
         if need_restart:        # 노드: 비정상 해 뒤 다음 요청은 cmd 1 (초기 추측을 지금 상태로)
             xr = np.array(x, float)
             xr[3], xr[7] = max(xr[3], V_FLOOR), max(xr[7], V_FLOOR)
@@ -699,9 +727,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                     solver.set(k, 'p', np.concatenate([P_k[k], [kappa_of_s(qs[k])], B[k]]))
             else:
                 set_wall_bounds(solver, N, lo, hi, x[1], x[2])
-            lo0, hi0 = walls(x[0])[1:]
-            wall_hist.append((x[1] - lo0 - 1e-9 < 0) or (x[1] - hi0 > 1e-9))
-            s_hist.append(x[0])
+            lo0, hi0 = walls(x_true[0])[1:]
+            wall_hist.append((x_true[1] - lo0 - 1e-9 < 0) or (x_true[1] - hi0 > 1e-9))
+            s_hist.append(x_true[0])
         elif cfg['track_hard']:
             if solver.bounds_param:
                 w = np.full(N + 1, cfg['track_width'])
@@ -746,15 +774,15 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         else:
             bad_run = 0
         if plant is not None:
-            xp = np.array(x, float)
+            xp = np.array(x_true, float)
             if plant_friction is not None:      # 차만 다른 마찰 (MPC 는 x0 의 값을 믿는다)
                 xp[6] = plant_friction
             p_plant = params
             if plant_hyper is not None:
                 plant_hyper.observe(t_now, x)
                 p_plant = plant_hyper.stage_params(t_now, x)[0][0]
-            x_next = plant(xp, u0, np.concatenate([p_plant, [kappa_of_s(x[0])]]))
-            x_next[6] = x[6]
+            x_next = plant(xp, u0, np.concatenate([p_plant, [kappa_of_s(x_true[0])]]))
+            x_next[6] = x_true[6]
             if x_next[3] < 0.02:
                 # ★ 차(plant) 가 거의 서면 타이어 식이 수치적으로 발산한다 (vx → −5 m/s, n 수십 m).
                 #   실제 차는 그냥 선다 — 시험용 차만 멈춰 둔다 (2026-11-09, 정지 장애물 뒤 정지).
@@ -776,6 +804,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             print(f'  ✗ {name}: {i} 번째 풀이에서 NaN/inf (status {st})')
             break
         x = x_next
+        x_true = np.array(x_next, float)
+        hist_x.append(x_true.copy())
+        hist_u.append(np.array(u0, float))
         last_u = np.array(u0, float)
         n_hist.append(abs(x[1]))
         trace.append(np.r_[x, u0])
@@ -849,6 +880,10 @@ def main():
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
                     help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
+    ap.add_argument('--state-delay', type=float, default=0.0,
+                    help='--plant: OCP 에 이만큼 (s) 늦은 상태를 준다 (라이다 센서→명령 지연 흉내)')
+    ap.add_argument('--delay-comp', action='store_true',
+                    help='--state-delay 와: 늦은 상태를 그동안 낸 명령으로 적분해 지금으로 당긴다 (지연 보상)')
     ap.add_argument('--q-delta', type=float, default=None, help='조향 변화 비용 (기본 make_cfg 2.0)')
     ap.add_argument('--bounds-param', action='store_true',
                     help='n 경계를 p 에 넣은 h 제약으로 (주기당 constraints_set 생략). 기본은 상자 경계')

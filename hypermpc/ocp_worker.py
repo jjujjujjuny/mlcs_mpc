@@ -66,6 +66,10 @@ def read_exact(fd, n):
 # 통계 CSV 에 남길 예측 스테이지 (dt 0.033 이면 0.33 / 0.66 / 1.0 s 뒤). 젯슨 11-09: 벽에 닿기 전
 # 예측 n 과 실제 n 을 비교하려고. s 는 풀이의 s 그대로 (노드의 앵커 보정 전)
 STATS_STAGES = (0, 10, 20, 30)
+# 지연 보상 (2026-11-10): 요청 끝에 [켬, 상태 측정 시각, 목표 시각, (시각, ws_ref, δ) × DELAY_HIST] 가 붙는다.
+#   켜져 있으면 풀기 직전에 그 명령들로 모델을 적분해 x0 를 측정 시각 → 목표 시각 (지금 + 예상 풀이) 로 당긴다.
+DELAY_HIST = 8
+DELAY_MAX = 0.20           # 이보다 긴 지연은 이만큼만 (상태가 아주 오래됐으면 노드가 이미 멈춘다)
 
 
 def solve_stat(solver, key):
@@ -82,7 +86,16 @@ def slack_n_max(solver, N, cfg):
     if not (cfg.get('track_hard') and cfg.get('track_slack', 0) > 0):
         return 0.0
     try:
-        # 첫 슬랙 칸이 n 경계다 (offline_ocp: idxsbx = [0], 그 뒤에 ws-rate 슬랙)
+        if cfg.get('bounds_param', False):
+            # 슬랙 순서 [g (ws-rate, 있으면), h]. h 의 첫 두 줄이 n − lo ≥ 0, hi − n ≥ 0 (하한 슬랙)
+            g = 1 if (cfg.get('ws_acc_max', 0) > 0 or cfg.get('ws_dec_max', 0) > 0) else 0
+            vals = []
+            for k in range(1, N + 1):
+                sl = solver.get(k, 'sl')
+                i0 = 0 if k == N else g             # 터미널은 h 만
+                vals.append(max(sl[i0], sl[i0 + 1]))
+            return float(max(vals))
+        # 상자 경계: 첫 슬랙 칸이 n 경계다 (idxsbx = [0], 그 뒤에 ws-rate 슬랙)
         return float(max(max(solver.get(k, 'sl')[0], solver.get(k, 'su')[0]) for k in range(1, N + 1)))
     except Exception:
         return -1.0
@@ -169,16 +182,40 @@ def main():
             oo.set_hard_bounds(solver, N, cfg['track_width'], 0.0)
         solver.solve()
 
-    req_len = 8 * (3 + 9 + 3 * (N + 1) + N)
+    req_len = 8 * (3 + 9 + 3 * (N + 1) + N + 3 + 3 * DELAY_HIST)
+    # 예측 간격 33 ms × RK4 2번 — 80 ms 면 모델 평가 약 30번 (11 ms × 4 번이면 200 ms 에 주기를 넘겼다)
+    pred_dt = c['dt']
+    predictor = oo.make_plant(dyn_fun, cfg, pred_dt, substeps=2)     # MPC 가 믿는 모델 그대로
+
+    def predict(x, t0, t1, hist, kap):
+        """x (t0 의 상태) 를 hist 의 명령 (시각부터 다음 시각까지 유지) 으로 t1 까지 적분."""
+        h = hist[np.isfinite(hist[:, 0])]
+        h = h[np.argsort(h[:, 0])]
+        t, xx = t0, np.array(x, float)
+        p_pred = np.concatenate([params, [kap]])
+        while t < t1 - 1e-6:
+            j = np.searchsorted(h[:, 0], t, side='right') - 1 if len(h) else -1
+            u = h[max(j, 0), 1:3] if len(h) else xx[7:9]
+            step = min(pred_dt, t1 - t)
+            xn = predictor(xx, u, p_pred)
+            xx = xn if step >= pred_dt - 1e-9 else xx + step / pred_dt * (xn - xx)
+            t += step
+        return xx
     ubu_k = np.full(N, np.inf)      # 지금 스테이지별로 걸려 있는 속도 상한 (바뀔 때만 다시 넣는다)
     os.write(a.fd_out, b'R')
     stats = None
     if a.stats_csv:
+        header = ('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max,'
+                  + ','.join(f'{c}{k}' for k in STATS_STAGES for c in ('s', 'n')) + ',delay_ms\n')
+        if os.path.exists(a.stats_csv):
+            with open(a.stats_csv) as f:
+                old = f.readline()
+            if old != header:       # 열이 바뀐 예전 파일에 이어 쓰면 열 수가 어긋난다 — 옆으로 치운다
+                os.replace(a.stats_csv, a.stats_csv + '.old')
         new = not os.path.exists(a.stats_csv)
         stats = open(a.stats_csv, 'a', buffering=1)     # 워커가 다시 떠도 앞 기록을 지우지 않는다
         if new:
-            stats.write('t,status,ms,sqp_iter,qp_iter,resolves,slack_n_max,'
-                        + ','.join(f'{c}{k}' for k in STATS_STAGES for c in ('s', 'n')) + '\n')
+            stats.write(header)
     while True:
         raw = read_exact(a.fd_in, req_len)
         if raw is None:
@@ -186,9 +223,19 @@ def main():
         req = np.frombuffer(raw, dtype=np.float64)
         rid, cmd, t_req, x = req[0], req[1], req[2], req[3:12]
         kappa, n_lo, n_hi = req[12:12 + 3 * (N + 1)].reshape(3, N + 1)
-        v_cap = np.clip(req[12 + 3 * (N + 1):], lbu[0], ubu[0])
+        base = 12 + 3 * (N + 1)
+        v_cap = np.clip(req[base:base + N], lbu[0], ubu[0])
+        dc_on, t_meas, t_tgt = req[base + N:base + N + 3]
+        hist = req[base + N + 3:].reshape(DELAY_HIST, 3)
         x = x.copy()
         x[6] = fric
+        d_pred = 0.0
+        if dc_on > 0 and np.isfinite(t_meas) and t_tgt > t_meas:
+            d_pred = min(t_tgt - t_meas, DELAY_MAX)
+            v_floor = min(x[3], x[7])       # 노드가 v_floor 로 올려 둔 값 — 적분 뒤에도 지킨다
+            x = predict(x, t_tgt - d_pred, t_tgt, hist, kappa[0])
+            x[6] = fric
+            x[3], x[7] = max(x[3], v_floor), max(x[7], v_floor)
         if cmd == 1.0:
             restart(x)
             ubu_k[:] = ubu[0]
@@ -247,7 +294,8 @@ def main():
             # 응답을 보낸 뒤에 쓴다 (노드를 기다리게 하지 않는다). 젯슨 11-09: 느린 풀이를 반복 수로 가르려고
             stats.write(f'{t_req:.4f},{int(st)},{ms:.2f},{solve_stat(solver, "sqp_iter")},'
                         f'{solve_stat(solver, "qp_iter")},{n_resolve},{slack_n_max(solver, N, cfg):.4f},'
-                        + ','.join(f'{xs[min(k, N), 0]:.4f},{xs[min(k, N), 1]:.4f}' for k in STATS_STAGES) + '\n')
+                        + ','.join(f'{xs[min(k, N), 0]:.4f},{xs[min(k, N), 1]:.4f}' for k in STATS_STAGES)
+                        + f',{d_pred * 1000:.1f}\n')
 
 
 if __name__ == '__main__':

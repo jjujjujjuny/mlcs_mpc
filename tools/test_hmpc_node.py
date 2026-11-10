@@ -44,7 +44,7 @@ a = ap.parse_args(); N = json.loads(a.config)['N']
 os.write(a.fd_out, b'R')
 while True:
     buf = b''
-    while len(buf) < 8 * (3 + 9 + 3 * (N + 1) + N):
+    while len(buf) < 8 * (3 + 9 + 3 * (N + 1) + N + 3 + 3 * 8):   # + 지연 보상 칸 (DELAY_HIST 8)
         c = os.read(a.fd_in, 4096)
         if not c: sys.exit(0)
         buf += c
@@ -98,6 +98,7 @@ class FakeCar:
             self.vs.publish(m)
         if self.send_state:
             o = Odometry()
+            o.header.stamp = self.n.get_clock().now().to_msg()     # 지연 보상이 측정 시각으로 쓴다
             o.pose.pose.position.x = float('nan') if self.nan else self.x
             o.pose.pose.position.y = self.y
             o.pose.pose.orientation.z = math.sin(self.yaw / 2)
