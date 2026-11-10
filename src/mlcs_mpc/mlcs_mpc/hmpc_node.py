@@ -171,6 +171,10 @@ class HmpcNode(Node):
         #   명령으로 워커가 모델을 적분해 x0 를 당긴다. 라이다 센서→명령 60~100 ms. offline 1109_4 v2.0 80 ms:
         #   보상 없음 랩 6.60~7.52 / 벽밖 1.6% → 보상 6.24~6.30 / 0% (지연 0 은 6.24~6.47). 기본 끔
         d('delay_comp', False)
+        # 스탬프에 안 보이는 추가 지연 s. Cartographer /tracked_pose 는 발행 시각으로 외삽해 찍어서
+        #   recv − stamp 는 5~6 ms 뿐인데, mocap 과 맞춰 잰 실제 지연 (map_mocap_align time_lag) 은 15~51 ms (11-10).
+        #   race.sh 가 라이다 주행이면 maps/<맵>.mocap.yaml 의 time_lag_s 를 넣는다
+        d('delay_extra', 0.0)
         # ★ 교착 탈출 후진 (2026-11-10): MPC 로 달리는데 recover_wait 동안 0.1 m 도 못 가고 평균 vx < 0.15 면
         #   (급코너 안에서 바깥을 향해 서면 어떻게 가도 경계 침범이라 MPC 가 서 있기를 고른다) 조향
         #   sign(μ)·최대로 짧게 후진 → 정지 → 다시 풂. 같은 자리 (s 0.5 m) 에서 2번 넘게 막히면 고장 래치.
@@ -239,6 +243,7 @@ class HmpcNode(Node):
         self.lr = list(gp('vehicle_params'))[1]
         self.v_floor = float(gp('v_floor'))
         self.delay_comp = bool(gp('delay_comp'))
+        self.delay_extra = float(gp('delay_extra'))
         self.recover_reverse = bool(gp('recover_reverse'))
         self.rec_speed, self.rec_time = float(gp('recover_speed')), float(gp('recover_time'))
         self.rec_dist, self.rec_wait = float(gp('recover_dist')), float(gp('recover_wait'))
@@ -606,9 +611,10 @@ class HmpcNode(Node):
             if self.delay_comp and self.t_meas is not None:
                 age = now - self.t_meas
                 t_tgt = now + self.solve_est
-                d_pred = t_tgt - self.t_meas
+                t_eff = self.t_meas - self.delay_extra      # 실제 측정 시각 (스탬프보다 이르다)
+                d_pred = t_tgt - t_eff
                 if 0.0 <= age <= 0.3 and d_pred <= 0.15:
-                    dc = (1.0, self.t_meas, t_tgt)
+                    dc = (1.0, t_eff, t_tgt)
                     s_shift = x[3] * d_pred
                 else:
                     # 스탬프가 비었거나 시계가 다르거나 (mocap 다른 PC) 너무 오래됨 — 이 주기는 보상 없이

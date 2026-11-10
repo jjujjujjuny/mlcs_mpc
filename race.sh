@@ -79,6 +79,14 @@ if obs == 'lidar':
     if h.get('opponent_topic'):
         err('obstacles: lidar 이면 hmpc.opponent_topic 은 비워 두세요 (자동으로 /obstacle/pose)')
     h['opponent_topic'], h['opponent_msg'] = '/obstacle/pose', 'pose'
+# 지연 보상의 추가 지연: 라이다 주행이면 맵 정렬에서 잰 time_lag (Cartographer 가 스탬프를 외삽해 찍어
+#   스탬프로는 안 보인다). race.yaml 에 delay_extra 를 직접 쓰면 그 값
+if source == 'lidar' and 'delay_extra' not in h:
+    mf = os.path.join(root, 'maps', f'{c.get("map") or ""}.mocap.yaml')
+    try:
+        h['delay_extra'] = float(yaml.safe_load(open(mf))['time_lag_s'])
+    except Exception:
+        pass
 yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)
 mp = c.get('map') or ''
 if isinstance(mp, int):
