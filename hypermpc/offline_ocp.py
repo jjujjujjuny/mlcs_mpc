@@ -649,7 +649,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     P_used = []
     wall_hist, s_hist, trace = [], [], []
     v_top = args.v_max if args.v_max is not None else cfg['max_ws_ref']
-    restart(solver, N, x0)
+    x0g = np.array(x0, float)
+    x0g[3], x0g[7] = max(x0g[3], V_FLOOR), max(x0g[7], V_FLOOR)     # 노드처럼 초기 추측도 v_floor 위에서
+    restart(solver, N, x0g)
     x = x0.copy()
     x_true = x0.copy()          # 차(plant) 의 참 상태. x 는 OCP 에 주는 상태 (state_delay 면 늦은 것)
     # ★ 지연 시험 (2026-11-10): 라이다 주행은 센서 → 명령이 60~100 ms. state_delay 면 OCP 에 그만큼
@@ -665,7 +667,33 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
     first_bad = None
     bad_run, trips, first_trip, need_restart = 0, 0, None, False
     trail_stopped, trail_cmd, trail_skip, last_u = False, math.inf, False, np.zeros(2)
+    # 교착 탈출 (hmpc_node recover_reverse 와 같게): 서 있고 명령이 하한에 1 s 넘게 붙으면 짧게 후진
+    rr = getattr(args, 'recover_reverse', False)
+    stuck_n, rev_left, rev_dist, rev_delta, rev_hist = 0, 0, 0.0, 0.0, []
+    rev_count = 0
     for i in range(laps):
+        if rr and rev_left > 0:
+            # 후진 중: 기구학으로 참 상태를 움직인다 (차 모델은 vx ≤ 0 을 못 다룸). MPC 는 안 푼다
+            v, L = -args.recover_speed, 0.33
+            for _ in range(4):
+                h_ = args.dt / 4
+                q, nn, mu = x_true[0], x_true[1], x_true[2]
+                kap = kappa_of_s(q)
+                sd = v * math.cos(mu) / max(1.0 - nn * kap, 0.2)
+                x_true[0] += sd * h_
+                x_true[1] += v * math.sin(mu) * h_
+                x_true[2] += (v * math.tan(rev_delta) / L - kap * sd) * h_
+                rev_dist += abs(v) * h_
+            x_true[3] = x_true[4] = x_true[5] = 0.0
+            x_true[7], x_true[8] = 0.0, rev_delta
+            rev_left -= 1
+            if rev_left == 0 or rev_dist >= args.recover_dist:
+                rev_left, need_restart = 0, True
+            x = np.array(x_true, float)
+            hist_x.append(x_true.copy())
+            hist_u.append(np.array([-args.recover_speed, rev_delta]))
+            trace.append(np.r_[x_true, -args.recover_speed, rev_delta])
+            continue        # 풀지 않은 주기 — status·풀이 시간 통계에 넣지 않는다
         if delay > 0:
             # OCP 가 보는 상태 = delay 초 전의 참 상태 (주기 사이는 선형 보간). jitter 면 주기마다 흔든다
             d_i = max(delay + (rng_d.uniform(-jitter, jitter) if jitter > 0 else 0.0), 0.0)
@@ -809,6 +837,25 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             break
         x = x_next
         x_true = np.array(x_next, float)
+        if rr:
+            # 교착 = recover_wait 동안 0.1 m 도 못 가고 평균 vx < 0.15 (기어가며 밀리는 것도 잡는다)
+            w = int(round(args.recover_wait / args.dt))
+            stuck_n += 1
+            recent = hist_x[-w - 1:]
+            stuck = (stuck_n >= w and len(recent) > w and recent[-1][0] - recent[0][0] < 0.1
+                     and np.mean([q[3] for q in recent]) < 0.15)
+            if stuck:
+                stuck_n = 0
+                # 같은 자리 (s 0.5 m 안) 에서 두 번 실패하면 정지 (노드는 고장 래치)
+                rev_hist = [q for q in rev_hist if abs(q - x_true[0]) < 0.5]
+                if len(rev_hist) >= 2:
+                    print(f'  ✗ {name}: {i} 번째 — 같은 자리에서 후진 탈출 2번 실패 (노드라면 래치)')
+                    rr = False
+                else:
+                    rev_hist.append(x_true[0])
+                    rev_count += 1
+                    rev_delta = math.copysign(args.max_steer_actual_rev, x_true[2])
+                    rev_left, rev_dist = int(round(args.recover_time / args.dt)), 0.0
         hist_x.append(x_true.copy())
         hist_u.append(np.array(u0, float))
         last_u = np.array(u0, float)
@@ -816,6 +863,8 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         trace.append(np.r_[x, u0])
 
     ts = np.array(times[1:]) if len(times) > 1 else np.array(times)
+    if getattr(args, 'recover_reverse', False):
+        print(f'  후진 탈출 {rev_count}번')
     codes, counts = np.unique(status, return_counts=True)
     budget = args.dt * 1000
     print(f'\n■ {name}  ({len(times)}회, 첫 풀이 {times[0]:.1f} ms 는 통계에서 뺌)')
@@ -860,6 +909,15 @@ def main():
     ap.add_argument('--v-max', type=float, default=None, help='입력 속도 상한. 없으면 7 m/s')
     ap.add_argument('--params-yaml', default=None,
                     help='차량·타이어 값 파일 (config/hmpc.yaml). 없으면 저자 기본값')
+    ap.add_argument('--recover-reverse', action='store_true', help='교착 탈출 후진 (hmpc_node recover_reverse)')
+    ap.add_argument('--recover-speed', type=float, default=1.2)
+    ap.add_argument('--recover-time', type=float, default=1.2)
+    ap.add_argument('--recover-dist', type=float, default=0.4)
+    ap.add_argument('--recover-wait', type=float, default=1.0)
+    ap.add_argument('--max-steer-actual-rev', type=float, default=0.378, help='후진 조향 크기 rad (실제 조향)')
+    ap.add_argument('--start-s', type=float, default=0.0, help='출발 s m (트랙 좌표)')
+    ap.add_argument('--start-n', type=float, default=0.0, help='출발 n m (왼쪽 +)')
+    ap.add_argument('--start-mu', type=float, default=0.0, help='출발 헤딩 차 μ 도 (왼쪽 +)')
     ap.add_argument('--start-v', type=float, default=1.0, help='초기 v_x [m/s]')
     ap.add_argument('--max-steer', type=float, default=0.378, help='--v-max 와 함께 쓰는 실제 조향 상한')
     ap.add_argument('--track-hard', type=float, default=None,
@@ -961,6 +1019,8 @@ def main():
     for name in args.scenario:
         x0 = initial_state(cfg)
         x0[3], x0[7] = args.start_v, args.start_v + 0.02
+        # 출발 자세 (교착 시험): 트랙 좌표 s, n, 헤딩 차 μ (도)
+        x0[0], x0[1], x0[2] = args.start_s, args.start_n, math.radians(args.start_mu)
         kappa = lambda q: 0.0  # noqa: E731
         if name == 'curve':
             kappa = lambda q: 0.575  # noqa: E731

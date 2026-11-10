@@ -65,7 +65,7 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from vesc_msgs.msg import VescStateStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
-from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, to_command
+from mlcs_mpc.hmpc_core import Track, make_state, solution_ok, steer_to_command, to_command
 from mlcs_mpc.opponent import LEFT, RIGHT, TRAIL, Opponent, OppParams
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -171,6 +171,16 @@ class HmpcNode(Node):
         #   명령으로 워커가 모델을 적분해 x0 를 당긴다. 라이다 센서→명령 60~100 ms. offline 1109_4 v2.0 80 ms:
         #   보상 없음 랩 6.60~7.52 / 벽밖 1.6% → 보상 6.24~6.30 / 0% (지연 0 은 6.24~6.47). 기본 끔
         d('delay_comp', False)
+        # ★ 교착 탈출 후진 (2026-11-10): MPC 로 달리는데 recover_wait 동안 0.1 m 도 못 가고 평균 vx < 0.15 면
+        #   (급코너 안에서 바깥을 향해 서면 어떻게 가도 경계 침범이라 MPC 가 서 있기를 고른다) 조향
+        #   sign(μ)·최대로 짧게 후진 → 정지 → 다시 풂. 같은 자리 (s 0.5 m) 에서 2번 넘게 막히면 고장 래치.
+        #   offline 1108_7·1109_4 급코너 −25° 5가지 모두 빠져나옴, 직선 정상 출발은 안 걸림. 기본 끔
+        d('recover_reverse', False)
+        d('recover_speed', 1.2)         # m/s — 짧고 세게. 0.45~0.5 는 정지에서 모터가 늦게 돌아 느렸다 (실차 11-10)
+        d('recover_time', 1.2)          # s — 상한. 보통은 거리로 끝난다
+        d('recover_dist', 0.4)          # m — 이만큼 물러나면 끝 (바로 정지·제동)
+        d('recover_wait', 1.0)          # s
+        d('recover_tries', 3)           # 같은 자리 (s 0.5 m 안) 에서 이만큼 후진해도 막히면 고장 래치
         d('q_delta', 2.0)               # ★ 조향 명령과 조향 상태 차이 비용 (저자 2.0). 생성 코드에 들어간다
         d('wall_heading', 0.0)
         d('wall_heading_r', 0.25)
@@ -229,6 +239,17 @@ class HmpcNode(Node):
         self.lr = list(gp('vehicle_params'))[1]
         self.v_floor = float(gp('v_floor'))
         self.delay_comp = bool(gp('delay_comp'))
+        self.recover_reverse = bool(gp('recover_reverse'))
+        self.rec_speed, self.rec_time = float(gp('recover_speed')), float(gp('recover_time'))
+        self.rec_dist, self.rec_wait = float(gp('recover_dist')), float(gp('recover_wait'))
+        self.rec_tries = int(gp('recover_tries'))
+        self.recovering = False
+        self.rec_until = 0.0
+        self.rec_end_t = -1e9           # 마지막 후진이 끝난 시각
+        self.rec_start = None           # 후진 시작 (x, y)
+        self.rec_steer = 0.0            # 후진 중 서보 명령
+        self.rec_s = []                 # 후진을 시작한 s 들 (같은 자리 실패 판정)
+        self.prog = deque()             # MPC 로 달리는 주기의 (시각, s, vx)
         self.t_meas = None                  # 지금 상태가 측정된 시각 (/mpc/state header stamp)
         self.cmd_hist = deque(maxlen=Worker.DELAY_HIST)     # 내보낸 명령 (시각, ws_ref, 실제 조향 δ)
         self.solve_est = 0.025              # 풀이 시간 평균 (지수) s — 목표 시각 = 지금 + 이것
@@ -528,7 +549,8 @@ class HmpcNode(Node):
             return 'mocap 불량 뒤 대기 — LB 두 번 또는 B'
         if self.t_vesc is None or now - self.t_vesc > self.vesc_timeout:
             return 'VESC 끊김'
-        if self.twist[0] < self.reverse_limit:
+        # 탈출 후진 중과 끝난 뒤 1 s (아직 뒤로 구르는 중) 은 후진 정지를 걸지 않는다
+        if self.twist[0] < self.reverse_limit and not self.recovering and self._now() - self.rec_end_t > 1.0:
             return '후진 중'
         if self.manual:
             return '수동 조종 중'
@@ -557,17 +579,26 @@ class HmpcNode(Node):
                 self.track.reset()
                 self.delta = self.cmd_steer = 0.0
                 self.trail_stopped, self.trail_cmd = False, math.inf
+                self.recovering = False
+                self.prog.clear()
+                if reason != '후진 중':
+                    self.rec_s = []         # 사람이 개입했다 (수동·B·고장 해제) — 같은 자리 횟수를 새로
                 self._publish(0.0, 0.0)
                 return
             if self.stop_reason is not None:
                 self.get_logger().info('▶ 주행 조건 충족')
                 self.status_pub.publish(String(data='주행'))
                 self.stop_reason = None
+            if self.recovering:
+                self._recover_step(now)
+                return
             if self.pending_t is not None:
                 return      # 지난 요청의 답을 기다린다. 제한 시간은 위에서 본다
 
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
                            self.lr, self.v_floor, self.friction)
+            if self.recover_reverse and self._check_stuck(now, x):
+                return
             # 지연 보상: 워커가 x0 를 t_meas → t_tgt 로 당긴다. 경계·곡률을 읽는 s 도 그만큼 앞으로
             # 보상을 꺼도 측정 시각은 보낸다 — 워커 통계 age_ms 로 실제 상태 지연을 잰다
             dc = (0.0, self.t_meas if self.t_meas is not None else math.nan, math.nan)
@@ -648,6 +679,61 @@ class HmpcNode(Node):
                 return
             self.pending_t = now
             self.running = True
+
+    # ── 교착 탈출 후진 ───────────────────────────────────────────────
+    def _check_stuck(self, now, x):
+        """MPC 로 달리는데 recover_wait 동안 못 나아가면 후진을 시작한다. 시작했으면 True."""
+        if not self.running or self.bench or self.trail_stopped or self.opp_mode == TRAIL:
+            self.prog.clear()       # 상대 뒤에서 일부러 느린 건 교착이 아니다
+            return False
+        if self.rec_s and x[0] - max(self.rec_s) > 1.0:
+            self.rec_s = []             # 그 자리를 빠져나갔다
+        self.prog.append((now, float(x[0]), float(self.twist[0])))
+        while self.prog and now - self.prog[0][0] > self.rec_wait + 0.2:
+            self.prog.popleft()
+        if not self.prog or now - self.prog[0][0] < self.rec_wait:
+            return False
+        ds = self.prog[-1][1] - self.prog[0][1]
+        if ds >= 0.1 or np.mean([p[2] for p in self.prog]) >= 0.15:
+            return False
+        self.prog.clear()
+        # 상대가 뒤쪽 1 m 안이면 후진 안 함 (라이다 뒤쪽 사각)
+        if self.opp is not None:
+            st = self.opp.tracker.state(now)
+            if st is not None:
+                back = (x[0] - st[0] + self.track.length / 2) % self.track.length - self.track.length / 2
+                if 0.0 < back < 1.0:
+                    self.get_logger().warn(f'교착이지만 상대가 뒤 {back:.2f} m — 후진 안 함')
+                    return False
+        self.rec_s = [q for q in self.rec_s if abs(q - x[0]) < 0.5]
+        if len(self.rec_s) >= self.rec_tries:
+            self._trip(f'같은 자리에서 후진 탈출 {self.rec_tries}번 뒤에도 교착')
+            return True
+        self.rec_s.append(float(x[0]))
+        mu = float(x[2])
+        act = math.copysign(self.map_act[-1], mu if mu != 0 else 1.0)    # 후진은 요 방향이 반대 → μ 가 줄어드는 쪽
+        self.rec_steer = steer_to_command(act, self.map_cmd, self.map_act)
+        self.recovering = True
+        self.rec_until = now + self.rec_time
+        self.rec_start = (self.pose[0], self.pose[1])
+        self.running = False
+        self.get_logger().warn(f'교착 (1 s 에 {ds:.2f} m) — 후진 탈출 {len(self.rec_s)}번째: '
+                               f'{self.rec_speed} m/s, 조향 {act:+.2f} rad (μ {math.degrees(mu):+.0f}°)')
+        self._publish(-self.rec_speed, self.rec_steer)
+        return True
+
+    def _recover_step(self, now):
+        moved = math.hypot(self.pose[0] - self.rec_start[0], self.pose[1] - self.rec_start[1])
+        if now < self.rec_until and moved < self.rec_dist:
+            self._publish(-self.rec_speed, self.rec_steer)
+            return
+        self.recovering = False
+        self.rec_end_t = now
+        self.running = False            # 다시 풀 때 초기 추측을 지금 상태로 (cmd 1)
+        self.prog.clear()
+        self.cmd_steer = 0.0
+        self._publish(0.0, 0.0)
+        self.get_logger().info(f'후진 탈출 끝 ({moved:.2f} m) — MPC 다시')
 
     def _publish(self, speed, steer):
         m = AckermannDriveStamped()
