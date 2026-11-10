@@ -143,4 +143,48 @@ ssh -o BatchMode=yes mlcs@192.168.1.7 'hostname; uptime'     # mlcs-car 가 나�
 > 형식: `### <노트북 이름> 시험 N (날짜 시각, 커밋)`. 단계마다 ✓/✗, ✗ 는 에러 원문.
 > 젯슨 답은 `### 젯슨 답 N` 으로 그 아래에.
 
-(아직 없음)
+### jaeungubuntu 시험 1 (2026-11-10 16:34, 72040c6)
+
+노트북: `jaeung@jaeungubuntu`, 8코어, GNOME Wayland. Claude 는 VSCode(snap) 안에서 돌렸다.
+
+**0. 확인** ✓ Ubuntu 22.04, ROS 2 Humble, nproc 8
+
+**1. `./car.sh setup`**
+- 첫 실행: 2단계에서 멈춤 — `없는 것: clang libclang-dev`. 사람이 `sudo apt install -y clang libclang-dev` 를 친 뒤 다시 돌림
+- 두 번째 실행 ✓ 끝까지 (전체 10분 52초, Rust 설치 포함)
+  - `~/.bashrc` 에 `ROS_LOCALHOST_ONLY=1` ✓
+  - Rust (rustup) ✓
+  - 브리지 빌드 ✓ `zenoh-bridge-ros2dds v1.10.2`, 요구 glibc 최대 `GLIBC_2.34`
+  - SSH 키 새로 만듦 ✓
+
+**2. `./car.sh ip 192.168.1.7`**
+- 처음 ✗ `아직 닿지 않습니다` — 노트북이 `Yonsei` 와이파이에 붙어 있었음
+- `mlcs-robotics5G` 로 바꾼 뒤 ✓ `닿습니다` (노트북 192.168.1.24)
+
+**3. SSH** ✓ A 방법 (`./car.sh key`, 사람이 비밀번호 입력). `ssh -o BatchMode=yes mlcs@192.168.1.7` → `mlcs-car` (up 4:16)
+
+**4. `./car.sh panel`**
+- vesc_msgs colcon 빌드 ✓ (5.3초)
+- ✗ **VSCode(snap) 터미널에서 띄우면 바로 죽는다** (exit 133):
+  ```
+  (python3:20323): GLib-GIO-ERROR **: 16:30:18.369: Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'
+  ```
+  원인: snap 판 VSCode 가 자식 프로세스에 `GSETTINGS_SCHEMA_DIR=~/snap/code/278/...`, `XDG_DATA_DIRS`(snap 경로 앞에 붙음), `GTK_PATH`, `GTK_EXE_PREFIX`, `GIO_MODULE_DIR` 을 물려준다. Qt 의 GTK 테마가 snap 쪽 스키마를 읽고 죽는다. 레포 문제는 아니다.
+  우회 (이걸로 떴다):
+  ```bash
+  env -u GSETTINGS_SCHEMA_DIR -u GTK_PATH -u GTK_EXE_PREFIX -u GTK_IM_MODULE_FILE -u GIO_MODULE_DIR \
+      XDG_DATA_DIRS="$XDG_DATA_DIRS_VSCODE_SNAP_ORIG" XDG_CONFIG_DIRS="$XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG" ./car.sh panel
+  ```
+  일반 GNOME 터미널에서는 이 변수들이 없으니 그냥 `./car.sh panel` 이면 될 것이다 (이번에는 시험 못 함). 필요하면 `car.sh panel` 에서 `SNAP_NAME=code` 일 때 위 변수를 지우는 방법도 있다.
+- 우회 후 창이 뜸. 경고는 `Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome...` 한 줄뿐 (XWayland 로 뜸, 문제 없음)
+
+확인 항목 (사람이 화면을 보고 답함, Claude 는 Wayland 라 캡처 못 함):
+1. `SSH ✓` 초록 ✓
+2. 설정 칸 ✓ — 맵 `1109_4`, 트랙 `1109_4_track`, 최고 속도 `2.0` (장애물 `watch`), 맵 목록 나옴. `remote.sh lists` 직접 호출: 맵 14개, 트랙 18개
+3. `명령어` 탭에 drive.sh·race.sh·bat.sh 사용법 ✓
+4. bench — **안 함** (사람 허락 없음). 젯슨은 `session=0` 이라 토픽 칩은 안 들어옴 (정상)
+5. 창 닫음 ✓ — exit 0, Traceback·경고 없음, 노트북 브리지도 같이 꺼짐, 젯슨 `session=0` 그대로
+
+**동시 접속:** 이 시험 동안 hj-gram 에서도 제어판·RViz 가 떠 있었다 (사람 확인). 이 노트북 쪽에 문제 없었다. 다만 bench 를 안 해서 둘 다 토픽을 받는지는 아직 확인 안 됨.
+
+**남은 것:** bench 로 4번(토픽·라이다·배터리·RViz·정지) 확인, 일반 터미널에서 우회 없이 뜨는지 확인.
