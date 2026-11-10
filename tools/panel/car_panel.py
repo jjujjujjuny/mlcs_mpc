@@ -266,18 +266,24 @@ class Ssh(QtCore.QObject):
                      '-o', 'ServerAliveCountMax=2', '-o', 'ConnectTimeout=4',
                      '-o', 'BatchMode=yes', f'{USER}@{host}']
         self.busy = set()
+        self.closed = False
 
     def run(self, args, done=None, tag=None):
         """remote.sh <args...> 를 비동기로. done(ok, text). tag 가 같은 호출은 겹치지 않게."""
-        if tag and tag in self.busy:
-            return
+        if self.closed or (tag and tag in self.busy):
+            return None
         p = QtCore.QProcess(self)
         p.setProcessChannelMode(QtCore.QProcess.MergedChannels)
         if tag:
             self.busy.add(tag)
 
         def fin(code, _st):
-            out = bytes(p.readAll()).decode('utf-8', 'replace')
+            try:
+                out = bytes(p.readAll()).decode('utf-8', 'replace')
+            except RuntimeError:            # 창을 닫는 중에 QProcess 가 먼저 지워졌다
+                return
+            if self.closed:
+                return
             if tag:
                 self.busy.discard(tag)
             if done:
@@ -288,12 +294,15 @@ class Ssh(QtCore.QObject):
         return p
 
     def stream(self, args):
+        if self.closed:
+            return None
         p = QtCore.QProcess(self)
         p.setProcessChannelMode(QtCore.QProcess.MergedChannels)
         p.start('ssh', self.base + [REMOTE] + list(args))
         return p
 
     def close(self):
+        self.closed = True      # ★ 이 뒤로는 새 ssh 를 띄우지 않는다 (아래 설명)
         # 돌고 있는 ssh 를 먼저 끝낸다 — 안 그러면 창을 닫을 때
         # 'QProcess: Destroyed while process ("ssh") is still running.' (노트북 실측)
         for p in self.findChildren(QtCore.QProcess):
@@ -355,9 +364,11 @@ class Panel(QtWidgets.QWidget):
         self.reload_lists()
         self.poll_status()
         self.start_logs()
-        QtCore.QTimer(self, interval=STATUS_PERIOD_MS, timeout=self.poll_status).start()
-        QtCore.QTimer(self, interval=500, timeout=self.refresh_chips).start()
-        QtCore.QTimer(self, interval=SCREEN_PERIOD_MS, timeout=self.poll_screen).start()
+        self.timers = [QtCore.QTimer(self, interval=STATUS_PERIOD_MS, timeout=self.poll_status),
+                       QtCore.QTimer(self, interval=500, timeout=self.refresh_chips),
+                       QtCore.QTimer(self, interval=SCREEN_PERIOD_MS, timeout=self.poll_screen)]
+        for t in self.timers:
+            t.start()
         self.resize(1100, 820)
 
     # ───────── 위젯 ─────────
@@ -589,6 +600,8 @@ class Panel(QtWidgets.QWidget):
         if self.log_proc is not None:
             return
         p = self.log_proc = self.ssh.stream(['logs'])
+        if p is None:                       # 창을 닫는 중
+            return
         buf = ['']
 
         def read():
@@ -936,8 +949,11 @@ class Panel(QtWidgets.QWidget):
 
     def closeEvent(self, ev):
         # 젯슨은 건드리지 않는다 — 노트북 창을 닫아도 주행은 계속된다
-        if self.log_proc is not None:
-            self.log_proc.kill()
+        # ★ 타이머를 먼저 멈춘다. closeEvent 뒤에도 이벤트 루프가 잠깐 돌아서, 그사이 타이머가
+        #   새 ssh 조회를 띄우면 앱이 내려가며 그 QProcess 가 지워지고, 끝날 때 콜백이
+        #   지워진 객체를 읽어 RuntimeError 가 났다 (노트북 시험 2, 띄우고 1분 만에 닫았을 때)
+        for t in self.timers:
+            t.stop()
         for p in (self.rviz, self.bridge):
             if isinstance(p, subprocess.Popen) and p.poll() is None:
                 os.killpg(p.pid, signal.SIGTERM)

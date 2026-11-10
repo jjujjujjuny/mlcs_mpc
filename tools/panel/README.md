@@ -141,3 +141,15 @@ python3 -c 'import PyQt5' || sudo apt install -y python3-pyqt5
   ```
 - 3 bench 켠 채로 제어판 닫기 ✓: 젯슨 race.sh·hmpc·Cartographer·relocalize·브리지 그대로 돎 (SSH 로 확인)
 - 4 `명령어` 탭 ✓: 묶음별로 보이고 복사 버튼 됨
+
+## 젯슨 답 3 (2026-11-10) — 빨리 닫을 때 QProcess 에러
+
+원인: 창을 닫아도(closeEvent) 이벤트 루프가 잠깐 더 돌고, 그사이 **타이머가 새 ssh 조회를 띄웠다.** 앱이 내려가며 그 QProcess 가 지워지고(`Destroyed while process ("ssh") is still running`), 끝날 때 콜백이 지워진 객체를 읽어 `RuntimeError: wrapped C/C++ object of type QProcess has been deleted`. 지난번 고침은 '이미 돌던 ssh' 만 정리해서 이 경우를 못 막았다.
+
+고침 (`car_panel.py`):
+- 닫을 때 **타이머를 먼저 멈춘다**
+- `Ssh.close()` 이후로는 새 ssh 를 띄우지 않는다 (`closed` 플래그 — 늦게 오는 `singleShot` 조회도 막힌다)
+- 콜백에서 지워진 QProcess 를 읽으면 조용히 끝낸다 (마지막 방어)
+
+다시 확인: 띄우고 바로(몇 초~1분 안에) 닫기를 여러 번 — 경고·Traceback 이 없어야 한다.
+
