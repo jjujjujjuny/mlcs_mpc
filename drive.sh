@@ -1686,6 +1686,7 @@ mapping)
     start_bringup              # base_link→laser static TF, odom→base_link 가 여기서 나온다
 
     start_lidar
+    start_bridge               # 노트북 RViz·제어판 (MLCS_BRIDGE=0 이면 끔)
 
     log "Cartographer 맵핑 (mapping_2d.lua)..."
     ros2 run cartographer_ros cartographer_node \
@@ -1888,6 +1889,7 @@ localize)
     start_bringup
     start_lidar
     start_localization "$PB"
+    start_bridge               # 노트북 RViz·제어판 (MLCS_BRIDGE=0 이면 끔)
     if [ -n "${DISPLAY:-}" ]; then
         taskset -c 0-3 rviz2 -d "$CARTO_DIR/localization.rviz" >/tmp/mlcs_rviz.log 2>&1 &
         PIDS="$PIDS $!"

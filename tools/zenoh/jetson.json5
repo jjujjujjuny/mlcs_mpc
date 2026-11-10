@@ -33,11 +33,13 @@
           "^/hmpc/opponent_markers$",
           "^/obstacle/markers$",
           "^/track/.*", "^/viz/car$",
+          "^/sensors/core$",              // 제어판 배터리·VESC (2 Hz 로 솎음)
           // 뺀 것: /trajectory_node_list /constraint_list (맵 전체 노드라 수백 KB, 33Hz)
           //        /viz/trail (최대 2000 포즈를 매번 통째로)
         ],
-        // 노트북 → 젯슨 : RViz '2D Pose Estimate' 만
-        subscribers: [ "^/initialpose$" ],
+        // 노트북 → 젯슨 : RViz '2D Pose Estimate' + 제어판 '출발' (조이스틱 B 와 같은 /mpc/go)
+        //   ★ 그 밖의 제어는 노트북에서 보내지 않는다. 정지는 젯슨에 직결된 조이스틱(LB·START)
+        subscribers: [ "^/initialpose$", "^/mpc/go$" ],
       },
 
       // 이보다 빠르면 브리지가 솎아서 보낸다 (젯슨 내부 주파수는 그대로)
@@ -45,13 +47,14 @@
         "^/scan$=10",
         "^/tracked_pose$=20",
         "^/mpc/state$=20",
-        "^/mpc/solve_time$=5",
+        // /mpc/solve_time 은 솎지 않는다 — 제어판이 p95·최대를 보려면 매 풀이가 필요하다 (Float32, 30 Hz)
         "^/mpc/predicted_path$=10", "^/mpc/reference_path$=2",
         "^/hmpc/status$=5",
         "^/hmpc/opponent_markers$=5",
         "^/obstacle/markers$=5",
         "^/viz/car$=10",
         "^/map$=0.5",
+        "^/sensors/core$=2",
       ],
     },
   },

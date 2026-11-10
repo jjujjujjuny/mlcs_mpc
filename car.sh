@@ -5,6 +5,8 @@
 #     ./car.sh ip 192.168.1.7   젯슨 주소 저장 (한 번만. 대회장에서 IP 바뀌면 다시)
 #     ./car.sh key              SSH 비밀번호 안 묻게 (한 번만)
 #
+#     ./car.sh panel            ★ 제어판 (상태·실행·정지·설정·맵 저장·로그를 한 창에서)
+#
 #     ./car.sh bench            젯슨에서 race.sh 를 bench 로 (속도 0, race.yaml 안 고침)
 #     ./car.sh race             젯슨에서 race.sh 실제 주행 (한 번 더 묻는다)
 #     ./car.sh rviz             노트북 RViz (브리지 포함)
@@ -76,6 +78,25 @@ rviz)
     need_car
     exec "$HERE/tools/zenoh/laptop.sh" "$HOST"
     ;;
+panel)
+    need_car
+    PD="$HERE/tools/panel"
+    [ -n "${ROS_DISTRO:-}" ] || { set +u; source /opt/ros/humble/setup.bash; set -u; }
+    # 배터리 표시용 vesc_msgs (젯슨 f1tenth_ws 에서 복사한 메시지 정의) — 처음 한 번 빌드
+    if [ ! -f "$PD/install/setup.bash" ]; then
+        if command -v colcon >/dev/null; then
+            log "vesc_msgs 빌드 (처음 한 번, 약 30초)..."
+            ( cd "$PD" && colcon build --base-paths msgs --build-base build --install-base install \
+                >"${TMPDIR:-/tmp}/mlcs_panel_build.log" 2>&1 ) \
+                || err "vesc_msgs 빌드 실패 — 배터리 표시만 빠집니다 (${TMPDIR:-/tmp}/mlcs_panel_build.log)"
+        else
+            err "colcon 이 없어 vesc_msgs 를 못 만듭니다 — 배터리 표시만 빠집니다 (sudo apt install python3-colcon-common-extensions)"
+        fi
+    fi
+    [ -f "$PD/install/setup.bash" ] && { set +u; source "$PD/install/setup.bash"; set -u; }
+    python3 -c 'import PyQt5' 2>/dev/null || { err "PyQt5 가 없습니다: sudo apt install -y python3-pyqt5"; exit 1; }
+    exec python3 "$PD/car_panel.py" "$HOST"
+    ;;
 check)
     [ -n "${ROS_DISTRO:-}" ] || { set +u; source /opt/ros/humble/setup.bash; set -u; }
     export ROS_LOCALHOST_ONLY=1
@@ -98,7 +119,7 @@ stop)
     ssh -t "$USER_AT@$HOST" '~/mlcs_mpc/drive.sh stop; tmux kill-session -t race 2>/dev/null; true'
     ;;
 *)
-    sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
     echo "  지금 젯슨 주소: $HOST"
     ;;
 esac
