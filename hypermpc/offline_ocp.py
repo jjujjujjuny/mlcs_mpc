@@ -366,7 +366,11 @@ def build_ocp(dyn_fun, N, dt, cfg):
 
     # 솔버 — 원본과 같은 조합
     ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
-    ocp.solver_options.hpipm_mode = 'BALANCE'
+    ocp.solver_options.hpipm_mode = cfg.get('hpipm_mode', 'BALANCE')
+    if cfg.get('qp_warm_start', 0):
+        ocp.solver_options.qp_solver_warm_start = int(cfg['qp_warm_start'])
+    if cfg.get('qp_cond_N', 0):
+        ocp.solver_options.qp_solver_cond_N = int(cfg['qp_cond_N'])
     ocp.solver_options.hessian_approx = 'EXACT'
     ocp.solver_options.regularize_method = 'PROJECT'
     ocp.solver_options.globalization = 'MERIT_BACKTRACKING'
@@ -417,7 +421,10 @@ def make_solver(dyn_fun, N, dt, cfg, build_dir, guard=True):
            + ('_slack' if cfg.get('track_hard') and cfg.get('track_slack', 0) > 0 else '')
            + ('_wsrate' if cfg.get('ws_acc_max', 0) > 0 or cfg.get('ws_dec_max', 0) > 0 else '')
            + ('_head' if cfg.get('track_hard') and cfg.get('wall_heading', 0) > 0 else '')
-           + ('_bp' if cfg.get('track_hard') and cfg.get('bounds_param', False) else ''))
+           + ('_bp' if cfg.get('track_hard') and cfg.get('bounds_param', False) else '')
+           + (f"_{cfg['hpipm_mode'].lower()}" if cfg.get('hpipm_mode', 'BALANCE') != 'BALANCE' else '')
+           + (f"_ws{cfg['qp_warm_start']}" if cfg.get('qp_warm_start', 0) else '')
+           + (f"_c{cfg['qp_cond_N']}" if cfg.get('qp_cond_N', 0) else ''))
     build = os.path.join(build_dir, tag)
     os.makedirs(build, exist_ok=True)
     ocp = build_ocp(dyn_fun, N, dt, cfg)
@@ -1004,6 +1011,9 @@ def main():
                     help='--plant: OCP 에 이만큼 (s) 늦은 상태를 준다 (라이다 센서→명령 지연 흉내)')
     ap.add_argument('--delay-comp', action='store_true',
                     help='--state-delay 와: 늦은 상태를 그동안 낸 명령으로 적분해 지금으로 당긴다 (지연 보상)')
+    ap.add_argument('--hpipm-mode', default='BALANCE', choices=('BALANCE', 'SPEED', 'SPEED_ABS', 'ROBUST'))
+    ap.add_argument('--qp-warm-start', type=int, default=0, help='HPIPM warm start (0 끔, 1, 2)')
+    ap.add_argument('--cond-n', type=int, default=0, help='부분 응축 길이 (0 = acados 기본)')
     ap.add_argument('--q-delta', type=float, default=None, help='조향 변화 비용 (기본 make_cfg 2.0)')
     ap.add_argument('--bounds-param', action='store_true',
                     help='n 경계를 p 에 넣은 h 제약으로 (주기당 constraints_set 생략). 기본은 상자 경계')
@@ -1051,6 +1061,13 @@ def main():
                    bounds_param=args.bounds_param)
     if args.q_delta is not None:
         cfg['q_delta'] = args.q_delta
+    # QP 풀이기 설정 (풀이 시간 비교, 11-10). 기본값이면 cfg 에 넣지 않는다 (예전 빌드 해시 유지)
+    if args.hpipm_mode != 'BALANCE':
+        cfg['hpipm_mode'] = args.hpipm_mode
+    if args.qp_warm_start:
+        cfg['qp_warm_start'] = args.qp_warm_start
+    if args.cond_n:
+        cfg['qp_cond_N'] = args.cond_n
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')

@@ -190,6 +190,7 @@ class HmpcNode(Node):
         d('recover_wait', 1.0)          # s
         d('recover_tries', 3)           # 같은 자리 (s 0.5 m 안) 에서 이만큼 후진해도 막히면 고장 래치
         d('q_delta', 2.0)               # ★ 조향 명령과 조향 상태 차이 비용 (저자 2.0). 생성 코드에 들어간다
+        d('qp_cond_n', 0)               # ★ HPIPM 부분 응축 길이 (0 = acados 기본 N). 생성 코드에 들어간다
         d('wall_heading', 0.0)
         d('wall_heading_r', 0.25)
         d('trail_stop_speed', 0.3)      # 뒤따름 속도 상한이 이보다 낮으면 풀지 않고 세운다 m/s
@@ -316,6 +317,7 @@ class HmpcNode(Node):
                         wall_heading=float(gp('wall_heading')) if self.walls else 0.0,
                         wall_heading_r=float(gp('wall_heading_r')),
                         bounds_param=bool(gp('bounds_param')), q_delta=float(gp('q_delta')),
+                        qp_cond_N=int(gp('qp_cond_n')),
                         track_hard=bool(gp('track_hard')), track_width=float(gp('track_width')),
                         track_slack=float(gp('track_slack')),
                         mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
