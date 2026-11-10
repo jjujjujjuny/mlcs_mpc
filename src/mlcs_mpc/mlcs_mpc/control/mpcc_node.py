@@ -211,6 +211,8 @@ class MpccNode(Node):
             self.start_speed = 0.0      # bench 는 속도가 늘 0 이라 vx 가 안 오른다 — 처음부터 푼다 (조향 확인)
         self.started = self.start_speed <= 0.0
         self._start_logged = False
+        self.probe_ok = False       # 출발 직진 전 탐침 풀이가 정상이었나 (정지 조건이 걸리면 다시 본다)
+        self.probing = False        # 지금 기다리는 답이 탐침인가
         self.reverse_limit = float(gp('reverse_limit'))
         self.friction = float(gp('friction'))
         self.erpm_gain = float(gp('erpm_gain'))
@@ -450,6 +452,20 @@ class MpccNode(Node):
                 return      # 고장 처리나 정지 뒤에 도착한 답
             self.pending_t = None
             self.solve_pub.publish(Float32(data=float(ms)))
+            if self.probing:
+                self.probing = False
+                self.running = False
+                if solution_ok(st, u, x1):
+                    self.bad = 0
+                    self.probe_ok = True
+                    self.get_logger().info(f'출발 탐침 정상 (status {int(st)}, {ms:.1f} ms)')
+                else:
+                    self.bad += 1
+                    self.get_logger().warn(f'출발 탐침 비정상 (status {int(st)}, {self.bad}번째) — 출발 안 함')
+                    if self.bad >= self.max_bad:
+                        self._trip(f'출발 탐침 비정상 {self.bad}번 연속 (status {int(st)})')
+                self._publish(0.0, 0.0)
+                return
             if not solution_ok(st, u, x1):
                 self.bad += 1
                 self.running = False
@@ -524,6 +540,7 @@ class MpccNode(Node):
                 self.track.reset()
                 self.delta = self.cmd_steer = 0.0
                 self.started = self.start_speed <= 0.0      # 다시 달릴 때 출발 직진부터
+                self.probe_ok = self.probing = False        # 다시 출발할 때 솔버를 다시 확인
                 self._publish(0.0, 0.0)
                 return
             if self.stop_reason is not None:
@@ -532,8 +549,15 @@ class MpccNode(Node):
                 self.stop_reason = None
             if self.pending_t is not None:
                 return      # 지난 요청의 답을 기다린다. 제한 시간은 위에서 본다
+            probe = False
             if not self.started:
-                if self.twist[0] < self.start_vx:
+                if self.twist[0] < self.start_vx and not self.probe_ok:
+                    # ★ 탐침 (2026-11-10): 출발 직진 전에 지금 상태로 한 번 풀어 본다. 솔버가 깨져 있으면
+                    #   풀지 않는 직진이 0.5 m/s 로 굴러간 뒤에야 비정상 해를 알게 된다 (test_bad_solution).
+                    #   답은 쓰지 않고 (서 있다) 정상이면 직진, 비정상이면 다른 풀이와 같이 세서 래치한다.
+                    self._publish(0.0, 0.0)
+                    probe = True
+                elif self.twist[0] < self.start_vx:
                     # 출발 단계: 상태만 읽고 직진. 위의 정지 조건 (mocap·VESC·수동 …) 은 매 주기 그대로 본다
                     if not self._start_logged:
                         self.get_logger().info(f'출발 직진 {self.start_speed} m/s — vx {self.start_vx} 부터 MPC')
@@ -541,8 +565,9 @@ class MpccNode(Node):
                     self.cmd_steer = 0.0
                     self._publish(min(self.start_speed, self.v_max), 0.0)
                     return
-                self.started = True         # 여기서부터 푼다 (첫 요청은 cmd 1 — 초기 추측을 지금 상태로)
-                self._start_logged = False
+                else:
+                    self.started = True         # 여기서부터 푼다 (첫 요청은 cmd 1 — 초기 추측을 지금 상태로)
+                    self._start_logged = False
 
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
                            self.lr, self.v_floor, self.friction)
@@ -579,7 +604,8 @@ class MpccNode(Node):
                 self._trip('요청을 못 보냄')
                 return
             self.pending_t = now
-            self.running = True
+            self.running = not probe        # 탐침 뒤 첫 진짜 풀이는 cmd 1 (초기 추측을 다시)
+            self.probing = probe
 
     def _publish(self, speed, steer):
         m = AckermannDriveStamped()

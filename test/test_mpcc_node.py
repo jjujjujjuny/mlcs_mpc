@@ -30,7 +30,8 @@ from std_msgs.msg import Bool, Float32  # noqa: E402
 from vesc_msgs.msg import VescStateStamped  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.expanduser('~/f1tenth_ws/install/mlcs_mpc/lib/mlcs_mpc/mpcc_node')
+# MLCS_WS 로 다른 colcon 작업공간을 줄 수 있다 (브랜치를 실차 작업공간과 따로 빌드해 시험할 때)
+EXE = os.path.join(os.path.expanduser(os.environ.get('MLCS_WS', '~/f1tenth_ws')), 'install/mlcs_mpc/lib/mlcs_mpc/mpcc_node')
 CFG = os.path.join(ROOT, 'src/mlcs_mpc/config/mpcc.yaml')
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 L, LR = 0.33, 0.1537
