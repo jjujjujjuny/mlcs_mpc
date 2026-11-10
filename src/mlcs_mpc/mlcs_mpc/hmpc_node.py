@@ -173,7 +173,7 @@ class HmpcNode(Node):
         d('delay_comp', False)
         # 스탬프에 안 보이는 추가 지연 s. Cartographer /tracked_pose 는 발행 시각으로 외삽해 찍어서
         #   recv − stamp 는 5~6 ms 뿐인데, mocap 과 맞춰 잰 실제 지연 (map_mocap_align time_lag) 은 15~51 ms (11-10).
-        #   race.sh 가 라이다 주행이면 maps/<맵>.mocap.yaml 의 time_lag_s 를 넣는다
+        #   race.sh 가 라이다 주행이면 25 ms 를 넣는다 (주행별 실측 17~27 ms, 맵 정렬 값은 재현 안 됨)
         d('delay_extra', 0.0)
         # ★ 교착 탈출 후진 (2026-11-10): MPC 로 달리는데 recover_wait 동안 0.1 m 도 못 가고 평균 vx < 0.15 면
         #   (급코너 안에서 바깥을 향해 서면 어떻게 가도 경계 침범이라 MPC 가 서 있기를 고른다) 조향
