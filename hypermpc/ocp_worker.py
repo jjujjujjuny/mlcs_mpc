@@ -119,6 +119,7 @@ def main():
                       wall_heading=c.get('wall_heading', 0.0),
                       wall_heading_r=c.get('wall_heading_r', 0.25),
                       bounds_param=c.get('bounds_param', False))
+    cfg['q_delta'] = float(c.get('q_delta', cfg['q_delta']))     # 조향 명령−상태 비용 (생성 코드에 들어감)
     # ★ 마찰은 상태 x[6] 로 들어간다 (생성 코드 밖). 예전에는 노드 값을 안 받고 make_cfg 기본값으로
     #   덮어써서 hmpc.yaml 의 friction 이 적용되지 않았다 (2026-11-08 발견).
     fric = float(c.get('friction', cfg['friction']))

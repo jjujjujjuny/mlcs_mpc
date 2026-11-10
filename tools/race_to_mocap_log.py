@@ -7,7 +7,7 @@ race_to_mocap_log.py — 라이다로 달린 race 로그의 자세를 mocap 정�
   다시 뽑는다. 그러면 clean_drive_log → prep_hpm_dataset 가 mocap 주행과 똑같이 처리한다.
 
     x, y, yaw          mocap 뒤축 자세 (mocap 프레임, mocap.yaml 오프셋 적용)를 stamp 에 맞춰 보간
-    cmd_*, servo       직전 값 유지 (명령은 계단이다)
+    cmd_*, servo       직전 값 유지 (명령은 계단이다). recv/cmd_recv 열이 있으면 도착 시각 기준 (아래 ★)
     나머지 (모터 등)    선형 보간
     mocap 이 30 ms 넘게 없거나 로거가 100 ms 넘게 비면 motor_rpm 을 비운다 → clean 이 '빈 칸' 으로 자른다
 
@@ -43,12 +43,25 @@ def convert(drive_csv, align_csv):
     out['x'] = np.interp(g, t, M['x'])
     out['y'] = np.interp(g, t, M['y'])
     out['yaw'] = np.angle(np.exp(1j * np.interp(g, t, np.unwrap(M['yaw']))))
-    j = np.clip(np.searchsorted(st, g, side='right') - 1, 0, len(st) - 1)
+    # ★ 명령·VESC 값의 시간축 (2026-11-10). 로거는 상태가 '도착'할 때 행을 쓰는데 stamp 는 그 상태의
+    #   시각이라, 라이다 주행에서는 위치추정 지연 (15~51 ms) 만큼 이르다. 그 행의 명령을 stamp 에 붙이면
+    #   차가 명령에 그만큼 늦게 반응하는 것처럼 보인다. recv (행 쓴 시각) / cmd_recv (명령 도착 시각) 열이
+    #   있으면 그걸 쓴다. 없으면 (예전 로그) stamp.
+    has_recv = 'recv' in d.columns and d['recv'].notna().mean() > 0.9
+    tv = d['recv'].to_numpy(dtype=float) if has_recv else st      # VESC·서보 값의 시각
+    if has_recv and 'cmd_recv' in d.columns and d['cmd_recv'].notna().any():
+        e = d[['cmd_recv', 'cmd_speed', 'cmd_steer']].dropna().drop_duplicates('cmd_recv')
+        te = e['cmd_recv'].to_numpy()
+        jc = np.searchsorted(te, g, side='right') - 1
+        for c in ('cmd_speed', 'cmd_steer'):
+            v = e[c].to_numpy(dtype=float)
+            out[c] = np.where(jc >= 0, v[np.clip(jc, 0, len(v) - 1)], np.nan)
+    j = np.clip(np.searchsorted(tv, g, side='right') - 1, 0, len(tv) - 1)
     for c in d.columns:
-        if c in ('time', 'dt', 'stamp', 'x', 'y', 'yaw'):
+        if c in ('time', 'dt', 'stamp', 'x', 'y', 'yaw') or c in out.columns:
             continue
         v = d[c].to_numpy(dtype=float)
-        out[c] = v[j] if c in HOLD else np.interp(g, st, v)
+        out[c] = v[j] if c in HOLD else np.interp(g, tv, v)
 
     def nearest_gap(src):
         k = np.clip(np.searchsorted(src, g), 1, len(src) - 1)

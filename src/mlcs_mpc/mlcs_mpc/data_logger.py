@@ -84,6 +84,10 @@ COLUMNS = [
     'servo_position',  # 조향 서보 지령 (0~1)
     # ── 제어기 ──────────────────────────────────────────────────────────
     'solve_ms',        # /mpc/solve_time 최신값. 최근 0.5초에 없으면 빈칸
+    # ── 시각 (2026-11-10 추가, 맨 끝에만 붙인다 — prep·clean 은 열 이름으로 읽는다) ──
+    'recv',            # 이 행을 쓴 시각 (ROS 시계, stamp 와 같은 시계). 명령·VESC 값은 이 순간의 최신값
+    'cmd_recv',        # 지금 cmd_* 값이 도착한 시각. ★ 라이다 주행은 stamp 가 위치추정 지연만큼 이르다 —
+                       #   명령을 stamp 에 붙이면 차가 명령에 늦게 반응하는 것처럼 보인다 (15~51 ms, 맵마다 다름)
 ]
 
 
@@ -126,6 +130,7 @@ class DataLogger(Node):
 
         # ── 최신값 보관 (mocap 틱에 붙인다) ──────────────────────────
         self.cmd = None          # (speed, steer)
+        self.cmd_t = None        # 그 명령이 도착한 시각 (ROS 시계)
         self.vesc = None         # dict
         self.servo = None
         self.solve_ms = None
@@ -185,6 +190,7 @@ class DataLogger(Node):
     # ────────────────────────────────────────────────────────────────
     def _drive_cb(self, msg):
         self.cmd = (msg.drive.speed, msg.drive.steering_angle)
+        self.cmd_t = self._now()
         self.cmd_seen = True
 
     def _vesc_cb(self, msg):
@@ -196,6 +202,10 @@ class DataLogger(Node):
             'duty_cycle': s.duty_cycle,
             'voltage': s.voltage_input,
         }
+
+    def _now(self):
+        t = self.get_clock().now().nanoseconds
+        return t * 1e-9
 
     def _solve_cb(self, msg: Float32):
         self.solve_ms = msg.data
@@ -245,6 +255,8 @@ class DataLogger(Node):
             '' if self.servo is None else f'{self.servo:.4f}',
             '' if self.solve_ms is None or time.monotonic() - self.solve_t > 0.5
             else f'{self.solve_ms:.2f}',
+            f'{self._now():.4f}',
+            '' if self.cmd_t is None else f'{self.cmd_t:.4f}',
         ])
         self.rows += 1
 

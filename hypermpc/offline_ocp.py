@@ -849,6 +849,7 @@ def main():
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
                     help='--plant: 차가 HyperPM 파라미터로 움직인다 (상수 MPC 를 시변 차에 시험)')
+    ap.add_argument('--q-delta', type=float, default=None, help='조향 변화 비용 (기본 make_cfg 2.0)')
     ap.add_argument('--bounds-param', action='store_true',
                     help='n 경계를 p 에 넣은 h 제약으로 (주기당 constraints_set 생략). 기본은 상자 경계')
     ap.add_argument('--wall-heading', type=float, default=0.0, metavar='LF',
@@ -893,6 +894,8 @@ def main():
                    ws_acc_max=args.ws_acc_max, ws_dec_max=args.ws_dec_max,
                    wall_heading=args.wall_heading, wall_heading_r=args.wall_heading_r,
                    bounds_param=args.bounds_param)
+    if args.q_delta is not None:
+        cfg['q_delta'] = args.q_delta
 
     print(f'\n■ 정식화  N={args.N}  dt={args.dt}  예측구간 {args.N*args.dt:.2f}초  '
           f'비용 {args.cost}  0/0 방어 {"끔" if args.no_guard else "켬"}  RK4 {args.rk_steps}회')
