@@ -1,0 +1,29 @@
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:431: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  ocp.code_export_directory = os.path.join(build, 'c_generated_code')
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:438: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
+
+■ 정식화  N=60  dt=0.033  예측구간 1.98초  비용 author  0/0 방어 켬  RK4 4회
+  ★ 타이어 계수는 아직 저자 기본값이다 (질량 3.284, I_z, lr 만 우리 차). 동정값이 나오면 다시 잴 것.
+■ 이전 빌드 사용: /home/mlcs/hmpc_build/N60_author_guard_rk4_hard_slack
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:441: DeprecationWarning:  The `json_file` argument is deprecated in v0.5.6 and will be removed in a future release. Set AcadosOcp.code_gen_options.json_file instead.
+  solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
+/home/mlcs/acados/interfaces/acados_template/acados_template/acados_code_gen_options.py:361: UserWarning: A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory /home/mlcs/hmpc_build/N60_author_guard_rk4_hard_slack/c_generated_code instead.
+  warnings.warn(f"A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory {self.code_export_directory} instead.")
+OCP formulation matches previous via hash, code reuse possible.
+  ✓ 0.1초
+  후진 탈출 0번
+
+■ track  (1800회, 첫 풀이 79.0 ms 는 통계에서 뺌)
+  status      {0: 1800}
+  풀이 시간   평균   50.43  p95   90.04  최대  131.50 ms   (예산 33.0 ms, 초과 74.7%)
+  주기 전체   평균  402.69 ms  (곡률 갱신 포함)
+  |n| 최대 0.363 m  (경계 0.50)
+  벽 경계 밖 1.4%  진행 77.78 m (1.31 m/s 평균)
+  마지막 상태 vx 0.718  vy 0.112  r 0.638  n 0.220  ws 0.722  delta 0.356
+  상대 1.40 m/s, d +0.25: 추월 0번, 최소 중심 거리 0.73 m, 겹침(충돌) 0 주기, 모드 {'free': 3, 'trail': 1403, 'right': 394}, 뒤따름 정지 0번
+  겹침 중 상대가 뒤에서 박은 것 0 주기 (가상 상대는 피하지 않는다)
+  1 s 앞 예측 오차 (제로샷, 240개): s RMS 0.153 m, d RMS 0.115 m
+  1 s 앞 예측 오차 (GP, 1530개): s RMS 0.029 m, d RMS 0.010 m
+  GP 다시 맞추기 평균 8766.0 ms, 최대 14940.0 ms (1 Hz)
+  GP 사용 1560/1800 주기, 우리 1.31 m/s · 상대 1.28 m/s 평균

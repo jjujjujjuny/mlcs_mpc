@@ -1,0 +1,23 @@
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:431: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  ocp.code_export_directory = os.path.join(build, 'c_generated_code')
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:438: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
+
+■ 정식화  N=60  dt=0.033  예측구간 1.98초  비용 author  0/0 방어 켬  RK4 4회
+  ★ 타이어 계수는 아직 저자 기본값이다 (질량 3.284, I_z, lr 만 우리 차). 동정값이 나오면 다시 잴 것.
+■ 이전 빌드 사용: /home/mlcs/hmpc_build/N60_author_guard_rk4_hard_slack
+/home/mlcs/mlcs_mpc/hypermpc/offline_ocp.py:441: DeprecationWarning:  The `json_file` argument is deprecated in v0.5.6 and will be removed in a future release. Set AcadosOcp.code_gen_options.json_file instead.
+  solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
+/home/mlcs/acados/interfaces/acados_template/acados_template/acados_code_gen_options.py:361: UserWarning: A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory /home/mlcs/hmpc_build/N60_author_guard_rk4_hard_slack/c_generated_code instead.
+  warnings.warn(f"A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory {self.code_export_directory} instead.")
+OCP formulation matches previous via hash, code reuse possible.
+  ✓ 0.0초
+  후진 탈출 0번
+
+■ track  (2회, 첫 풀이 21.3 ms 는 통계에서 뺌)
+  status      {0: 2}
+  풀이 시간   평균   26.66  p95   26.66  최대   26.66 ms   (예산 33.0 ms, 초과 0.0%)
+  주기 전체   평균   50.60 ms  (곡률 갱신 포함)
+  |n| 최대 0.001 m  (경계 0.50)
+  벽 경계 밖 0.0%  진행 0.03 m (0.51 m/s 평균)
+  마지막 상태 vx 1.072  vy 0.080  r 0.415  n 0.001  ws 1.083  delta 0.295
