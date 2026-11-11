@@ -61,7 +61,9 @@
 
   // 젯슨은 기다리고, 노트북이 접속해 온다
   mode: "router",
-  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+  // ★ 2026-11-11: 젯슨 안에서만 듣는다. 노트북은 SSH 터널로만 (tools/zenoh/link.sh).
+  //   와이파이에 열어 두면 같은 공유기의 누구든 /initialpose·/mpc/go 를 보낼 수 있었다.
+  listen: { endpoints: ["tcp/127.0.0.1:7447"] },
 
   // ★ 자동 발견을 끈다 — 같은 공유기에 다른 팀 Zenoh 브리지가 있으면 서로 붙어서
   //   토픽이 섞인다 (다른 팀 /initialpose 가 우리 위치추정을 옮겨 버릴 수 있다)

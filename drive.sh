@@ -718,7 +718,8 @@ start_bridge () {
     PIDS="$PIDS $!"
     local wip
     wip="$(ip -4 -br addr show wlP1p1s0 2>/dev/null | awk '{print $3}' | cut -d/ -f1)"
-    log "노트북 브리지  ${GRN}tcp/${wip:-<와이파이 IP 없음>}:7447${RST}  → 노트북에서 ./laptop.sh ${wip:-<IP>}"
+    # 브리지는 127.0.0.1 에서만 듣는다 — 노트북은 SSH 터널로 (tools/zenoh/link.sh, 2026-11-11)
+    log "노트북 브리지 (젯슨 안 7447, SSH 터널 전용)  → 노트북에서 ./car.sh panel  (젯슨 ${wip:-<와이파이 IP 없음>})"
 }
 
 bringup_running () {
@@ -1493,8 +1494,8 @@ bridge)
         warn "브리지가 이미 떠 있습니다 — 그대로 둡니다"; exit 0
     fi
     WIP="$(ip -4 -br addr show wlP1p1s0 2>/dev/null | awk '{print $3}' | cut -d/ -f1)"
-    log "Zenoh 브리지 — 노트북이 접속할 주소:"
-    echo "    ${BLD}tcp/$(hostname).local:7447${RST}   또는   tcp/${WIP:-<와이파이 IP 없음>}:7447"
+    log "Zenoh 브리지 — 젯슨 안 127.0.0.1:7447 만 듣는다 (노트북은 SSH 터널, tools/zenoh/link.sh)"
+    echo "    노트북에서: ${BLD}./car.sh panel${RST} 또는 ${BLD}./car.sh rviz${RST}   (젯슨 주소 ${WIP:-<와이파이 IP 없음>})"
     [ -z "$WIP" ] && warn "와이파이에 IP 가 없습니다. 연결되면 브리지는 그대로 받아 줍니다."
     log "Ctrl+C 로 종료. 주행 노드에는 영향 없음."
     exec "$ZB" -c "$SCRIPT_DIR/tools/zenoh/jetson.json5"

@@ -26,6 +26,7 @@
 #     savemap <이름>      맵핑 중 맵 저장 (백그라운드)
 #     maptrack <맵>       맵으로 트랙 만들기 (백그라운드)
 #     usage               drive.sh·race.sh·bat.sh 맨 위 사용법 주석 (명령어 탭을 열 때만)
+#     tunnel              노트북 SSH 터널(tools/zenoh/link.sh)의 젯슨 쪽. 그 터널 sshd 만 코어 0-3·nice 19
 # ============================================================================
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -85,6 +86,16 @@ usage)
         awk 'NR==1{next} /^#/{print; next} {exit}' "$ROOT/$f"
     done
     ;;
+tunnel)
+    # ★ link.sh 의 'ssh -L ... remote.sh tunnel' 로만 불린다. $PPID = 바로 이 터널 연결의 sshd.
+    #   (sshd 는 소켓 정보를 사용자에게 안 보여 줘서 ss 로는 어느 sshd 가 터널인지 모른다 — 실측.
+    #    이름으로 고르면 제어판 명령용 sshd 를 잘못 집을 수 있고, 그러면 start 가 nice 19 를 물려준다)
+    taskset -acp 0-3 "$PPID" >/dev/null 2>&1
+    renice -n 19 -p "$PPID" >/dev/null 2>&1
+    light
+    # 연결이 끊기면 echo 가 SIGPIPE 로 끝나 남지 않는다 (sleep 만 두면 고아로 남는다)
+    while sleep 5; do echo || exit 0; done
+    ;;
 screen)
     light
     tmux capture-pane -p -J -S -80 -t race 2>/dev/null || echo "(젯슨에 실행 중인 화면 없음)"
@@ -115,6 +126,10 @@ set)
     ;;
 start)
     # ★ light 를 부르지 않는다 (위 원칙)
+    # 안전장치: 이 셸이 nice 상태면 tmux 서버·hmpc·솔버가 그걸 물려받는다 — 띄우지 않는다
+    if [ "$(nice)" != 0 ]; then
+        echo "✗ 명령 연결이 nice $(nice) 상태입니다 — 주행을 띄우지 않습니다. 제어판을 닫고 다시 여세요"; exit 1
+    fi
     what="${2:-}"
     case "$what" in
         bench)   cmd="MLCS_RACE_BENCH=1 ./race.sh" ;;

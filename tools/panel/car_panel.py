@@ -924,11 +924,12 @@ class Panel(QtWidgets.QWidget):
             self.note(f'노트북 브리지 실행 파일이 없습니다: {ZB} (tools/zenoh/README.md)')
             return
         log = open(os.path.join(os.environ.get('TMPDIR', '/tmp'), 'mlcs_panel_bridge.log'), 'w')
+        # ★ SSH 터널 안으로 (link.sh). 젯슨 브리지는 와이파이에 열려 있지 않다 (2026-11-11)
+        #   닫을 때 killpg 로 link.sh·터널·브리지가 같이 내려간다
         self.bridge = subprocess.Popen(
-            [ZB, '-c', os.path.join(ROOT, 'tools', 'zenoh', 'laptop.json5'),
-             '-e', f'tcp/{self.host}:7447'], stdout=log, stderr=subprocess.STDOUT,
-            start_new_session=True)
-        self.note(f'노트북 브리지 → tcp/{self.host}:7447')
+            [os.path.join(ROOT, 'tools', 'zenoh', 'link.sh'), self.host],
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        self.note(f'노트북 브리지 → SSH 터널 → {self.host} (로그: mlcs_tunnel.log·mlcs_laptop_bridge.log)')
 
     def open_rviz(self):
         if self.rviz is not None and self.rviz.poll() is None:

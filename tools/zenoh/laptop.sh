@@ -9,7 +9,8 @@
 #     ./laptop.sh 192.168.0.7      IP 로 직접 (mDNS 가 안 될 때)
 #
 #  젯슨에서 먼저:  ./drive.sh bridge   (주행과 별도 창, tmux 안에서)
-#  터미널은 따로: ssh -t mlcs@mlcs-car.local tmux new -A -s race
+#  터미널은 따로: ./car.sh term
+#  ★ 2026-11-11 부터 브리지는 SSH 터널 안으로 (link.sh) — 이 노트북 SSH 키가 젯슨에 있어야 한다
 # ============================================================================
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,15 +41,20 @@ if ! ping -c1 -W2 "$HOST" >/dev/null 2>&1; then
 fi
 
 BR_PID=""
-cleanup () { [ -n "$BR_PID" ] && kill "$BR_PID" 2>/dev/null; }
+cleanup () { [ -n "$BR_PID" ] && kill -TERM -- "-$BR_PID" 2>/dev/null; }   # link.sh 그룹째
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 LOG="${TMPDIR:-/tmp}/mlcs_laptop_bridge.log"
-"$ZB" -c "$HERE/laptop.json5" -e "tcp/$HOST:7447" >"$LOG" 2>&1 &
-BR_PID=$!
-sleep 2
-kill -0 "$BR_PID" 2>/dev/null || { err "브리지가 바로 죽었습니다 — $LOG"; tail -5 "$LOG"; exit 1; }
-log "브리지 → ${GRN}tcp/$HOST:7447${RST}  (로그: $LOG)"
+if pgrep -f "$ZB" >/dev/null 2>&1; then
+    log "노트북 브리지가 이미 떠 있습니다 (제어판?) — 그대로 씁니다"
+else
+    # ★ SSH 터널 안으로 (link.sh). 젯슨 브리지는 와이파이에 열려 있지 않다 (2026-11-11)
+    setsid "$HERE/link.sh" "$HOST" >/dev/null 2>&1 &
+    BR_PID=$!
+    sleep 3
+    kill -0 "$BR_PID" 2>/dev/null || { err "브리지가 바로 죽었습니다 — $LOG"; tail -5 "$LOG"; exit 1; }
+    log "브리지 → ${GRN}SSH 터널 → $HOST${RST}  (로그: $LOG, ${TMPDIR:-/tmp}/mlcs_tunnel.log)"
+fi
 log "RViz — Fixed Frame=map. 2D Pose Estimate 로 찍으면 젯슨으로 간다"
 rviz2 -d "$HERE/laptop.rviz"
