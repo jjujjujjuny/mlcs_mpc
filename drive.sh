@@ -802,9 +802,11 @@ start_localization () {
         lua=localization_2d_odom.lua
         remap=(--ros-args -r odom:=/odometry/filtered)
         log "  오도메트리: ${GRN}바퀴 속도 + 자이로${RST} (wheel_odom, $lua)"
-        taskset -c 0-3 ros2 run mlcs_mpc wheel_odom >"$(run_log wheel_odom)" 2>&1 &
-        PIDS="$PIDS $!"
     fi
+    # wheel_odom 은 늘 띄운다 — lidar_bridge 가 MPC 요레이트를 자이로로 받는다 (KF r 은 약 110 ms 늦음, 11-11).
+    #   Cartographer 가 오도메트리를 쓰는지는 위 loc_odom 이 정한다 (off 면 remap 없음)
+    taskset -c 0-3 ros2 run mlcs_mpc wheel_odom >"$(run_log wheel_odom)" 2>&1 &
+    PIDS="$PIDS $!"
     taskset -c 0-3 ros2 run cartographer_ros cartographer_node \
         -configuration_directory "$SCRIPT_DIR/src/mlcs_mpc/config/cartographer" \
         -configuration_basename "$lua" \
@@ -1127,9 +1129,7 @@ hmpc)
             taskset -c 0-3 rviz2 -d "$SCRIPT_DIR/src/mlcs_mpc/config/cartographer/localization.rviz" \
                 >/tmp/mlcs_rviz.log 2>&1 &
             PIDS="$PIDS $!"
-        else
-            log "DISPLAY 가 없어 젯슨 RViz 는 띄우지 않습니다 — 노트북 RViz 로 보세요 (브리지)"
-        fi
+        fi      # DISPLAY 가 없으면(SSH·제어판) 젯슨 RViz 는 안 띄운다 — 노트북 RViz 로 본다
         log "위치: ${GRN}라이다${RST} (Cartographer, 맵 ${MLCS_HMPC_MAP})"
         log "맵핑 시작 자리·방향 근처에 두면 위치를 알아서 잡습니다 — RViz 에서 맞는지 보고 B"
         echo "    어긋나 있으면 RViz '2D Pose Estimate' 로 찍거나 LT 끝까지 (차가 멈춰 있을 때)"
