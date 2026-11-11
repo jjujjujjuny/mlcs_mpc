@@ -417,6 +417,48 @@ def test_lidar_map_pin():
     return r
 
 
+def test_lidar_gyro_rate():
+    # 11-11: /mpc/state 요레이트는 자이로 (/odometry/filtered) — KF r 은 약 110 ms 늦다. 끊기면 KF 로
+    from geometry_msgs.msg import PoseStamped
+    from nav_msgs.msg import Odometry
+    exe = EXE.replace('hmpc_node', 'lidar_bridge')
+    log = open('/tmp/mlcs_hmpc_test_node.log', 'ab')
+    proc = subprocess.Popen([exe, '--ros-args', '-p', 'stop_on_jump:=false'], stdout=log, stderr=log,
+                            start_new_session=True)
+    n = rclpy.create_node('fake_carto_gyro')
+    pose_pub = n.create_publisher(PoseStamped, '/tracked_pose', 10)
+    odo_pub = n.create_publisher(Odometry, '/odometry/filtered', 10)
+    got = []
+    n.create_subscription(Odometry, '/mpc/state', lambda m: got.append(m.twist.twist.angular.z), 10)
+
+    def run(secs, gyro):
+        end = time.monotonic() + secs
+        while time.monotonic() < end:
+            m = PoseStamped()
+            m.header.stamp = n.get_clock().now().to_msg()
+            m.header.frame_id = 'map'
+            m.pose.orientation.w = 1.0          # 서 있다 → KF r = 0
+            pose_pub.publish(m)
+            if gyro is not None:
+                o = Odometry()
+                o.twist.twist.angular.z = gyro
+                odo_pub.publish(o)
+            rclpy.spin_once(n, timeout_sec=0.0)
+            time.sleep(0.006)
+
+    try:
+        run(2.0, 0.5)
+        r = check('자이로가 있으면 그 값 (0.5 rad/s)', bool(got) and abs(got[-1] - 0.5) < 1e-6,
+                  f'{got[-1]:.3f}' if got else '없음')
+        run(1.0, None)
+        r &= check('자이로가 끊기면 KF r (0)', abs(got[-1]) < 0.05, f'{got[-1]:.3f}')
+    finally:
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.wait(timeout=5)
+        n.destroy_node()
+    return r
+
+
 def test_bridge_frozen_pose():
     # 진짜 mocap_bridge 에 가짜 /car/pose. 마커를 가렸을 때처럼 pose 만 멈춘다.
     from geometry_msgs.msg import PoseStamped
@@ -468,7 +510,7 @@ def main():
     a = ap.parse_args()
     rclpy.init()
     tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench,
-             test_opponent_watch, test_lidar_map_pin, test_bridge_frozen_pose]
+             test_opponent_watch, test_lidar_map_pin, test_lidar_gyro_rate, test_bridge_frozen_pose]
     bad = []
     for f in tests:
         if a.only and a.only != f.__name__:

@@ -827,6 +827,20 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                 if t_left <= 1e-9:
                     break
             x = xx
+        vlag = float(getattr(args, 'vel_lag', 0.0) or 0.0)
+        if vlag > 0 and len(hist_x) > 1:
+            # ★ 11-11 실트랙: lidar_bridge KF 가 낸 vx·vy·r 이 자이로보다 약 110 ms 늦다 (자세는 10~20 ms).
+            #   OCP 상태의 속도 성분 (x[3] vx, x[4] vy+lr·r, x[5] r) 만 vel_lag 초 전 참값으로
+            tq = max(i * args.dt - vlag, 0.0)
+            j = min(int(tq / args.dt), len(hist_x) - 1)
+            a_ = tq / args.dt - j
+            xo = hist_x[j] + a_ * (hist_x[min(j + 1, len(hist_x) - 1)] - hist_x[j])
+            x = np.array(x, float)
+            # VEL_LAG_IDX="3,4" 처럼 고르면 그 성분만 (r 은 자이로로 바로 받는 경우를 흉내)
+            for k_ in [int(v) for v in os.environ.get('VEL_LAG_IDX', '3,4,5').split(',')]:
+                x[k_] = xo[k_]
+            if '5' not in os.environ.get('VEL_LAG_IDX', '3,4,5').split(','):
+                x[4] = xo[4] - 0.1537 * xo[5] + 0.1537 * x[5]    # x[4] = vy + lr·r — r 몫은 지금 값
         if need_restart:        # 노드: 비정상 해 뒤 다음 요청은 cmd 1 (초기 추측을 지금 상태로)
             xr = np.array(x, float)
             xr[3], xr[7] = max(xr[3], V_FLOOR), max(xr[7], V_FLOOR)
@@ -1100,6 +1114,8 @@ def main():
                     help='--plant: 차가 이만큼 (s, 주기 단위로 반올림) 늦은 명령으로 움직인다')
     ap.add_argument('--delay-extra', type=float, default=0.0,
                     help='--delay-comp 와 (state-delay 없이): 상태를 이만큼 앞으로 예측 (노드 delay_extra)')
+    ap.add_argument('--vel-lag', type=float, default=0.0,
+                    help='OCP 에 주는 vx·vy·r 만 이만큼 (s) 늦게 (실차 lidar_bridge KF 속도 지연 약 0.11)')
     ap.add_argument('--state-delay', type=float, default=0.0,
                     help='--plant: OCP 에 이만큼 (s) 늦은 상태를 준다 (라이다 센서→명령 지연 흉내)')
     ap.add_argument('--delay-comp', action='store_true',

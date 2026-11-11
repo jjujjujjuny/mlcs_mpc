@@ -57,6 +57,12 @@ class LidarBridge(Node):
         #   (lidar_obstacles 맞춤 기준 10~40 cm, 5~10°, 맞춤 비율 1.0 → 0.3 — 주행 불가).
         #   lidar_obstacles 가 매 스캔 저장한 맵 (pgm) 에 맞춰 낸 보정 /loc/correction 을 조금씩 적분해 자세에 더한다.
         d('map_pin', False)
+        # ★ 요레이트는 자이로로 (2026-11-11 실트랙): KF 가 위치를 미분해 낸 r 은 자이로보다 약 110 ms 늦다
+        #   (자세 yaw 는 10~20 ms). 이 늦은 r 과 조향 명령 지연 (~70 ms) 이 겹쳐 고속 직선에서 좌우로 출렁였다
+        #   (offline 1111_3 v4.8: 둘 다 늦으면 직선 0.5~2 Hz 조향 11.3°, 실차 13~14° / r 만 자이로면 6.4°).
+        #   wheel_odom (/odometry/filtered, 바이어스 뺀 자이로 rad/s) 이 있으면 그 값을 쓰고, 0.1 s 넘게 끊기면 KF r.
+        d('gyro_rate', True)
+        d('gyro_timeout', 0.1)
         d('pin_gain', 0.1)          # 보정 메시지 하나당 적분 비율 (라이다 40 Hz → 시정수 약 0.25 s)
         d('pin_min_fit', 0.80)      # 맞춤 비율 (벽에 붙은 스캔 점 비율) 이 이 이상일 때만
         d('pin_step_xy', 0.01)      # 메시지 하나당 최대 이동 m (튀지 않게. 0.4 m/s 까지 따라감)
@@ -90,6 +96,12 @@ class LidarBridge(Node):
         self.create_subscription(Bool, '/localization/ready', self._ready_cb,
                                  QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_timer(0.05, self._watchdog)
+        self.gyro_on, self.gyro_to = bool(gp('gyro_rate')), float(gp('gyro_timeout'))
+        self.gyro_r, self.gyro_t = 0.0, -1e9
+        self.gyro_used = self.gyro_fallback = 0
+        if self.gyro_on:
+            self.create_subscription(Odometry, '/odometry/filtered', self._gyro_cb, 10)
+            self.create_timer(10.0, self._gyro_report)
         self.pin = bool(gp('map_pin'))
         self.pc = [0.0, 0.0, 0.0]       # 누적 보정 (dx, dy, dyaw)
         self.pin_n = self.pin_skip = 0
@@ -104,6 +116,10 @@ class LidarBridge(Node):
         if self.require_ready:
             self.get_logger().warn('위치 설정 전 — RViz 2D Pose Estimate 로 시작 위치를 찍을 때까지 출발하지 않습니다')
         self.get_logger().info(f'lidar_bridge: {gp("pose_topic")} 구독, timeout={self.timeout}s')
+
+    def _gyro_cb(self, m):
+        self.gyro_r = m.twist.twist.angular.z
+        self.gyro_t = self.get_clock().now().nanoseconds * 1e-9
 
     def _corr_cb(self, m):
         fit = m.pose.position.z
@@ -122,6 +138,15 @@ class LidarBridge(Node):
             self.pc[1] *= self.pin_mxy / r
         self.pc[2] = max(-self.pin_mw, min(self.pin_mw, self.pc[2]))
         self.pin_n += 1
+
+    def _gyro_report(self):
+        n = self.gyro_used + self.gyro_fallback
+        if n and self.gyro_fallback:
+            self.get_logger().warn(f'요레이트: 자이로 {self.gyro_used} / KF {self.gyro_fallback} (자이로 끊김 — wheel_odom 확인)')
+        elif n and not getattr(self, '_gyro_said', False):
+            self.get_logger().info('요레이트: 자이로 (wheel_odom) 사용 중')
+            self._gyro_said = True
+        self.gyro_used = self.gyro_fallback = 0
 
     def _pin_report(self):
         self.get_logger().info(f'맵 고정: 보정 {self.pc[0] * 100:+.1f}, {self.pc[1] * 100:+.1f} cm, '
@@ -187,7 +212,14 @@ class LidarBridge(Node):
         od.pose.pose.orientation.x, od.pose.pose.orientation.y = qx, qy
         od.pose.pose.orientation.z, od.pose.pose.orientation.w = qz, qw
         od.twist.twist.linear.x, od.twist.twist.linear.y = vx, vy
-        od.twist.twist.angular.z = sw[1]
+        r_out = sw[1]
+        if self.gyro_on:
+            if now - self.gyro_t < self.gyro_to:
+                r_out = self.gyro_r
+                self.gyro_used += 1
+            else:
+                self.gyro_fallback += 1
+        od.twist.twist.angular.z = r_out
         self.state_pub.publish(od)
         self.valid_pub.publish(Bool(data=good and self.ready))
         self.warned = False
