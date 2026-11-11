@@ -2,20 +2,23 @@
 #  레이스 설정 — 숫자를 고치고 저장한 뒤  ./race.sh
 #
 #  여기 없는 값은 src/mlcs_mpc/config/hmpc.yaml 을 따른다.
+#  ★ 대회 확정 (11-11): hmpc.yaml 기본 = 지금까지 가장 좋았던 설정 (11-10 실차 기준 랩 5.12 s)
+#    q_delta 3, qp_cond_n 10, bounds_param, 교착 탈출 후진 켬, 지연 보상 끔, 헤딩 제약 끔.
+#    비교용 race_mocap*.yaml 은 지웠다 (dc07 = act_delay 0.07 은 5.67 s 로 가장 나빴다).
 #  ★ 표시가 붙은 값은 바꾸면 생성 코드를 다시 만든다 (첫 실행 약 20초, 자동).
 # ═══════════════════════════════════════════════════════════════════
 
 # 위치를 어디서 받나. lidar = Cartographer 위치추정 (대회), mocap = 연구실 mocap.
 source: lidar
 # 라이다로 달릴 때 쓸 맵 (maps/<이름>.pbstream). 맵핑을 시작한 자리·방향 근처에서 출발한다.
-map: "1109_3"        # ★ 따옴표 필수 — 1108_5 는 YAML 에서 숫자 11085 가 된다
+map: "1108_7"        # ★ 따옴표 필수 — 1108_5 는 YAML 에서 숫자 11085 가 된다
 
 # 트랙 이름 (lab_map/data/tracks/<이름>/) 또는 prep csv 경로.
 #   lidar 면 그 맵에서 만든 트랙 (./drive.sh maptrack <맵>), mocap 이면 *_mocap 트랙.
-track: "1109_3_track"
+track: "1108_7_track"
 
 # false = bench (속도 항상 0, 조향만). true = 실제로 달린다.
-drive: true
+drive: false
 
 # 기록 태그. 비우면 ('') 기록하지 않는다. → ~/mlcs_data/drive_<시각>_<태그>.csv
 log: race
@@ -23,12 +26,16 @@ log: race
 # 장애물: off = 끔, watch = 찾기만 (RViz 로 확인, MPC 는 안 피함), lidar = 찾아서 피한다.
 #   source: lidar 에서만.
 #   저장한 맵과 비교해 '맵에 없는 것' 을 찾는다 (lidar_obstacles). 맵핑 뒤 트랙이 바뀌면 그것도 장애물로 보인다.
-#   ★ 회피 로직 (opponent.py) 은 오프라인 검증이 아직 통과 전 — 처음엔 v_max 1.0 에서.
+#   회피·뒤따름 로직 (opponent.py) 은 재웅 offline 28 경우 우리 탓 충돌 0 (11-11). 실차는 처음엔 v_max 1.0 에서.
 obstacles: off
+
+# 위치추정 오도메트리 (source: lidar 에서만): off = 스캔만 (지금까지), ekf = 바퀴 속도 ×1.042 + 자이로로
+#   Cartographer 가 다음 위치를 예측 (wheel_odom, localization_2d_odom.lua). 긴 직선 앞뒤 미끄러짐 대책
+loc_odom: off
 
 hmpc:
   # ── 속도 ─────────────────────────────────────────────────────────
-  v_max: 3.0            # m/s. 0.7 에서 시작해 0.2 씩. 상한은 모터 (vesc.yaml speed_max, 약 4.86). MPC 가 코너에서 알아서 감속한다
+  v_max: 2.0            # m/s. 0.7 에서 시작해 0.2 씩. 상한은 모터 (vesc.yaml speed_max, 약 4.86). MPC 가 코너에서 알아서 감속한다
   friction: 0.41        # ★ 모델 접지력. 0.41 (실측·기본)으로 되돌림 (11-08 밤).
                         #   메인 PC: 밤 레이스를 mocap 정답으로 보면 조향 포화 창 374개에서 요레이트 비(예측/실제)
                         #   0.41 → 1.00, 0.30 → 0.91, 0.27 → 0.87. 젯슨이 0.30 을 정한 근거(오후)는 라이다 상태 +
