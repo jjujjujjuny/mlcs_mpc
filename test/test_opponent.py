@@ -56,14 +56,15 @@ def test_track_xy():
 
 def test_tracker():
     t, R = circle()
-    tr = OpponentTracker(t, OppParams())
+    p = OppParams()
+    tr = OpponentTracker(t, p)
     for i in range(200):
         tt = i * 0.01
         tr.update(tt, *xy_on(R, 1.0 + 1.5 * tt, 0.1))
     s, d, vs, vd = tr.state(1.99)
     assert abs(vs - 1.5) < 0.05, vs
     assert abs(d - 0.1) < 0.01 and abs(vd) < 0.05
-    assert tr.state(1.99 + 0.5) is None        # 오래됨
+    assert tr.state(1.99 + p.timeout + 0.1) is None        # 오래됨
     # 트랙 객체를 복사해서 쓴다: 원래 트랙의 연속 s 상태를 건드리지 않는다
     assert t.s_cont is None
 

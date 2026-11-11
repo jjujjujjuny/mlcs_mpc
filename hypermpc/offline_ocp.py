@@ -651,7 +651,9 @@ def make_opponent(track_csv, v, d, gap, alat=0.0, weave=0.0, gp=True):
     from mlcs_mpc.hmpc_core import Track
     from mlcs_mpc.opponent import Opponent, OppParams
     tr = Track(track_csv)
-    return dict(track=tr, logic=Opponent(tr, OppParams(gp=gp)), v=v, d=d, s=gap, modes={}, min_dist=np.inf,
+    # OPP_SET="meas_noise=0.05,timeout=0.6" — OppParams 값을 바꿔 본다 (노드는 opp_<이름> 파라미터)
+    kw = {k: float(v) for k, v in (e.split('=') for e in os.environ.get('OPP_SET', '').split(',') if e)}
+    return dict(track=tr, logic=Opponent(tr, OppParams(gp=gp, **kw)), v=v, d=d, s=gap, modes={}, min_dist=np.inf,
                 hits=0, passes=0, last_ds=None, alat=alat, weave=weave, learned=0, cycles=0, err=[])
 
 
@@ -684,6 +686,18 @@ def _opp_cycle(o, i, dt, qs, x, lo, hi, v_max):
         h = float(np.interp(np.mod(so, tr.length), np.r_[tr.s, tr.length],
                             np.unwrap(np.r_[tr.heading, tr.heading[0]])))
         ox, oy = tr.xy(so, dj)
+        if o.get('see_real'):
+            # ★ 11-11 실트랙 라이다 검출 (1111_2, 벽에 붙어 선 상대): 거리별 발행 비율 <1.5 m 75%, 1.5~2 55%,
+            #   2~3 34%, 3~4 16%, 그 너머 0. 라이다 약 40 Hz → 주기당 한 번만, 위치 잡음 5 cm
+            if j != 2:
+                continue
+            ex_, ey_ = tr.xy(x[0], x[1])
+            dist = float(np.hypot(float(ox) - ex_, float(oy) - ey_))
+            pr = 0.75 if dist < 1.5 else 0.55 if dist < 2.0 else 0.34 if dist < 3.0 else 0.16 if dist < 4.0 else 0.0
+            rg = o.setdefault('rng', np.random.default_rng(0))
+            if rg.random() >= pr:
+                continue
+            ox, oy = float(ox) + rg.normal(0, 0.05), float(oy) + rg.normal(0, 0.05)
         o['logic'].measure(t - dt + dt * (j + 1) / 3, float(ox), float(oy), h)
     o['d_now'] = _opp_line(o, o['s'])[1]
     if i % max(int(round(1.0 / dt)), 1) == 0:      # hmpc_node 의 _opp_refit 타이머 (1 Hz) 와 같게
@@ -1072,6 +1086,8 @@ def main():
     ap.add_argument('--opp-weave', type=float, default=0.0,
                     help='가상 상대 라인을 트랙 선에서 ± 이만큼 (한 바퀴 두 번 흔들림) m')
     ap.add_argument('--opp-no-gp', action='store_true', help='상대 예측에 GP 를 안 쓴다 (제로샷만)')
+    ap.add_argument('--opp-see-real', action='store_true',
+                    help='상대 관측을 11-11 실트랙 라이다처럼 (거리별 검출 확률·끊김·잡음 5 cm)')
     ap.add_argument('--hyper', default=None, metavar='NPZ',
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
@@ -1198,6 +1214,8 @@ def main():
         opp = (make_opponent(args.track, args.opponent, args.opp_d, args.opp_gap, args.opp_alat, args.opp_weave,
                              gp=not args.opp_no_gp)
                if (walls is not None and args.opponent is not None) else None)
+        if opp is not None:
+            opp['see_real'] = args.opp_see_real
         hyper = HyperStage(args.hyper, args.N, args.dt, params) if args.hyper else None
         plant_hyper = HyperStage(args.plant_hyper, args.N, args.dt, params) if args.plant_hyper else None
         run_scenario(solver, args, cfg, name, kappa, x0, args.laps, params, walls, plant,

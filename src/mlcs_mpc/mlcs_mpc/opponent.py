@@ -85,9 +85,12 @@ class OppParams:
     gp: bool = True
     gp_coverage: float = 0.9    # 상대를 본 구간 비율이 이 이상이면 GP 를 쓴다
     bin: float = 0.1            # 상대 라인 기록 구간 m
-    timeout: float = 0.3        # 상대 pose 가 이보다 오래되면 없는 것으로 본다 s
-    meas_noise: float = 0.01    # 상대 위치 측정 표준편차 m (mocap 은 mm 급, 라이다면 키울 것)
-    accel_noise: float = 2.0    # 추적 칼만 가속도 잡음 m/s²
+    # ★ 2026-11-11 실트랙 라이다 (상대는 이제 라이다로만): mocap 값 (0.3 s, 1 cm, 2.0) 이면 끊기고 흔들리는 검출에
+    #   서 있는 상대를 움직인다고 봐서 (1 s 예측 오차 0.95 m) 통로가 흔들리고 옆에서 서서 후진했다.
+    #   offline (--opp-see-real, 1111_2 헤어핀 안쪽 정지 상대): 진행 27 → 68 m (완벽 관측 71), 예측 오차 0.19 m, 비정상 해 29 → 0
+    timeout: float = 0.6        # 상대 pose 가 이보다 오래되면 없는 것으로 본다 s (라이다 검출이 자주 끊긴다)
+    meas_noise: float = 0.08    # 상대 위치 측정 표준편차 m (라이다 검출 중심 흔들림)
+    accel_noise: float = 1.0    # 추적 칼만 가속도 잡음 m/s²
 
 
 def wrap_s(ds, length):
