@@ -186,9 +186,9 @@ class HmpcNode(Node):
         d('recover_reverse', False)
         d('recover_speed', 1.2)         # m/s — 짧고 세게. 0.45~0.5 는 정지에서 모터가 늦게 돌아 느렸다 (실차 11-10)
         d('recover_time', 1.2)          # s — 상한. 보통은 거리로 끝난다
-        d('recover_dist', 0.4)          # m — 이만큼 물러나면 끝 (바로 정지·제동)
+        d('recover_dist', 0.2)          # m — 이만큼 물러나면 끝 (바로 정지·제동). 11-11 실트랙: 0.4 는 구름까지 0.6~0.7 m 라 길었다 → 절반
         d('recover_wait', 1.0)          # s
-        d('recover_tries', 3)           # 같은 자리 (s 0.5 m 안) 에서 이만큼 후진해도 막히면 고장 래치
+        d('recover_tries', 3)           # 같은 자리 (s 1.0 m 안) 에서 이만큼 후진해도 막히면 고장 래치
         d('q_delta', 2.0)               # ★ 조향 명령과 조향 상태 차이 비용 (저자 2.0). 생성 코드에 들어간다
         d('qp_cond_n', 0)               # ★ HPIPM 부분 응축 길이 (0 = acados 기본 N). 생성 코드에 들어간다
         d('wall_heading', 0.0)
@@ -707,6 +707,11 @@ class HmpcNode(Node):
             return False
         if self.rec_s and x[0] - max(self.rec_s) > 1.0:
             self.rec_s = []             # 그 자리를 빠져나갔다
+        # ★ 2026-11-11 실트랙 (1111_2 v_max 4): 후진 끝 바로 뒤 1 s 창에 아직 뒤로 구르는 거리와 MPC 재출발 지연이
+        #   들어가 'ds < 0 → 또 교착' 이 9 번 이어지며 차가 트랙을 5 m 거꾸로 갔다. 후진 끝 1 s 는 창을 비워 둔다.
+        if now - self.rec_end_t < 1.0:
+            self.prog.clear()
+            return False
         self.prog.append((now, float(x[0]), float(self.twist[0])))
         while self.prog and now - self.prog[0][0] > self.rec_wait + 0.2:
             self.prog.popleft()
@@ -724,7 +729,8 @@ class HmpcNode(Node):
                 if 0.0 < back < 1.0:
                     self.get_logger().warn(f'교착이지만 상대가 뒤 {back:.2f} m — 후진 안 함')
                     return False
-        self.rec_s = [q for q in self.rec_s if abs(q - x[0]) < 0.5]
+        # 같은 자리: 후진 0.4 m + 구름 + 재출발 실패까지 덮게 1.0 m (0.5 m 면 뒤로 밀리며 매번 '1번째' 가 됐다)
+        self.rec_s = [q for q in self.rec_s if abs(q - x[0]) < 1.0]
         if len(self.rec_s) >= self.rec_tries:
             self._trip(f'같은 자리에서 후진 탈출 {self.rec_tries}번 뒤에도 교착')
             return True
