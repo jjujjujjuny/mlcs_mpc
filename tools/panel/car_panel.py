@@ -459,11 +459,21 @@ class Panel(QtWidgets.QWidget):
         self.sp_vmax.setSingleStep(0.1)
         self.sp_vmax.setDecimals(1)
         self.cb_obs = nofocus(QtWidgets.QComboBox())
-        self.cb_obs.addItems(['off', 'watch', 'lidar'])
+        self.cb_obs.addItems(['off', 'watch', 'lidar', 'learn'])
+        self.cb_obs.currentTextChanged.connect(lambda _t: self.check_cfg())
+        self.cb_obs.setToolTip('off = 예선 단독 / lidar = 상대 차를 임시 벽으로 피함 (결승) / watch = 찾기만\n'
+                               'learn = 빈 트랙에서 2~3 바퀴: 찾기만 하고, 끝나면 맵 헛것 목록 자동 갱신')
+        self.cb_odom = nofocus(QtWidgets.QComboBox())
+        self.cb_odom.addItems(['off', 'ekf'])
+        self.cb_odom.setToolTip('ekf = 바퀴 속도 + 자이로로 Cartographer 예측 (직선 미끄러짐 대책)')
+        self.cb_pin = nofocus(QtWidgets.QComboBox())
+        self.cb_pin.addItems(['true', 'false'])
+        self.cb_pin.setToolTip('true = 매 스캔을 저장한 맵에 맞춰 위치 보정 (랩이 쌓여도 맵이 안 변함)')
         self.le_log = QtWidgets.QLineEdit()
         self.le_log.setPlaceholderText('비우면 기록 안 함')
         rows = [('맵', self.cb_map), ('트랙', self.cb_track), ('최고 속도 [m/s]', self.sp_vmax),
-                ('장애물', self.cb_obs), ('기록 태그', self.le_log)]
+                ('장애물', self.cb_obs), ('오도메트리', self.cb_odom), ('맵 고정', self.cb_pin),
+                ('기록 태그', self.le_log)]
         for r, (t, w) in enumerate(rows):
             g.addWidget(QtWidgets.QLabel(t), r, 0)
             g.addWidget(w, r, 1, 1, 2)
@@ -815,6 +825,8 @@ class Panel(QtWidgets.QWidget):
             except ValueError:
                 pass
             self.cb_obs.setCurrentText(s.get('obstacles', 'off'))
+            self.cb_odom.setCurrentText(s.get('loc_odom', 'off'))
+            self.cb_pin.setCurrentText(s.get('map_pin', 'true'))
             lg = s.get('log', '')
             self.le_log.setText('' if lg in ("''", '""') else lg)
             self.yaml_loaded = True
@@ -833,11 +845,15 @@ class Panel(QtWidgets.QWidget):
             w = f'트랙 {t} 은(는) 맵 {m} 에서 만든 것이 아닐 수 있어요 (이름이 {m}_ 로 시작하지 않음).'
         if t.endswith('_mocap'):
             w = f'{t} 는 mocap 좌표 트랙이에요. 라이다 주행이면 맞지 않아요.'
+        if self.cb_obs.currentText() == 'learn':
+            w = (w + '\n' if w else '') + ('learn: 트랙에 상대 차·사람이 없어야 해요. 차는 장애물을 안 피하고 달리고, '
+                                             '끝나면 그 자리들이 맵 헛것 목록에 들어가요.')
         self.cfg_warn.setText(w)
 
     def apply_cfg(self):
         want = {'map': self.cb_map.currentText(), 'track': self.cb_track.currentText(),
                 'v_max': f'{self.sp_vmax.value():.1f}', 'obstacles': self.cb_obs.currentText(),
+                'loc_odom': self.cb_odom.currentText(), 'map_pin': self.cb_pin.currentText(),
                 'log': self.le_log.text().strip()}
         changes = {k: v for k, v in want.items() if (self.st.get(k, '') or '') != v
                    and not (k == 'log' and v == '' and self.st.get('log') in ("''", '""'))}

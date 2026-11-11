@@ -19,7 +19,7 @@
 #     lists               맵·트랙 목록 (필요할 때만)
 #     screen              tmux 'race' 화면 마지막 80줄 (그 탭을 볼 때만)
 #     logs                로그 파일들 tail -F (연결 하나로 계속)
-#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log)
+#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin)
 #     start bench|race|mapping
 #     int                 tmux 'race' 에 Ctrl+C (drive.sh 가 정리하며 내린다)
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
@@ -68,7 +68,7 @@ status)
     c=""; [ -r /tmp/mlcs_carto_mode ] && read -r c < /tmp/mlcs_carto_mode; echo "carto_mode=$c"
     read -r l _ < /proc/loadavg; echo "load=$l"
     awk '
-        /^(map|track|obstacles|log|drive):/ {
+        /^(map|track|obstacles|log|drive|loc_odom|map_pin):/ {
             k=$1; sub(":","",k); v=$0; sub(/^[^:]*:[ \t]*/,"",v); sub(/[ \t]*#.*/,"",v); gsub(/"/,"",v)
             if (!(k in seen)) { print k "=" v; seen[k]=1 } }
         /^  v_max:/ && !vm { v=$2; print "v_max=" v; vm=1 }' "$YAML"
@@ -113,8 +113,14 @@ set)
     case "$k" in
         map|track) [[ "$v" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "✗ 이름 형식: $v"; exit 1; }
                    sed -i -E "s/^($k:[[:space:]]*)\"[^\"]*\"/\1\"$v\"/" "$YAML" ;;
-        obstacles) [[ "$v" =~ ^(off|watch|lidar)$ ]] || { echo "✗ obstacles: $v"; exit 1; }
+        obstacles) [[ "$v" =~ ^(off|watch|lidar|learn)$ ]] || { echo "✗ obstacles: $v"; exit 1; }
                    sed -i -E "s/^(obstacles:[[:space:]]*)[a-z]+/\1$v/" "$YAML" ;;
+        loc_odom)  [[ "$v" =~ ^(off|ekf)$ ]] || { echo "✗ loc_odom: $v"; exit 1; }
+                   if grep -q '^loc_odom:' "$YAML"; then sed -i -E "s/^(loc_odom:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
+                   else printf '\nloc_odom: %s\n' "$v" >> "$YAML"; fi ;;
+        map_pin)   [[ "$v" =~ ^(true|false)$ ]] || { echo "✗ map_pin: $v"; exit 1; }
+                   if grep -q '^map_pin:' "$YAML"; then sed -i -E "s/^(map_pin:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
+                   else printf '\nmap_pin: %s\n' "$v" >> "$YAML"; fi ;;
         log)       [[ "$v" =~ ^[A-Za-z0-9_-]*$ ]] || { echo "✗ log 형식: $v"; exit 1; }
                    [ -n "$v" ] || v="''"
                    sed -i -E "s/^(log:[[:space:]]*)[^[:space:]#]+/\1$v/" "$YAML" ;;
