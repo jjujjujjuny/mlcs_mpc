@@ -19,7 +19,7 @@
 #     lists               맵·트랙 목록 (필요할 때만)
 #     screen              tmux 'race' 화면 마지막 80줄 (그 탭을 볼 때만)
 #     logs                로그 파일들 tail -F (연결 하나로 계속)
-#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin delay_comp act_delay)
+#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction delay_comp act_delay)
 #     start bench|race|mapping
 #     int                 tmux 'race' 에 Ctrl+C (drive.sh 가 정리하며 내린다)
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
@@ -73,7 +73,8 @@ status)
             if (!(k in seen)) { print k "=" v; seen[k]=1 } }
         /^  v_max:/ && !vm { v=$2; print "v_max=" v; vm=1 }
         /^  delay_comp:/ && !dc { v=$2; print "delay_comp=" v; dc=1 }
-        /^  act_delay:/ && !ad { v=$2; print "act_delay=" v; ad=1 }' "$YAML"
+        /^  act_delay:/ && !ad { v=$2; print "act_delay=" v; ad=1 }
+        /^  friction:/ && !fr { v=$2; print "friction=" v; fr=1 }' "$YAML"
     ;;
 lists)
     light
@@ -128,6 +129,9 @@ set)
                    sed -i -E "s/^(log:[[:space:]]*)[^[:space:]#]+/\1$v/" "$YAML" ;;
         v_max)     [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "✗ v_max: $v"; exit 1; }
                    sed -i -E "s/^(  v_max:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
+        friction)  [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
+                   awk -v x="$v" 'BEGIN{exit !(x >= 0.2 && x <= 0.6)}' || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
+                   sed -i -E "s/^(  friction:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
         delay_comp|act_delay)
                    if [ "$k" = delay_comp ]; then [[ "$v" =~ ^(true|false)$ ]] || { echo "✗ delay_comp: $v"; exit 1; }
                    else [[ "$v" =~ ^0(\.[0-9]+)?$ ]] || { echo "✗ act_delay (0~0.2 s): $v"; exit 1; }; fi
@@ -136,7 +140,7 @@ set)
                    else sed -i -E "0,/^hmpc:/s//hmpc:\n  $k: $v/" "$YAML"; fi ;;
         *) echo "✗ 바꿀 수 없는 키: $k"; exit 1 ;;
     esac
-    echo "✓ $k = $(case "$k" in v_max|delay_comp|act_delay) sed -n "s/^  $k:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$YAML" | head -1 ;; *) yaml_get "$k" ;; esac)"
+    echo "✓ $k = $(case "$k" in v_max|friction|delay_comp|act_delay) sed -n "s/^  $k:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$YAML" | head -1 ;; *) yaml_get "$k" ;; esac)"
     ;;
 start)
     # ★ light 를 부르지 않는다 (위 원칙)

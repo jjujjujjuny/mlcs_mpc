@@ -469,20 +469,17 @@ class Panel(QtWidgets.QWidget):
         self.cb_pin = nofocus(QtWidgets.QComboBox())
         self.cb_pin.addItems(['true', 'false'])
         self.cb_pin.setToolTip('true = 매 스캔을 저장한 맵에 맞춰 위치 보정 (랩이 쌓여도 맵이 안 변함)')
-        self.cb_dc = nofocus(QtWidgets.QComboBox())
-        self.cb_dc.addItems(['false', 'true'])
-        self.cb_dc.setToolTip('지연 보상: 풀기 전에 상태를 (측정 나이 + 풀이 시간 + 라이다 25 ms + 액추에이터 지연) 만큼\n'
-                              '앞으로 당긴다. 고속 직선 좌우 요동 대책 — 끔/켬을 번갈아 각 3 바퀴 이상 비교')
-        self.sp_act = QtWidgets.QDoubleSpinBox()
-        self.sp_act.setRange(0.0, 0.10)
-        self.sp_act.setSingleStep(0.01)
-        self.sp_act.setDecimals(2)
-        self.sp_act.setToolTip('지연 보상이 켜졌을 때 더 당길 액추에이터 지연 s (권장 0.03, 0.07 은 mocap 에서 과했다)')
+        self.sp_fric = QtWidgets.QDoubleSpinBox()
+        self.sp_fric.setRange(0.20, 0.60)
+        self.sp_fric.setSingleStep(0.01)
+        self.sp_fric.setDecimals(2)
+        self.sp_fric.setToolTip('MPC 가 믿는 접지력 (재빌드 없음). 낮추면 코너 앞에서 일찍 감속한다\n'
+                                '0.36 = 11-11 로비 급커브 교착 대책, 0.41 = 연구실 실측')
         self.le_log = QtWidgets.QLineEdit()
         self.le_log.setPlaceholderText('비우면 기록 안 함')
         rows = [('맵', self.cb_map), ('트랙', self.cb_track), ('최고 속도 [m/s]', self.sp_vmax),
                 ('장애물', self.cb_obs), ('오도메트리', self.cb_odom), ('맵 고정', self.cb_pin),
-                ('지연 보상', self.cb_dc), ('액추에이터 지연 [s]', self.sp_act),
+                ('마찰 계수', self.sp_fric),
                 ('기록 태그', self.le_log)]
         for r, (t, w) in enumerate(rows):
             g.addWidget(QtWidgets.QLabel(t), r, 0)
@@ -837,9 +834,8 @@ class Panel(QtWidgets.QWidget):
             self.cb_obs.setCurrentText(s.get('obstacles', 'off'))
             self.cb_odom.setCurrentText(s.get('loc_odom', 'off'))
             self.cb_pin.setCurrentText(s.get('map_pin', 'true'))
-            self.cb_dc.setCurrentText(s.get('delay_comp', 'false'))
             try:
-                self.sp_act.setValue(float(s.get('act_delay', '0.0')))
+                self.sp_fric.setValue(float(s.get('friction', '0.41')))
             except ValueError:
                 pass
             lg = s.get('log', '')
@@ -869,17 +865,15 @@ class Panel(QtWidgets.QWidget):
         want = {'map': self.cb_map.currentText(), 'track': self.cb_track.currentText(),
                 'v_max': f'{self.sp_vmax.value():.1f}', 'obstacles': self.cb_obs.currentText(),
                 'loc_odom': self.cb_odom.currentText(), 'map_pin': self.cb_pin.currentText(),
-                'delay_comp': self.cb_dc.currentText(), 'act_delay': f'{self.sp_act.value():.2f}',
+                'friction': f'{self.sp_fric.value():.2f}',
                 'log': self.le_log.text().strip()}
         def same(k, v):
             cur = self.st.get(k, '') or ''
-            if k == 'act_delay':        # 0.0 과 0.00 은 같다. 없으면 0
+            if k == 'friction':         # 0.4 와 0.40 은 같다
                 try:
-                    return abs(float(cur or 0) - float(v)) < 1e-9
+                    return abs(float(cur) - float(v)) < 1e-9
                 except ValueError:
                     return False
-            if k == 'delay_comp' and not cur:
-                return v == 'false'     # 없으면 hmpc.yaml 기본 (끔)
             return cur == v or (k == 'log' and v == '' and cur in ("''", '""'))
         changes = {k: v for k, v in want.items() if not same(k, v)}
         if not changes:
