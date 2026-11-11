@@ -133,10 +133,11 @@ ssh -o BatchMode=yes mlcs@192.168.1.7 'hostname; uptime'     # mlcs-car 가 나�
 
 ## 남은 일 (두 노트북 공통)
 
-- [ ] **대회 공유기 `yax_5G` 에서 아직 아무도 안 해 봤다.** 젯슨에 와이파이 프로필이 아직 없다 (비밀번호 필요). 대회장에서 젯슨을 `yax_5G` 에 붙인 뒤 각 노트북에서:
-  `./car.sh ip <대회장 젯슨 IP>` → `./car.sh panel` → bench 로 확인.
-  젯슨 IP 는 젯슨에서 `hostname -I` 로 보거나, `./drive.sh bridge` 가 화면에 보여준다.
-- [ ] 젯슨 `sudo systemctl restart avahi-daemon` 을 아직 안 했다. 하고 나면 IP 대신 `mlcs-car.local` 로 접속할 수 있다. 그 전에는 IP 로.
+- [ ] **대회 공유기 `yax_5G` 에서 아직 아무도 안 해 봤다.** 순서는 [대회장_yax_5G.md](대회장_yax_5G.md).
+  - 연구실에서 미리: 젯슨 프로필 넣기(비밀번호 필요), 각 노트북에서 `./car.sh panel` 한 번 (호스트 키 기록)
+  - 대회장: `./car.sh find` → `./car.sh panel` → bench
+  - 같은 공유기에 다른 팀이 있다. 그 문서 C 절의 SSH 비밀번호 로그인·Zenoh 무인증 문제는 결정이 필요하다
+- [x] avahi (`mlcs-car.local`) — 2026-11-11 해결: 젯슨 재부팅으로 avahi 가 `mlcs-car.local` 로 광고 (`ubuntu.local` 은 이제 응답 없음). 노트북에서 `ping mlcs-car.local` 이 192.168.x 로 나오는지는 아직 확인 전 — 젯슨 자신에게는 docker 주소 172.17.0.1 로 나온다. 노트북에서 확인하는 법은 [대회장_yax_5G.md](대회장_yax_5G.md) 2절
 
 ## 노트북 기록
 

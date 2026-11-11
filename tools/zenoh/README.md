@@ -148,7 +148,7 @@ echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
 
 - [x] 젯슨 `~/.bashrc` 에 `export ROS_LOCALHOST_ONLY=1` + `ros2 daemon stop`
 - [x] `race.sh` (drive.sh hmpc) 가 브리지를 코어 0-3 에 자동으로 띄움, `./drive.sh stop` 이 같이 내림
-- [ ] 젯슨 mDNS 이름: 호스트명은 `mlcs-car` 로 바꿨지만 avahi 가 아직 `ubuntu.local` 로 광고한다 → `sudo systemctl restart avahi-daemon` 하면 `mlcs-car.local` 로 접속 가능. 그 전에는 IP 로
+- [x] 젯슨 mDNS 이름 — 2026-11-11 해결: 젯슨 재부팅으로 avahi 가 `mlcs-car.local` 로 광고 (`ubuntu.local` 은 이제 응답 없음). 노트북에서 `ping mlcs-car.local` 이 192.168.x 로 나오는지는 아직 확인 전 — 젯슨 자신에게는 docker 주소 172.17.0.1 로 나온다
 - [ ] 젯슨에 `yax_5G` 와이파이 프로필 등록 (비밀번호 필요)
 
 ## 젯슨 답 (2026-11-09 22:52)

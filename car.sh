@@ -7,6 +7,8 @@
 #     ./car.sh ip 192.168.1.7   젯슨 주소 저장 (한 번만. 대회장에서 IP 바뀌면 다시)
 #     ./car.sh key              SSH 비밀번호 안 묻게 (한 번만, 젯슨 비밀번호 필요)
 #     ./car.sh pubkey           비밀번호를 모르면: 공개키를 레포에 넣는다 → push
+#     ./car.sh find             ★ 대회장: 같은 공유기에서 젯슨을 찾아 주소 저장 + 시계 확인
+#     ./car.sh clock            노트북·젯슨 시계 차이 (인터넷 없으면 NTP 가 안 맞춘다)
 #
 #     ./car.sh panel            ★ 제어판 (상태·실행·정지·설정·맵 저장·로그를 한 창에서)
 #
@@ -33,9 +35,22 @@ err()  { echo "${RED}[car] ✗ $*${RST}" >&2; }
 
 HOST="$(cat "$HOST_FILE" 2>/dev/null || echo 192.168.1.7)"
 
+# ★ 젯슨 호스트 키를 IP 가 아니라 이름 'mlcs-car' 로 기억한다. 대회장에서 IP 가 바뀌어도
+#   제어판(BatchMode)이 '처음 보는 호스트' 로 막히지 않고, 그 IP 에 다른 기기가 있으면 거부된다.
+#   (젯슨을 다시 설치해 키가 바뀌면: ssh-keygen -R mlcs-car)
+SSHO=(-o HostKeyAlias=mlcs-car)
+learn_hostkey () {      # 처음 한 번만 기록 (이미 있으면 아무것도 안 한다)
+    ssh-keygen -F mlcs-car >/dev/null 2>&1 && return 0
+    ssh "${SSHO[@]}" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=4 \
+        "$USER_AT@$1" true >/dev/null 2>&1
+    ssh-keygen -F mlcs-car >/dev/null 2>&1 && log "젯슨 호스트 키 기록 (mlcs-car)"
+    return 0
+}
+
 need_car () {
-    ping -c1 -W2 "$HOST" >/dev/null 2>&1 && return 0
+    ping -c1 -W2 "$HOST" >/dev/null 2>&1 && { learn_hostkey "$HOST"; return 0; }
     err "젯슨($HOST)에 닿지 않습니다 — 같은 공유기인지 보고, 주소가 바뀌었으면:"
+    err "  ./car.sh find          (같은 공유기에서 젯슨을 찾아 저장)"
     err "  ./car.sh ip <젯슨 IP>"
     exit 1
 }
@@ -43,12 +58,12 @@ need_car () {
 # 젯슨 tmux 'race' 세션에서 명령을 돌리고 붙는다. 세션이 이미 있으면 그냥 붙는다.
 in_tmux () {
     need_car
-    if ssh "$USER_AT@$HOST" 'tmux has-session -t race 2>/dev/null'; then
+    if ssh "${SSHO[@]}" "$USER_AT@$HOST" 'tmux has-session -t race 2>/dev/null'; then
         echo "${YLW}[car] 젯슨에 이미 돌고 있는 세션이 있어 거기에 붙습니다 (새로 시작하려면 먼저 ./car.sh stop)${RST}"
         sleep 1
-        exec ssh -t "$USER_AT@$HOST" 'tmux attach -t race'
+        exec ssh "${SSHO[@]}" -t "$USER_AT@$HOST" 'tmux attach -t race'
     fi
-    exec ssh -t "$USER_AT@$HOST" "tmux new -s race 'cd ~/mlcs_mpc && $1; echo; echo \"[끝남 — 이 창은 exit 로 닫기]\"; exec bash -l'"
+    exec ssh "${SSHO[@]}" -t "$USER_AT@$HOST" "tmux new -s race 'cd ~/mlcs_mpc && $1; echo; echo \"[끝남 — 이 창은 exit 로 닫기]\"; exec bash -l'"
 }
 
 # VSCode(snap) 터미널은 snap 쪽 GTK·GSettings 경로를 물려줘서 Qt/RViz 창이 바로 죽는다
@@ -68,10 +83,57 @@ ip)
     log "젯슨 주소 저장: ${GRN}$2${RST}"
     ping -c1 -W2 "$2" >/dev/null 2>&1 && log "닿습니다 ✓" || err "아직 닿지 않습니다 (주소·공유기 확인)"
     ;;
+find)
+    # 대회장처럼 IP 를 모를 때: mlcs-car.local → 안 되면 같은 /24 에서 SSH 열린 곳을 훑어
+    # hostname 이 mlcs-car 인 곳. 인터넷 없이 된다 (nmap 필요 없음)
+    log "젯슨 찾기..."
+    found=""
+    ip4="$(timeout 3 getent ahostsv4 mlcs-car.local 2>/dev/null | awk 'NR==1{print $1}')"
+    case "$ip4" in ""|172.17.*) ;; *)
+        [ "$(ssh "${SSHO[@]}" -o BatchMode=yes -o ConnectTimeout=3 "$USER_AT@$ip4" hostname 2>/dev/null)" = mlcs-car ] \
+            && found="$ip4" && log "mlcs-car.local → $ip4" ;;
+    esac
+    if [ -z "$found" ]; then
+        dev="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')"
+        me="$(ip -4 -o addr show ${dev:+dev "$dev"} scope global 2>/dev/null | awk '$2!="docker0"{print $4; exit}')"
+        [ -n "$me" ] || { err "이 노트북에 IP 가 없습니다 — 와이파이 연결부터"; exit 1; }
+        net="${me%.*}"; log "mlcs-car.local 안 됨 → $net.0/24 훑기 (노트북 ${me%/*}, 약 3초)"
+        cands="$(for i in $(seq 1 254); do
+                    ( timeout 0.6 bash -c "echo >/dev/tcp/$net.$i/22" 2>/dev/null && echo "$net.$i" ) &
+                 done; wait)"
+        for c in $cands; do
+            [ "$c" = "${me%/*}" ] && continue
+            # 남의 기기일 수 있으니 known_hosts 에 남기지 않고 이름만 본다
+            h="$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$USER_AT@$c" hostname 2>/dev/null)"
+            [ "$h" = mlcs-car ] && { found="$c"; break; }
+        done
+        [ -n "$found" ] || { err "못 찾음 — SSH 22 열린 곳: $(echo $cands | tr '\n' ' ')"
+                             err "젯슨이 켜져 이 공유기에 붙었는지, 노트북 키가 등록됐는지 (./car.sh key)"; exit 1; }
+    fi
+    echo "$found" > "$HOST_FILE"; HOST="$found"
+    log "젯슨: ${GRN}$found${RST} 저장"
+    learn_hostkey "$found"
+    exec "$0" clock
+    ;;
+clock)
+    # 대회장에는 인터넷(NTP)이 없다. 노트북·젯슨 시계가 어긋나면 RViz 에 tf 경고가 난다
+    need_car
+    # 접속(핸드셰이크)이 끝난 뒤 왕복 한 번만 잰다 — 접속 시간이 섞이면 0.1 s 넘게 틀린다 (실측)
+    coproc CK { ssh "${SSHO[@]}" -o BatchMode=yes "$USER_AT@$HOST" 'echo r; read x; date +%s.%N' 2>/dev/null; }
+    read -r -t 8 rdy <&"${CK[0]}" || { err "젯슨 시간을 못 읽음 (SSH)"; exit 1; }
+    t0="$(date +%s.%N)"; echo >&"${CK[1]}"; read -r -t 5 r <&"${CK[0]}"; t1="$(date +%s.%N)"
+    [ -n "$r" ] || { err "젯슨 시간을 못 읽음 (SSH)"; exit 1; }
+    awk -v a="$t0" -v b="$t1" -v r="$r" -v G="$GRN" -v Y="$YLW" -v Z="$RST" 'BEGIN{
+        d=r-(a+b)/2; rt=(b-a)*1000
+        c=(d<0.2 && d>-0.2)?G:Y
+        printf "  시계 차이 (젯슨 − 노트북): %s%+.3f s%s  (왕복 %.0f ms)\n", c, d, Z, rt
+        if (d>=0.2 || d<=-0.2) print "  ⚠ 0.2 s 넘음 — 대회장_yax_5G.md 의 '시계' 절"}'
+    ;;
 key)
     need_car
     [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
-    ssh-copy-id "$USER_AT@$HOST" && log "이제 비밀번호를 묻지 않습니다 ✓" \
+    ssh-copy-id "${SSHO[@]}" "$USER_AT@$HOST" && log "이제 비밀번호를 묻지 않습니다 ✓" \
         || err "등록 실패 — 젯슨 비밀번호를 모르면 ./car.sh pubkey"
     ;;
 setup)
@@ -99,7 +161,7 @@ race)
     ;;
 term)
     need_car
-    exec ssh -t "$USER_AT@$HOST" 'tmux new -A -s race'
+    exec ssh "${SSHO[@]}" -t "$USER_AT@$HOST" 'tmux new -A -s race'
     ;;
 rviz)
     need_car
@@ -140,15 +202,15 @@ check)
     ;;
 bat)
     need_car
-    ssh -t "$USER_AT@$HOST" '~/mlcs_mpc/bat.sh'
+    ssh "${SSHO[@]}" -t "$USER_AT@$HOST" '~/mlcs_mpc/bat.sh'
     ;;
 stop)
     need_car
     log "${RED}젯슨 정지·종료${RST}"
-    ssh -t "$USER_AT@$HOST" '~/mlcs_mpc/drive.sh stop; tmux kill-session -t race 2>/dev/null; true'
+    ssh "${SSHO[@]}" -t "$USER_AT@$HOST" '~/mlcs_mpc/drive.sh stop; tmux kill-session -t race 2>/dev/null; true'
     ;;
 *)
-    sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
     echo "  지금 젯슨 주소: $HOST"
     ;;
 esac

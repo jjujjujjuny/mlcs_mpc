@@ -262,6 +262,7 @@ class Ssh(QtCore.QObject):
         self.host = host
         cp = os.path.expanduser('~/.ssh/cm-carpanel-%r@%h:%p')
         self.base = ['-o', 'ControlMaster=auto', '-o', f'ControlPath={cp}',
+                     '-o', 'HostKeyAlias=mlcs-car',   # ★ IP 가 바뀌어도 같은 젯슨 (car.sh 와 같이)
                      '-o', 'ControlPersist=120', '-o', 'ServerAliveInterval=5',
                      '-o', 'ServerAliveCountMax=2', '-o', 'ConnectTimeout=4',
                      '-o', 'BatchMode=yes', f'{USER}@{host}']
@@ -937,7 +938,7 @@ class Panel(QtWidgets.QWidget):
                                      start_new_session=True)
 
     def open_term(self):
-        cmd = f'ssh -t {USER}@{self.host} "tmux new -A -s race"'
+        cmd = f'ssh -o HostKeyAlias=mlcs-car -t {USER}@{self.host} "tmux new -A -s race"'
         for term in (['gnome-terminal', '--', 'bash', '-c', cmd],
                      ['x-terminal-emulator', '-e', 'bash', '-c', cmd]):
             try:
