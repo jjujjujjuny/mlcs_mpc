@@ -402,7 +402,11 @@ def test_lidar_map_pin():
             time.sleep(0.006)
 
     try:
-        run(2.0, 0.0, 1.0)
+        for _ in range(6):          # 브릿지가 뜨고 ROS 연결이 잡힐 때까지 (가끔 2 s 넘게 걸린다)
+            run(1.0, 0.0, 1.0)
+            if got:
+                break
+        run(1.0, 0.0, 1.0)
         r = check('브릿지 뜸', bool(got), f'{len(got)}개')
         run(3.0, 0.10, 0.5)
         r &= check('맞춤 비율 0.5: 보정 안 함', abs(got[-1] - 1.0) < 0.01, f'x {got[-1]:.3f}')
@@ -454,7 +458,11 @@ def test_lidar_gyro_rate():
             time.sleep(0.006)
 
     try:
-        run(2.0, 0.5)
+        for _ in range(6):          # 브릿지가 뜨고 ROS 연결이 잡힐 때까지 (가끔 2 s 넘게 걸린다)
+            run(1.0, 0.5)
+            if got:
+                break
+        run(1.0, 0.5)
         r = check('자이로가 있으면 그 값 (0.5 rad/s)', bool(got) and abs(got[-1] - 0.5) < 1e-6,
                   f'{got[-1]:.3f}' if got else '없음')
         run(1.0, None)
