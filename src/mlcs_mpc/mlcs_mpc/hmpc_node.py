@@ -432,14 +432,28 @@ class HmpcNode(Node):
             self.opp.measure(self._now(), p.position.x, p.position.y, yaw_from_quat(q))
 
     def _opp_refit(self):
-        with self.lock:
-            was = self.opp.model.tab is not None
-            now = self.opp.model.refit()
+        try:
+            with self.lock:
+                was = self.opp.model.tab is not None
+                now = self.opp.model.refit()
+        except Exception as e:  # noqa: BLE001 — GP 재학습 실패로 노드가 죽으면 안 된다 (제로샷 예측으로 계속)
+            self.get_logger().error(f'상대 GP 재학습 실패 (주행은 계속): {e!r}', throttle_duration_sec=10.0)
+            return
         if now != was:
             self.get_logger().info('상대 라인: ' + ('GP 학습됨 — 상대 선과 속도로 예측' if now
                                                    else '관측 부족 — 제로샷 예측'))
 
     def _opp_markers(self):
+        # ★ 2026-11-11 실트랙: 시각화 타이머의 예외 (ColorRGBA 에 정수) 하나로 노드가 죽어 /drive 가 끊겼다.
+        #   그림은 주행에 필요 없으니 어떤 예외도 삼키고 한 번만 알린다.
+        try:
+            self._opp_markers_impl()
+        except Exception as e:  # noqa: BLE001
+            if not getattr(self, '_warned_markers', False):
+                self._warned_markers = True
+                self.get_logger().error(f'상대 마커 그리기 실패 (주행은 계속): {e!r}')
+
+    def _opp_markers_impl(self):
         with self.lock:
             last = self.opp.last
         arr = MarkerArray()
@@ -451,7 +465,7 @@ class HmpcNode(Node):
             m.ns, m.id, m.type = 'opponent', mid, Marker.LINE_STRIP
             m.action = Marker.ADD if xs is not None else Marker.DELETE
             m.scale.x = width
-            m.color = ColorRGBA(r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3])
+            m.color = ColorRGBA(r=float(rgba[0]), g=float(rgba[1]), b=float(rgba[2]), a=float(rgba[3]))
             m.pose.orientation.w = 1.0
             if xs is not None:
                 m.points = [Point(x=float(a), y=float(b)) for a, b in zip(xs, ys)]

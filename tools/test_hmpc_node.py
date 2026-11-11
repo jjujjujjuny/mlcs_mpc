@@ -159,7 +159,10 @@ class Harness:
             os.killpg(self.proc.pid, signal.SIGINT)
             self.proc.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
-            os.killpg(self.proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass            # 이미 죽었다 (시험이 잡은 고장)
             self.proc.wait()
         self.car.close()
 
@@ -348,6 +351,22 @@ def test_bench():
     return r
 
 
+def test_opponent_watch():
+    # 11-11 실트랙: obstacles watch (상대 토픽 켬, 상대 없음) 에서 마커 타이머 예외로 노드가 죽어 /drive 가 끊겼다
+    x, y, h = track_start()
+    car = FakeCar(x, y, h)
+    n = Harness(car, 'bench:=true', 'opponent_topic:=/obstacle/pose', 'opponent_msg:=pose')
+    car.enable(True)
+    r = check('워커 준비', n.wait_ready())
+    car.spin(3.0)
+    r &= check('상대 토픽 켠 채 3 s 뒤에도 노드 살아 있음', n.proc.poll() is None)
+    t = time.monotonic()
+    car.spin(1.0)
+    r &= check('명령 계속 나옴', len(car.since(t)) > 10, f'{len(car.since(t))}개')
+    n.close()
+    return r
+
+
 def test_bridge_frozen_pose():
     # 진짜 mocap_bridge 에 가짜 /car/pose. 마커를 가렸을 때처럼 pose 만 멈춘다.
     from geometry_msgs.msg import PoseStamped
@@ -399,7 +418,7 @@ def main():
     a = ap.parse_args()
     rclpy.init()
     tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench,
-             test_bridge_frozen_pose]
+             test_opponent_watch, test_bridge_frozen_pose]
     bad = []
     for f in tests:
         if a.only and a.only != f.__name__:
