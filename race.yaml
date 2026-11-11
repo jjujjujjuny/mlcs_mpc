@@ -23,10 +23,11 @@ drive: false
 # 기록 태그. 비우면 ('') 기록하지 않는다. → ~/mlcs_data/drive_<시각>_<태그>.csv
 log: race
 
-# 장애물: off = 끔, watch = 찾기만 (RViz 로 확인, MPC 는 안 피함), lidar = 찾아서 피한다.
-#   source: lidar 에서만.
-#   저장한 맵과 비교해 '맵에 없는 것' 을 찾는다 (lidar_obstacles). 맵핑 뒤 트랙이 바뀌면 그것도 장애물로 보인다.
-#   회피·뒤따름 로직 (opponent.py) 은 재웅 offline 28 경우 우리 탓 충돌 0 (11-11). 실차는 처음엔 v_max 1.0 에서.
+# 상대 차: off = 끔 (예선 단독 주행), watch = 찾기만 (RViz 로 확인, MPC 는 무시), lidar = 찾아서 뒤따르기·추월 (결승 1:1).
+#   대회엔 정지 장애물 회피 주행이 없다 — 이 기능은 상대 차 하나를 찾는 용도다. source: lidar 에서만.
+#   저장한 맵과 비교해 '맵에 없는 것' 을 상대 차로 본다 (lidar_obstacles). 맵핑 때 트랙 위엔 아무것도 없어야 하고,
+#   맵핑 뒤 트랙이 바뀌면 그것도 상대 차로 보인다.
+#   뒤따르기·추월 로직 (opponent.py) 은 재웅 offline 28 경우 우리 탓 충돌 0 (11-11). 실차는 처음엔 v_max 1.0 에서.
 obstacles: off
 
 # 위치추정 오도메트리 (source: lidar 에서만): off = 스캔만 (지금까지), ekf = 바퀴 속도 ×1.042 + 자이로로
