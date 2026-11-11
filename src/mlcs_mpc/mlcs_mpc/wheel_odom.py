@@ -91,7 +91,8 @@ class WheelOdom(Node):
         # 슬립 묶음: 바퀴 속도를 따르되 가감속 상한 안에서만
         dv = self.v_wheel - self.v
         lim = (self.amax if dv > 0 else self.dmax) * dt
-        if abs(dv) > lim:
+        clamped = abs(dv) > lim
+        if clamped:
             self.n_slip += 1
             dv = math.copysign(lim, dv)
         self.v += dv
@@ -109,6 +110,8 @@ class WheelOdom(Node):
         o.pose.pose.orientation.z, o.pose.pose.orientation.w = math.sin(self.yaw / 2), math.cos(self.yaw / 2)
         o.twist.twist.linear.x = self.v
         o.twist.twist.angular.z = r
+        # vx 분산: 평소 0.05², 가감속 묶음이 걸린 순간 0.5² (data_logger 가 odom_clamped 로 기록)
+        o.twist.covariance[0] = 0.25 if clamped else 0.0025
         self.pub.publish(o)
         self.n_msg += 1
 

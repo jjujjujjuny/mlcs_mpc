@@ -88,6 +88,10 @@ COLUMNS = [
     'recv',            # 이 행을 쓴 시각 (ROS 시계, stamp 와 같은 시계). 명령·VESC 값은 이 순간의 최신값
     'cmd_recv',        # 지금 cmd_* 값이 도착한 시각. ★ 라이다 주행은 stamp 가 위치추정 지연만큼 이르다 —
                        #   명령을 stamp 에 붙이면 차가 명령에 늦게 반응하는 것처럼 보인다 (15~51 ms, 맵마다 다름)
+    # ── 바퀴·자이로 오도메트리 (wheel_odom, 2026-11-11 추가. 안 떠 있으면 빈칸) ─────────────
+    'odom_x', 'odom_y', 'odom_yaw',   # odom 프레임 적분 위치 (시작점 0)
+    'odom_vx',                        # 슬립을 묶은 추정 속도 (바퀴 ×1.042)
+    'odom_clamped',                   # 가감속 묶음이 걸린 순간 1 (바퀴가 잠기거나 헛돎)
 ]
 
 
@@ -131,6 +135,7 @@ class DataLogger(Node):
         # ── 최신값 보관 (mocap 틱에 붙인다) ──────────────────────────
         self.cmd = None          # (speed, steer)
         self.cmd_t = None        # 그 명령이 도착한 시각 (ROS 시계)
+        self.wodom = None        # (x, y, yaw, vx, clamped, 받은 monotonic 시각)
         self.vesc = None         # dict
         self.servo = None
         self.solve_ms = None
@@ -171,6 +176,7 @@ class DataLogger(Node):
                 '  (위치·명령은 정상 기록됩니다)')
 
         self.create_subscription(Float32, '/mpc/solve_time', self._solve_cb, 10)
+        self.create_subscription(Odometry, '/odometry/filtered', self._wodom_cb, 10)
 
         # 서보 지령은 Float64 — f1tenth_stack 이 /commands/servo/position 으로 낸다
         try:
@@ -206,6 +212,11 @@ class DataLogger(Node):
     def _now(self):
         t = self.get_clock().now().nanoseconds
         return t * 1e-9
+
+    def _wodom_cb(self, m):
+        p, q = m.pose.pose.position, m.pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.wodom = (p.x, p.y, yaw, m.twist.twist.linear.x, int(m.twist.covariance[0] > 0.01), time.monotonic())
 
     def _solve_cb(self, msg: Float32):
         self.solve_ms = msg.data
@@ -257,7 +268,9 @@ class DataLogger(Node):
             else f'{self.solve_ms:.2f}',
             f'{self._now():.4f}',
             '' if self.cmd_t is None else f'{self.cmd_t:.4f}',
-        ])
+        ] + (['', '', '', '', ''] if self.wodom is None or time.monotonic() - self.wodom[5] > 0.2 else
+             [f'{self.wodom[0]:.4f}', f'{self.wodom[1]:.4f}', f'{self.wodom[2]:.5f}',
+              f'{self.wodom[3]:.4f}', str(self.wodom[4])]))
         self.rows += 1
 
     def _status(self):
