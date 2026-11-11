@@ -17,6 +17,7 @@ lidar_obstacles — 라이다로 트랙 위 장애물을 찾아 PoseStamped (map
 import math
 import os
 import time
+import numpy as np
 
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
@@ -59,6 +60,9 @@ class LidarObstacles(Node):
         if not gp('map_yaml') or not gp('track_csv'):
             raise SystemExit('map_yaml 과 track_csv 가 필요합니다')
         self.walls = WallField(gp('map_yaml'))
+        # 맵별 헛것 자리 (빈 트랙 주행에서 늘 잡히던 곳). 없으면 빈 목록
+        gpath = os.path.splitext(gp('map_yaml'))[0] + '_ghost.csv'
+        self.walls.ghost = np.loadtxt(gpath, delimiter=',', ndmin=2) if os.path.exists(gpath) else np.zeros((0, 2))
         self.band = TrackBand(Track(gp('track_csv')))
         self.base_frame = gp('base_frame')
         self.laser = tuple(float(v) for v in gp('laser_xy_yaw'))
@@ -91,7 +95,7 @@ class LidarObstacles(Node):
         self.create_timer(5.0, self._report)
         self.get_logger().info(
             f'lidar_obstacles: 맵 {gp("map_yaml")}, 벽 여유 {self.p.wall_clear}+{self.p.clear_per_m}/m, '
-            f'확정 {self.c_hits}번/{self.c_win}s/{self.c_rad}m')
+            f'확정 {self.c_hits}번/{self.c_win}s/{self.c_rad}m, 헛것 자리 {len(self.walls.ghost)}곳 (±{self.p.ghost_radius} m)')
 
     def _state_cb(self, m):
         p = m.pose.pose

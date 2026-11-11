@@ -32,6 +32,7 @@ class DetectParams:
     fov: float = math.radians(120.0)    # 앞쪽 ± 이 각도 안만 (라이다 기준) rad
     cluster_gap: float = 0.12   # 이웃 점 간격이 이보다 크면 다른 물체 m
     min_points: int = 3
+    ghost_radius: float = 0.20  # 맵별 헛것 자리 (maps/<맵>_ghost.csv) 에서 이 안의 점은 버린다 m
     max_size: float = 0.8       # 묶음의 대각 크기가 이보다 크면 버림 (벽 조각 등) m
     depth_shift: float = 0.10   # 보이는 면 → 중심까지 m (상자 깊이의 절반)
     refine: bool = True         # 스캔을 맵 벽에 맞춰 자세 국소 보정
@@ -213,6 +214,12 @@ def detect(pts, origin, walls, band, p):
         return []
     rng = np.hypot(pts[:, 0] - origin[0], pts[:, 1] - origin[1])
     cand = walls.dist(pts[:, 0], pts[:, 1]) > p.wall_clear + p.clear_per_m * rng
+    # ★ 2026-11-11 실트랙: 빈 트랙에서도 같은 자리 (벽 10~40 cm 옆) 가 주행마다 장애물로 잡혀 길을 막았다.
+    #   빈 트랙 기록에서 뽑은 헛것 자리 (tools/ghost_mask.py) 근처 점은 후보에서 뺀다. 상대는 움직이니 몇 군데쯤은 괜찮다.
+    gh = getattr(walls, 'ghost', None)
+    if gh is not None and len(gh):
+        dg = np.min(np.hypot(pts[:, 0:1] - gh[None, :, 0], pts[:, 1:2] - gh[None, :, 1]), axis=1)
+        cand &= dg > p.ghost_radius
     idx = np.where(cand)[0]
     if len(idx) == 0:
         return []
