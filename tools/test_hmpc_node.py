@@ -381,20 +381,20 @@ def test_lidar_map_pin():
     got = []
     n.create_subscription(Odometry, '/mpc/state', lambda m: got.append(m.pose.pose.position.x), 10)
 
-    def run(secs, cx, fit):
+    def run(secs, cx, fit, raw_x=1.0):
         end = time.monotonic() + secs
         k = 0
         while time.monotonic() < end:
             m = PoseStamped()
             m.header.stamp = n.get_clock().now().to_msg()
             m.header.frame_id = 'map'
-            m.pose.position.x, m.pose.orientation.w = 1.0, 1.0
+            m.pose.position.x, m.pose.orientation.w = raw_x, 1.0
             pose_pub.publish(m)
             if k % 4 == 0:      # 라이다 40 Hz 쯤
                 c = PoseStamped()
                 c.header.stamp = m.header.stamp
                 # 노드가 보는 잔차 = 목표 보정 − 지금까지 더한 것 (lidar_obstacles 가 보정된 자세로 맞추므로)
-                cur = (got[-1] - 1.0) if got else 0.0
+                cur = (got[-1] - raw_x) if got else 0.0
                 c.pose.position.x, c.pose.position.z, c.pose.orientation.w = cx - cur, fit, 1.0
                 corr_pub.publish(c)
             k += 1
@@ -410,6 +410,13 @@ def test_lidar_map_pin():
         r &= check('맞춤 비율 0.95: 10 cm 보정으로 수렴', abs(got[-1] - 1.10) < 0.02, f'x {got[-1]:.3f}')
         jumps = np.abs(np.diff(got[-300:])).max()
         r &= check('한 번에 튀지 않음 (< 2 cm)', jumps < 0.02, f'최대 {jumps * 100:.1f} cm')
+        # 11-11 저속 주행 결함: 맞춤이 나빠진 채 틀린 보정을 들고 있었다 → 1 s 넘게 나쁘면 0 으로 풀린다
+        run(4.0, 0.10, 0.3)
+        r &= check('맞춤 비율 0.3 이 4 s: 보정이 풀려 Cartographer 쪽으로', abs(got[-1] - 1.0) < 0.03, f'x {got[-1]:.3f}')
+        run(3.0, 0.10, 0.95)
+        r &= check('다시 좋아지면 다시 보정', abs(got[-1] - 1.10) < 0.02, f'x {got[-1]:.3f}')
+        run(0.5, 0.0, 0.95, raw_x=1.5)        # Cartographer 가 50 cm 튐 → 보정 0 으로 되돌림
+        r &= check('Cartographer 50 cm 튀면 보정 되돌림', abs(got[-1] - 1.5) < 0.03, f'x {got[-1]:.3f}')
     finally:
         os.killpg(proc.pid, signal.SIGINT)
         proc.wait(timeout=5)

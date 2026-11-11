@@ -67,8 +67,12 @@ class LidarBridge(Node):
         d('pin_min_fit', 0.80)      # 맞춤 비율 (벽에 붙은 스캔 점 비율) 이 이 이상일 때만
         d('pin_step_xy', 0.01)      # 메시지 하나당 최대 이동 m (튀지 않게. 0.4 m/s 까지 따라감)
         d('pin_step_yaw', 0.3)      # 메시지 하나당 최대 회전 °
-        d('pin_max_xy', 1.0)        # 누적 보정 상한 m
-        d('pin_max_yaw', 20.0)      # 누적 보정 상한 °
+        d('pin_max_xy', 0.6)        # 누적 보정 상한 m (11-11 정상 보정은 출발 때 최대 50 cm)
+        d('pin_max_yaw', 10.0)      # 누적 보정 상한 ° (정상 최대 8°. 20° 였을 때 잘못 잡아 상한까지 감)
+        # ★ 11-11 저속 주행: 수동 후진 중 Cartographer 가 12° 튀자 맞춤이 엉뚱한 정렬을 따라가 (−35, −66 cm, −20°)
+        #   그 뒤 맞춤 비율이 떨어져 반영을 멈춘 채 틀린 보정을 들고 있었다 → 위치 60~85 cm 틀림, 벽이 장애물로.
+        d('pin_bad_time', 1.0)      # 이만큼 맞춤이 계속 나쁘면 보정을 0 (Cartographer 그대로) 쪽으로 푼다 s
+        d('pin_decay_tau', 1.0)     # 그때 푸는 시정수 s
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
         self.map_frame, self.base_frame = gp('map_frame'), gp('base_frame')
         self.timeout = float(gp('timeout'))
@@ -110,6 +114,12 @@ class LidarBridge(Node):
             self.pin_k, self.pin_fit_min = float(gp('pin_gain')), float(gp('pin_min_fit'))
             self.pin_sxy, self.pin_sw = float(gp('pin_step_xy')), math.radians(float(gp('pin_step_yaw')))
             self.pin_mxy, self.pin_mw = float(gp('pin_max_xy')), math.radians(float(gp('pin_max_yaw')))
+            self.pin_bad_t, self.pin_tau = float(gp('pin_bad_time')), float(gp('pin_decay_tau'))
+            self.pin_good_t = None      # 마지막으로 맞춤 비율이 좋았던 시각
+            self.pin_last_t = None
+            self.pin_resets = self.pin_decays = 0
+            self.pin_raw = None
+            self.pin_jump_xy, self.pin_jump_yaw = 0.30, math.radians(5.0)
             self.create_subscription(PoseStamped, '/loc/correction', self._corr_cb, 10)
             self.create_timer(5.0, self._pin_report)
             self.get_logger().info(f'맵 고정 켬 — /loc/correction (맞춤 비율 ≥ {self.pin_fit_min}) 을 적분')
@@ -121,12 +131,30 @@ class LidarBridge(Node):
         self.gyro_r = m.twist.twist.angular.z
         self.gyro_t = self.get_clock().now().nanoseconds * 1e-9
 
+    def _pin_reset(self, why):
+        if any(abs(v) > 1e-6 for v in self.pc):
+            self.get_logger().warn(f'맵 고정 보정 되돌림 ({why}) — {self.pc[0] * 100:+.0f}, {self.pc[1] * 100:+.0f} cm, '
+                                   f'{math.degrees(self.pc[2]):+.1f}° → 0, 다시 맞춘다')
+        self.pc = [0.0, 0.0, 0.0]
+        self.pin_resets += 1
+
     def _corr_cb(self, m):
         fit = m.pose.position.z
         self.pin_fit = fit
+        now = self.get_clock().now().nanoseconds * 1e-9
+        dt = 0.0 if self.pin_last_t is None else min(max(now - self.pin_last_t, 0.0), 0.2)
+        self.pin_last_t = now
+        if self.pin_good_t is None:
+            self.pin_good_t = now
         if not fit >= self.pin_fit_min:
             self.pin_skip += 1
+            if now - self.pin_good_t > self.pin_bad_t:
+                # 맞춤이 계속 나쁘다 = 지금 보정을 믿을 수 없다 → Cartographer 쪽으로 천천히 푼다
+                k = math.exp(-dt / self.pin_tau)
+                self.pc = [v * k for v in self.pc]
+                self.pin_decays += 1
             return
+        self.pin_good_t = now
         q = m.pose.orientation
         e = (m.pose.position.x, m.pose.position.y, 2.0 * math.atan2(q.z, q.w))
         lim = (self.pin_sxy, self.pin_sxy, self.pin_sw)
@@ -151,8 +179,10 @@ class LidarBridge(Node):
     def _pin_report(self):
         self.get_logger().info(f'맵 고정: 보정 {self.pc[0] * 100:+.1f}, {self.pc[1] * 100:+.1f} cm, '
                                f'{math.degrees(self.pc[2]):+.1f}° | 맞춤 비율 {self.pin_fit:.2f}, '
-                               f'반영 {self.pin_n} / 건너뜀 {self.pin_skip}')
-        self.pin_n = self.pin_skip = 0
+                               f'반영 {self.pin_n} / 건너뜀 {self.pin_skip}'
+                               + (f' / 풀림 {self.pin_decays}' if self.pin_decays else '')
+                               + (f' / 되돌림 {self.pin_resets}' if self.pin_resets else ''))
+        self.pin_n = self.pin_skip = self.pin_decays = self.pin_resets = 0
 
     def _ready_cb(self, m):
         if self.require_ready and bool(m.data) and not self.ready:
@@ -180,6 +210,15 @@ class LidarBridge(Node):
                 self.last_jump_log = now
             why, good = '', True
             self.health.bad_until = None
+        if self.pin:
+            # 크게 튈 때만 (한 메시지에 5° 또는 30 cm 넘게). 평소의 10~19 cm 튐마다 되돌리면 MPC 자세가 그만큼 순간 이동한다
+            yw = yaw_from_quat(o)
+            if self.pin_raw is not None:
+                dj = math.hypot(p.x - self.pin_raw[0], p.y - self.pin_raw[1])
+                dw = abs((yw - self.pin_raw[2] + math.pi) % (2 * math.pi) - math.pi)
+                if dj > self.pin_jump_xy or dw > self.pin_jump_yaw:
+                    self._pin_reset(f'Cartographer 위치 {dj * 100:.0f} cm·{math.degrees(dw):.0f}° 튐')
+            self.pin_raw = (p.x, p.y, yw)
         if why:
             self.get_logger().error(f'✗ 라이다 위치 불량 ({why}) — 컨트롤러 정지 신호 발행')
         if self.bad and good:
