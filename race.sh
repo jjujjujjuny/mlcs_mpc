@@ -105,12 +105,18 @@ print(f'export MLCS_HMPC_DRIVE={1 if drive else 0}')
 print(f'export MLCS_HMPC_SOURCE={source}')
 print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
 print(f'export MLCS_OBSTACLES={0 if obs == "off" else 1}')
+# 위치추정 오도메트리: off = 스캔만 (지금까지), ekf = 바퀴 속도·자이로 (wheel_odom) 로 예측 (source: lidar 에서만)
+lo = str(c.get('loc_odom') or 'off')
+if lo not in ('off', 'ekf'):
+    err(f'loc_odom 은 off 또는 ekf: {lo}')
+print(f'export MLCS_LOC_ODOM={lo if source == "lidar" else "off"}')
 print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'트랙   {t}  (길이 {d["s"][-1]:.1f} m, 최소 반경 {r_min:.2f} m)',
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
          f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속',
          f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}',
+         f'위치   오도메트리 ' + ('★ 바퀴·자이로 (wheel_odom → Cartographer)' if lo == 'ekf' and source == 'lidar' else '없음 (스캔만)'),
          f'장애물 ' + {'off': '끔', 'watch': '찾기만 (RViz /obstacle/markers — MPC 는 안 피함)',
                        'lidar': '★ 라이다로 찾아 피함 (lidar_obstacles → /obstacle/pose)'}[obs]]
 lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model', 'opponent_topic', 'opponent_msg')]

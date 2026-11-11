@@ -796,10 +796,19 @@ start_localization () {
     log "Cartographer 위치추정 — 맵 $base  (코어 0-3)"
     # ★ 코어 0-3 에 묶는다. 안 묶으면 2 코어 넘게 쓰면서 솔버 코어(5)를 빼앗는다 —
     #   2026-11-08 라이다 주행에서 풀이 시간 22 → 31~35 ms (p95 47~62) 로 주기를 넘겼다.
+    # 오도메트리 (race.yaml loc_odom: ekf): 바퀴 속도·자이로 → /odometry/filtered → Cartographer 예측
+    local lua=localization_2d.lua remap=()
+    if [ "${MLCS_LOC_ODOM:-off}" = "ekf" ]; then
+        lua=localization_2d_odom.lua
+        remap=(--ros-args -r odom:=/odometry/filtered)
+        log "  오도메트리: ${GRN}바퀴 속도 + 자이로${RST} (wheel_odom, $lua)"
+        taskset -c 0-3 ros2 run mlcs_mpc wheel_odom >"$(run_log wheel_odom)" 2>&1 &
+        PIDS="$PIDS $!"
+    fi
     taskset -c 0-3 ros2 run cartographer_ros cartographer_node \
         -configuration_directory "$SCRIPT_DIR/src/mlcs_mpc/config/cartographer" \
-        -configuration_basename localization_2d.lua \
-        -load_state_filename "$pb" -load_frozen_state=true \
+        -configuration_basename "$lua" \
+        -load_state_filename "$pb" -load_frozen_state=true "${remap[@]}" \
         >"$(run_log cartographer)" 2>&1 &
     PIDS="$PIDS $!"
     taskset -c 0-3 ros2 run cartographer_ros cartographer_occupancy_grid_node \
@@ -809,7 +818,7 @@ start_localization () {
     # 시작 위치: RViz 2D Pose Estimate / 조이스틱 LT → 스캔 매칭 → 궤적 다시 시작
     taskset -c 0-3 ros2 run mlcs_mpc relocalize --ros-args \
         -p configuration_directory:="$SCRIPT_DIR/src/mlcs_mpc/config/cartographer" \
-        -p configuration_basename:=localization_2d.lua \
+        -p configuration_basename:="$lua" \
         >"$(run_log relocalize)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 3

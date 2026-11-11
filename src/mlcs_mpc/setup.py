@@ -34,6 +34,7 @@ setup(
             'mocap_bridge    = mlcs_mpc.mocap_bridge:main',
             'lidar_bridge    = mlcs_mpc.lidar_bridge:main',
             'lidar_obstacles = mlcs_mpc.lidar_obstacles:main',
+            'wheel_odom      = mlcs_mpc.wheel_odom:main',
             'relocalize      = mlcs_mpc.relocalize:main',
             'mocap_calibrate = mlcs_mpc.mocap_calibrate:main',
             'sim_bridge      = mlcs_mpc.sim_bridge:main',
