@@ -53,6 +53,16 @@ class LidarBridge(Node):
         # false 면 위치 튐(프레임 간 이동이 max_step_speed 초과)을 경고만 하고 정지 신호는 내지 않는다.
         #   Cartographer 보정으로 고속에서 13 cm 튀어 멈춘 적 있음 (2026-11-09, v_max 2.5). 비상정지는 사람이.
         d('stop_on_jump', True)
+        # ★ 맵 고정 (2026-11-11 실트랙): Cartographer 위치추정은 랩이 쌓일수록 저장한 맵에서 흘러간다
+        #   (lidar_obstacles 맞춤 기준 10~40 cm, 5~10°, 맞춤 비율 1.0 → 0.3 — 주행 불가).
+        #   lidar_obstacles 가 매 스캔 저장한 맵 (pgm) 에 맞춰 낸 보정 /loc/correction 을 조금씩 적분해 자세에 더한다.
+        d('map_pin', False)
+        d('pin_gain', 0.1)          # 보정 메시지 하나당 적분 비율 (라이다 40 Hz → 시정수 약 0.25 s)
+        d('pin_min_fit', 0.80)      # 맞춤 비율 (벽에 붙은 스캔 점 비율) 이 이 이상일 때만
+        d('pin_step_xy', 0.01)      # 메시지 하나당 최대 이동 m (튀지 않게. 0.4 m/s 까지 따라감)
+        d('pin_step_yaw', 0.3)      # 메시지 하나당 최대 회전 °
+        d('pin_max_xy', 1.0)        # 누적 보정 상한 m
+        d('pin_max_yaw', 20.0)      # 누적 보정 상한 °
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
         self.map_frame, self.base_frame = gp('map_frame'), gp('base_frame')
         self.timeout = float(gp('timeout'))
@@ -80,9 +90,44 @@ class LidarBridge(Node):
         self.create_subscription(Bool, '/localization/ready', self._ready_cb,
                                  QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_timer(0.05, self._watchdog)
+        self.pin = bool(gp('map_pin'))
+        self.pc = [0.0, 0.0, 0.0]       # 누적 보정 (dx, dy, dyaw)
+        self.pin_n = self.pin_skip = 0
+        self.pin_fit = math.nan
+        if self.pin:
+            self.pin_k, self.pin_fit_min = float(gp('pin_gain')), float(gp('pin_min_fit'))
+            self.pin_sxy, self.pin_sw = float(gp('pin_step_xy')), math.radians(float(gp('pin_step_yaw')))
+            self.pin_mxy, self.pin_mw = float(gp('pin_max_xy')), math.radians(float(gp('pin_max_yaw')))
+            self.create_subscription(PoseStamped, '/loc/correction', self._corr_cb, 10)
+            self.create_timer(5.0, self._pin_report)
+            self.get_logger().info(f'맵 고정 켬 — /loc/correction (맞춤 비율 ≥ {self.pin_fit_min}) 을 적분')
         if self.require_ready:
             self.get_logger().warn('위치 설정 전 — RViz 2D Pose Estimate 로 시작 위치를 찍을 때까지 출발하지 않습니다')
         self.get_logger().info(f'lidar_bridge: {gp("pose_topic")} 구독, timeout={self.timeout}s')
+
+    def _corr_cb(self, m):
+        fit = m.pose.position.z
+        self.pin_fit = fit
+        if not fit >= self.pin_fit_min:
+            self.pin_skip += 1
+            return
+        q = m.pose.orientation
+        e = (m.pose.position.x, m.pose.position.y, 2.0 * math.atan2(q.z, q.w))
+        lim = (self.pin_sxy, self.pin_sxy, self.pin_sw)
+        for i in range(3):
+            self.pc[i] += max(-lim[i], min(lim[i], self.pin_k * e[i]))
+        r = math.hypot(self.pc[0], self.pc[1])
+        if r > self.pin_mxy:
+            self.pc[0] *= self.pin_mxy / r
+            self.pc[1] *= self.pin_mxy / r
+        self.pc[2] = max(-self.pin_mw, min(self.pin_mw, self.pc[2]))
+        self.pin_n += 1
+
+    def _pin_report(self):
+        self.get_logger().info(f'맵 고정: 보정 {self.pc[0] * 100:+.1f}, {self.pc[1] * 100:+.1f} cm, '
+                               f'{math.degrees(self.pc[2]):+.1f}° | 맞춤 비율 {self.pin_fit:.2f}, '
+                               f'반영 {self.pin_n} / 건너뜀 {self.pin_skip}')
+        self.pin_n = self.pin_skip = 0
 
     def _ready_cb(self, m):
         if self.require_ready and bool(m.data) and not self.ready:
@@ -120,12 +165,15 @@ class LidarBridge(Node):
         self.bad = not good
 
         yaw = yaw_from_quat(o)
+        px, py = p.x, p.y
+        if self.pin:
+            px, py, yaw = px + self.pc[0], py + self.pc[1], yaw + self.pc[2]
         if self.prev_yaw is None:
             self.yaw_u = yaw
         else:
             self.yaw_u += (yaw - self.prev_yaw + math.pi) % (2 * math.pi) - math.pi
         self.prev_yaw = yaw
-        sx, sy, sw = (k.update(z, dt) for k, z in zip(self.kf, (p.x, p.y, self.yaw_u)))
+        sx, sy, sw = (k.update(z, dt) for k, z in zip(self.kf, (px, py, self.yaw_u)))
         fyaw = sw[0]
         vx = sx[1] * math.cos(fyaw) + sy[1] * math.sin(fyaw)
         vy = -sx[1] * math.sin(fyaw) + sy[1] * math.cos(fyaw)

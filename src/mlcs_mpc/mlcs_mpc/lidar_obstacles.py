@@ -14,6 +14,7 @@ lidar_obstacles — 라이다로 트랙 위 장애물을 찾아 PoseStamped (map
 
   ros2 run mlcs_mpc lidar_obstacles --ros-args -p map_yaml:=maps/1109_3.yaml -p track_csv:=<prep.csv>
 """
+import collections
 import math
 import os
 import time
@@ -71,6 +72,7 @@ class LidarObstacles(Node):
         self.c_hits, self.c_win, self.c_rad = int(gp('confirm_hits')), float(gp('confirm_window')), \
             float(gp('confirm_radius'))
         self.pose = None            # (x, y, yaw, 받은 시각)
+        self.pbuf = collections.deque(maxlen=100)     # (스탬프, x, y, yaw) — 스캔 시각 자세 보간용
         self.corr = (0.0, 0.0, 0.0) # 스캔 맞춤 보정 (dx, dy, dyaw) — 다음 스캔의 탐색 시작점
         self.last_fit = 0.0         # 지난 스캔의 맞춤 비율 — 낮으면 다음엔 넓게 찾는다
         self.hist = []              # [(시각, cx, cy)]
@@ -91,6 +93,7 @@ class LidarObstacles(Node):
         self.create_subscription(Odometry, gp('state_topic'), self._state_cb, 10)
         self.create_subscription(LaserScan, gp('scan_topic'), self._scan_cb, BEST_EFFORT)
         self.pub = self.create_publisher(PoseStamped, '/obstacle/pose', 10)
+        self.corr_pub = self.create_publisher(PoseStamped, '/loc/correction', 10)
         self.mk = self.create_publisher(MarkerArray, '/obstacle/markers', 1)
         self.create_timer(5.0, self._report)
         self.get_logger().info(
@@ -100,6 +103,23 @@ class LidarObstacles(Node):
     def _state_cb(self, m):
         p = m.pose.pose
         self.pose = (p.position.x, p.position.y, yaw_of(p.orientation), time.monotonic())
+        st = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
+        if not self.pbuf or st > self.pbuf[-1][0]:
+            self.pbuf.append((st, self.pose[0], self.pose[1], self.pose[2]))
+
+    def _pose_at(self, t):
+        """스캔 시각 t 의 자세 (자세 기록을 보간, 50 ms 까지 외삽). 없으면 가장 최근 자세.
+        ★ 11-11: 받은 시각의 자세를 쓰면 3 m/s 에서 스캔 지연만큼 (약 2 cm/10 ms) 맞춤 보정에 섞인다 — 맵 고정이 흔들린다."""
+        b = self.pbuf
+        if len(b) < 2 or t - b[-1][0] > 0.05 or t < b[0][0]:
+            return self.pose[:3]
+        i = len(b) - 1
+        while i > 1 and b[i - 1][0] > t:
+            i -= 1
+        (t0, x0, y0, w0), (t1, x1, y1, w1) = b[i - 1], b[i]
+        a = (t - t0) / max(t1 - t0, 1e-6)
+        dw = (w1 - w0 + math.pi) % (2 * math.pi) - math.pi
+        return x0 + a * (x1 - x0), y0 + a * (y1 - y0), w0 + a * dw
 
     def _laser_tf(self, frame):
         if self.laser_from_tf:
@@ -119,12 +139,21 @@ class LidarObstacles(Node):
         if self.pose is None or now - self.pose[3] > self.max_age:
             return
         self._laser_tf(s.header.frame_id)
+        pose = self._pose_at(s.header.stamp.sec + s.header.stamp.nanosec * 1e-9)
         t0 = time.perf_counter()
         # 넓은 탐색은 10 스캔마다 또는 맞춤이 나빠졌을 때만 (평소는 지난 보정 둘레만 — 3배 빠름)
         coarse = self.n_scan % 10 == 0 or self.last_fit < 0.7
-        dets, used, self.corr, fit = detect_scan(s.ranges, s.angle_min, s.angle_increment, self.pose[:3],
+        dets, used, self.corr, fit = detect_scan(s.ranges, s.angle_min, s.angle_increment, pose,
                                                  self.laser, self.walls, self.band, self.p, self.corr, coarse)
         self.last_fit = fit[0] if fit[0] == fit[0] else 1.0
+        if fit[0] == fit[0]:
+            # 맵 고정 (lidar_bridge map_pin): 이 스캔을 저장한 맵에 맞추려면 받은 자세에 더할 (dx, dy, dyaw).
+            # position.z = 맞춤 비율 (벽에 붙은 점 비율). 브릿지가 비율이 좋을 때만 조금씩 적분한다.
+            c = PoseStamped()
+            c.header.stamp, c.header.frame_id = s.header.stamp, 'map'
+            c.pose.position.x, c.pose.position.y, c.pose.position.z = self.corr[0], self.corr[1], fit[0]
+            c.pose.orientation.z, c.pose.orientation.w = math.sin(self.corr[2] / 2), math.cos(self.corr[2] / 2)
+            self.corr_pub.publish(c)
         self.t_cost += time.perf_counter() - t0
         self.n_scan += 1
         for c in dets:
@@ -146,8 +175,8 @@ class LidarObstacles(Node):
         if self.log:
             c = [f'{o[0]:.3f},{o[1]:.3f},{o[3]}' for o in dets[:3]] + [',,'] * (3 - min(len(dets), 3))
             ob = f'1,{best[0]:.3f},{best[1]:.3f}' if best is not None else '0,,'
-            self.log.write(f'{s.header.stamp.sec + s.header.stamp.nanosec * 1e-9:.4f},{self.pose[0]:.3f},'
-                           f'{self.pose[1]:.3f},{self.pose[2]:.4f},{len(dets)},{ob},{",".join(c)},'
+            self.log.write(f'{s.header.stamp.sec + s.header.stamp.nanosec * 1e-9:.4f},{pose[0]:.3f},'
+                           f'{pose[1]:.3f},{pose[2]:.4f},{len(dets)},{ob},{",".join(c)},'
                            f'{self.corr[0]:.3f},{self.corr[1]:.3f},{self.corr[2]:.4f},{fit[0]:.3f},{fit[1]:.3f}\n')
         self._markers(s.header.stamp, dets, best)
 

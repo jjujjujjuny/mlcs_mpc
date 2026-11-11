@@ -107,6 +107,9 @@ print(f'export MLCS_HMPC_SOURCE={source}')
 print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
 print(f'export MLCS_OBSTACLES={0 if obs == "off" else 1}')
 print(f'export MLCS_OBS_LEARN={1 if obs == "learn" else 0}')
+# 맵 고정: Cartographer 위치를 저장한 맵에 붙든다 (lidar_obstacles 스캔 맞춤 → lidar_bridge). 기본 켬
+pin = bool(c.get('map_pin', True))
+print(f'export MLCS_MAP_PIN={1 if (pin and source == "lidar") else 0}')
 # 위치추정 오도메트리: off = 스캔만 (지금까지), ekf = 바퀴 속도·자이로 (wheel_odom) 로 예측 (source: lidar 에서만)
 lo = str(c.get('loc_odom') or 'off')
 if lo not in ('off', 'ekf'):
@@ -118,6 +121,7 @@ lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'모드   {"★ 실제 주행" if drive else "bench (속도 0)"}' + (f'  기록 {log}' if log else '  기록 안 함'),
          f'속도   v_max {v_max:.2f} m/s (모터 상한 {v_motor:.2f}) — 최소 반경 코너는 약 {v_corner:.2f} m/s 이하로 MPC 가 감속',
          f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}',
+         f'위치   맵 고정 ' + ('★ 켬 (스캔을 저장한 맵에 맞춰 보정)' if pin and source == 'lidar' else '끔'),
          f'위치   오도메트리 ' + ('★ 바퀴·자이로 (wheel_odom → Cartographer)' if lo == 'ekf' and source == 'lidar' else '없음 (스캔만)'),
          f'장애물 ' + {'off': '끔', 'watch': '찾기만 (RViz /obstacle/markers — MPC 는 안 피함)',
                        'learn': '★ 헛것 배우기 — 찾기만, 끝나면 maps/<맵>_ghost.csv 갱신 (트랙에 상대·사람 없이!)',

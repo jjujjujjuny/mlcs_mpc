@@ -82,6 +82,11 @@ class OppParams:
     pass_standoff: float = 0.70 # 추월 중 옆으로 아직 못 비켰으면 이 간격 앞에서 설 수 있는 속도까지만 m
     trail_hold: float = 2.0     # 뒤따르는 중 상대가 이 안에 앞서 있으면 겹침이 없어도 계속 뒤따른다 m
     hold_side: bool = True      # 측면을 정하면 첫 겹침 앞 스테이지도 상대 쪽으로 못 가게 (apply_corridor)
+    # ★ 2026-11-11 실트랙 (사용자): 뒤따르기·속도 상한·추월 판단이 너무 보수적이라 서고 후진했다. 장애물 끄고
+    #   달릴 때가 더 나았다 → 상대를 '임시 벽' 으로만: 겹치는 스테이지에 넓은 쪽 통로 경계만 (트랙 벽과 같은
+    #   슬랙 비용), 속도 상한·뒤따름 정지·도달성 판단 없음. 둘 다 좁으면 넓은 쪽 (MPC 가 슬랙으로 비집음).
+    simple: bool = True
+    simple_hold: float = 1.5    # 임시 벽 모드: 상대와 앞뒤 이 안이면 피하는 쪽을 안 바꾼다 m
     gp: bool = True
     gp_coverage: float = 0.9    # 상대를 본 구간 비율이 이 이상이면 GP 를 쓴다
     bin: float = 0.1            # 상대 라인 기록 구간 m
@@ -482,6 +487,27 @@ class SideSelector:
         self.count += 1
         return self.count >= self.p.switch_frames
 
+    def update_simple(self, pl):
+        """임시 벽 모드: 겹치면 넓은 쪽 (지금 있는 쪽 +0.05 m 덤). 바꾸려면 반대쪽이 gap_switch 더 넓은 게
+        switch_frames 이어져야. 나란히 달리는 중엔 안 바꾼다. 뒤따름 (TRAIL) 은 없다."""
+        p = self.p
+        if not pl.hit.any():
+            self.mode, self.cand, self.count = FREE, None, 0
+            return self.mode
+        gl, gr = pl.gap_left, pl.gap_right
+        if self.mode in (LEFT, RIGHT):
+            cur, oth = (gl, gr) if self.mode == LEFT else (gr, gl)
+            other = RIGHT if self.mode == LEFT else LEFT
+            if pl.alongside or abs(pl.ds0) < p.simple_hold or oth < cur + p.gap_switch:
+                self.cand, self.count = None, 0
+            elif self._pending(other):
+                self.mode, self.cand, self.count = other, None, 0
+            return self.mode
+        bl = 0.05 if pl.ego_left else 0.0
+        self.mode = LEFT if gl + bl >= gr + (0.05 - bl) else RIGHT
+        self.cand, self.count = None, 0
+        return self.mode
+
     def update(self, pl):
         p = self.p
         if self.mode == TRAIL and not pl.hit.any() and -p.trail_hold < pl.ds0 < 0:
@@ -546,6 +572,20 @@ class Opponent:
         pred = self.model.predict(*st, N, dt)
         s_eval = eval_s(s_ego, pred.t, self.p)
         pl = plan(s_eval, n0, lo, hi, pred, self.track.length, self.p, self.track.kappa_at(s_eval))
+        if self.p.simple:
+            mode = self.sel.update_simple(pl)
+            cap = None
+            if mode in (LEFT, RIGHT):
+                lo, hi = apply_corridor(lo, hi, pred, pl, mode, self.p, None)
+                # 그쪽에도 차가 들어갈 폭이 없으면 (벽이 길을 막은 것과 같다) 그때만 앞에서 설 수 있는 속도로.
+                #   offline 1111_2 움직이는 상대: 이게 없으면 슬랙으로 비집어 8~16 주기 겹쳤다
+                g = pl.gap_left if mode == LEFT else pl.gap_right
+                if g < 0.0 and pl.ds0 < 0:
+                    cap = trail_cap(pl, pred, v_max, self.p, s_ego, self.track.length, n0,
+                                    self.track.kappa_at(np.asarray(s_ego, float)), standoff=self.p.trail_gap)
+            self.t_last = t
+            self.last = (pred, pl, mode)
+            return lo, hi, cap, mode
         mode = self.sel.update(pl)
         cap = None
         kap = self.track.kappa_at(np.asarray(s_ego, float))

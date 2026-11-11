@@ -32,14 +32,18 @@ def generate_launch_description():
         if src == 'lidar':
             # 시작 위치 찍기(require_ready)는 끔 — Cartographer 가 출발 자리에서 알아서 잡는다 (2026-11-09).
             #   위치 튐도 정지하지 않고 무시 (stop_on_jump 끔). 위치가 끊기면(timeout) 여전히 정지.
+            pin = LaunchConfiguration('map_pin').perform(context).lower() in ('1', 'true')
             bridge = Node(package='mlcs_mpc', executable='lidar_bridge', name='lidar_bridge',
                           output='screen', parameters=[{'require_ready': False,
-                                                        'stop_on_jump': False}])
+                                                        'stop_on_jump': False,
+                                                        'map_pin': pin}])
         else:
             bridge = Node(package='mlcs_mpc', executable='mocap_bridge', name='mocap_bridge',
                           output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')])
         nodes = [bridge]
-        if src == 'lidar' and LaunchConfiguration('obstacles').perform(context).lower() in ('1', 'true'):
+        obs_on = LaunchConfiguration('obstacles').perform(context).lower() in ('1', 'true')
+        # 맵 고정 (map_pin) 도 lidar_obstacles 의 스캔 맞춤 (/loc/correction) 을 쓴다 — 장애물을 꺼도 띄운다
+        if src == 'lidar' and (obs_on or LaunchConfiguration('map_pin').perform(context).lower() in ('1', 'true')):
             # 라이다 장애물 — 저장한 맵과 비교 (obstacle_detect.py). /obstacle/pose → opponent_topic
             # ★ 코어 0~3 (Cartographer 쪽). 런치 전체가 taskset -c 4 로 뜨므로 그대로 두면 hmpc_node 와
             #   같은 코어를 쓴다 — 실차 11-09 검출 7~18 ms/스캔 때 풀이 p95 33.7 → 49.8 ms.
@@ -66,6 +70,8 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacles', default_value='false',
                               description='source lidar 에서 true 면 lidar_obstacles 를 띄운다'),
         DeclareLaunchArgument('map_yaml', default_value='', description='lidar_obstacles 가 쓸 맵 yaml'),
+        DeclareLaunchArgument('map_pin', default_value='false',
+                              description='source lidar 에서 true 면 위치를 저장한 맵에 고정 (lidar_bridge + lidar_obstacles)'),
         DeclareLaunchArgument('track_csv', default_value='',
                               description='prep 형식 트랙 (절대경로). 비우면 hmpc.yaml'),
         OpaqueFunction(function=_nodes),

@@ -367,6 +367,56 @@ def test_opponent_watch():
     return r
 
 
+def test_lidar_map_pin():
+    # 맵 고정 (11-11): /loc/correction 을 맞춤 비율이 좋을 때만 조금씩 적분해 /mpc/state 에 더한다
+    from geometry_msgs.msg import PoseStamped
+    from nav_msgs.msg import Odometry
+    exe = EXE.replace('hmpc_node', 'lidar_bridge')
+    log = open('/tmp/mlcs_hmpc_test_node.log', 'ab')
+    proc = subprocess.Popen([exe, '--ros-args', '-p', 'map_pin:=true', '-p', 'stop_on_jump:=false'],
+                            stdout=log, stderr=log, start_new_session=True)
+    n = rclpy.create_node('fake_carto')
+    pose_pub = n.create_publisher(PoseStamped, '/tracked_pose', 10)
+    corr_pub = n.create_publisher(PoseStamped, '/loc/correction', 10)
+    got = []
+    n.create_subscription(Odometry, '/mpc/state', lambda m: got.append(m.pose.pose.position.x), 10)
+
+    def run(secs, cx, fit):
+        end = time.monotonic() + secs
+        k = 0
+        while time.monotonic() < end:
+            m = PoseStamped()
+            m.header.stamp = n.get_clock().now().to_msg()
+            m.header.frame_id = 'map'
+            m.pose.position.x, m.pose.orientation.w = 1.0, 1.0
+            pose_pub.publish(m)
+            if k % 4 == 0:      # 라이다 40 Hz 쯤
+                c = PoseStamped()
+                c.header.stamp = m.header.stamp
+                # 노드가 보는 잔차 = 목표 보정 − 지금까지 더한 것 (lidar_obstacles 가 보정된 자세로 맞추므로)
+                cur = (got[-1] - 1.0) if got else 0.0
+                c.pose.position.x, c.pose.position.z, c.pose.orientation.w = cx - cur, fit, 1.0
+                corr_pub.publish(c)
+            k += 1
+            rclpy.spin_once(n, timeout_sec=0.0)
+            time.sleep(0.006)
+
+    try:
+        run(2.0, 0.0, 1.0)
+        r = check('브릿지 뜸', bool(got), f'{len(got)}개')
+        run(3.0, 0.10, 0.5)
+        r &= check('맞춤 비율 0.5: 보정 안 함', abs(got[-1] - 1.0) < 0.01, f'x {got[-1]:.3f}')
+        run(3.0, 0.10, 0.95)
+        r &= check('맞춤 비율 0.95: 10 cm 보정으로 수렴', abs(got[-1] - 1.10) < 0.02, f'x {got[-1]:.3f}')
+        jumps = np.abs(np.diff(got[-300:])).max()
+        r &= check('한 번에 튀지 않음 (< 2 cm)', jumps < 0.02, f'최대 {jumps * 100:.1f} cm')
+    finally:
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.wait(timeout=5)
+        n.destroy_node()
+    return r
+
+
 def test_bridge_frozen_pose():
     # 진짜 mocap_bridge 에 가짜 /car/pose. 마커를 가렸을 때처럼 pose 만 멈춘다.
     from geometry_msgs.msg import PoseStamped
@@ -418,7 +468,7 @@ def main():
     a = ap.parse_args()
     rclpy.init()
     tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench,
-             test_opponent_watch, test_bridge_frozen_pose]
+             test_opponent_watch, test_lidar_map_pin, test_bridge_frozen_pose]
     bad = []
     for f in tests:
         if a.only and a.only != f.__name__:

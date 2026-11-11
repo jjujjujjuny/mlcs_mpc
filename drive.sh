@@ -1166,6 +1166,10 @@ hmpc)
         log "장애물: ${GRN}라이다${RST} (lidar_obstacles, 맵 ${MLCS_HMPC_MAP})"
         HM_ARGS+=(obstacles:=true map_yaml:="$MAP_DIR/${MLCS_HMPC_MAP}.yaml")
     fi
+    if [ "${MLCS_MAP_PIN:-0}" = "1" ] && [ "$STATE_SOURCE" = lidar ]; then
+        log "맵 고정: ${GRN}켬${RST} (스캔을 저장한 맵 ${MLCS_HMPC_MAP} 에 맞춰 위치 보정)"
+        HM_ARGS+=(map_pin:=true map_yaml:="$MAP_DIR/${MLCS_HMPC_MAP}.yaml")
+    fi
     if [ -n "${MLCS_HMPC_VMAX:-}" ]; then
         log "속도 상한: ${GRN}${MLCS_HMPC_VMAX} m/s${RST} (MLCS_HMPC_VMAX)"
         HM_ARGS+=(v_max:="$MLCS_HMPC_VMAX")

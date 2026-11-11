@@ -183,10 +183,10 @@ def test_switch_needs_frames():
     assert modes[:-1] == [RIGHT] * (p.switch_frames - 1) and modes[-1] == LEFT
 
 
-def _toy_race(width, v_ego, v_opp, d_opp, secs=12.0):  # noqa: C901
+def _toy_race(width, v_ego, v_opp, d_opp, secs=12.0, simple=False):  # noqa: C901
     """간이 폐루프. 우리 차: s' = min(v_ego, cap), n 은 스테이지 1..10 경계 가운데로 1.5 m/s 까지."""
     t, R = circle(width=width)
-    p = OppParams()
+    p = OppParams(simple=simple)
     opp = Opponent(t, p)
     s, n, v = 0.0, 0.0, 1.0
     so = 2.0
@@ -225,8 +225,30 @@ def test_toy_overtake():
     assert LEFT in modes
 
 
+def test_toy_simple_overtake():
+    # 임시 벽 모드 (기본): 넓은 쪽으로 비켜 지나간다. 속도 상한이 없다
+    passed, min_lat, modes = _toy_race(width=1.6, v_ego=2.0, v_opp=1.0, d_opp=-0.25, simple=True)
+    assert passed, modes
+    assert min_lat >= 0.40 - 0.02, min_lat
+    assert TRAIL not in modes and LEFT in modes
+
+
+def test_toy_simple_cap_only_when_no_room():
+    # 임시 벽 모드: 차가 들어갈 폭이 있으면 속도 상한 없음, 양쪽 다 없을 때만 앞에서 설 상한. TRAIL 은 안 쓴다
+    for width, d_opp, want_cap in ((1.6, -0.25, False), (1.0, 0.0, True)):
+        t, R = circle(width=width)
+        opp = Opponent(t, OppParams())
+        for j in range(10):
+            opp.measure(j * 0.01, *xy_on(R, 1.5, d_opp))
+        s_pred = 0.0 + 1.0 * DT * np.arange(N + 1) * 30
+        lo, hi = t.bounds_at(s_pred, 0.22)
+        lo2, hi2, cap, mode = opp.step(0.1, s_pred, 0.0, lo, hi, 2.0, N, DT)
+        assert mode in (LEFT, RIGHT), (width, mode)
+        assert (cap is not None) == want_cap, (width, cap)
+
+
 def test_toy_trail_when_blocked():
-    passed, min_lat, modes = _toy_race(width=1.0, v_ego=2.0, v_opp=1.0, d_opp=0.0)
+    passed, min_lat, modes = _toy_race(width=1.0, v_ego=2.0, v_opp=1.0, d_opp=0.0)   # 예전 방식 (simple=False)
     assert not passed and TRAIL in modes
     assert min_lat == math.inf, min_lat         # 앞뒤로 0.5 m 안에 들어간 적이 없다
 
@@ -316,10 +338,10 @@ def test_trail_cap_inside_of_curve_is_slower():
     assert np.allclose(c_in, c0 * (1.0 - 0.3 / R))
 
 
-def test_toy_stop_before_static_with_wheel_lag():
+def test_toy_stop_before_static_with_wheel_lag():  # 예전 방식 (simple=False)
     """바퀴 시정수 0.4 s 인 간이 차가 2 m/s 로 정지 장애물에 다가가도 부딪히지 않고 선다 (2026-11-10 offline 241 주기 충돌)."""
     t, R = circle(width=1.0)
-    p = OppParams()
+    p = OppParams(simple=False)
     opp = Opponent(t, p)
     s, v, ws, so = 0.0, 2.0, 2.0, 4.0
     s_pred = s + v * DT * np.arange(N + 1)
