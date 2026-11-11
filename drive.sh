@@ -370,7 +370,6 @@ joy_session () {
     echo
     # joy:=false — bringup 이 joy_node 를 이미 띄웠다
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false \
@@ -953,7 +952,6 @@ bench)
     warn "바퀴가 땅에 닿지 않는지 확인하세요."
     echo
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=0.0 allow_toggle:=false debug:=true
@@ -1091,7 +1089,6 @@ stanley)
     log "횡오차: ros2 topic echo /stanley/cross_track"
     echo
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true
     ;;
@@ -1207,7 +1204,6 @@ hmpc)
     log "상태: ros2 topic echo /hmpc/status   풀이 시간: ros2 topic echo /mpc/solve_time"
     echo
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:=1.0 allow_toggle:=true start_auto:=true
     [ "$LOGDATA" = 1 ] && { sleep 1; report_data_total; }
@@ -1240,7 +1236,6 @@ mpc)
     log "MPC 로그: tail -f /tmp/mlcs_mpc.log"
     echo
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=true debug:="$([ "$DEBUG" = 1 ] && echo true || echo false)"
@@ -1284,7 +1279,6 @@ record)
     log "  두세 바퀴 돌면 laptrack 이 가장 매끄러운 바퀴를 골라 씁니다."
     echo
     JOYARG="$(decide_joyarg)"
-    [ "$JOYARG" = "true" ] && log "joy_node 가 없어서 직접 띄웁니다"
     warn_if_no_joy
     ros2 launch mlcs_mpc joystick.launch.py \
         joy:="$JOYARG" max_speed:="$SPEED" allow_toggle:=false
