@@ -562,12 +562,17 @@ def wall_bounds(N, lo, hi, n0, relax=10):
 
     lo, hi 는 스테이지 0..N 의 값 (길이 N+1). 현재 n0 가 범위 밖이면 hard_bounds 처럼 relax
     스테이지 동안 n0 에서 범위로 줄여 간다. 좁아서 lo > hi 면 가운데 한 점으로 둔다.
+
+    ★ 2026-11-10: 예전 식 min(lo, n0·f) 는 f → 0 이면 n = 0 (트랙 선) 을 늘 허용했다. 벽 경계는 0 이
+      늘 안이라 티가 안 났지만, 0 을 막는 상대 추월 통로 (예: n ≤ −0.40) 는 relax 뒤 스테이지에서
+      n ≤ 0 으로 풀려 통째로 무시됐다 (offline 1109_3 가운데 정지 장애물: 통로를 골라도 옆으로 안 감).
+      이제 n0 에서 그 스테이지의 경계로 줄여 간다.
     """
     lo, hi = np.asarray(lo, float)[1:N + 1].copy(), np.asarray(hi, float)[1:N + 1].copy()
     bad = lo > hi
     lo[bad] = hi[bad] = 0.5 * (lo[bad] + hi[bad])
     f = np.clip(1.0 - np.arange(1, N + 1) / relax, 0.0, 1.0)
-    return np.minimum(lo, n0 * f) - 1e-3, np.maximum(hi, n0 * f) + 1e-3
+    return lo + np.minimum(n0 - lo, 0.0) * f - 1e-3, hi + np.maximum(n0 - hi, 0.0) * f + 1e-3
 
 
 def set_wall_bounds(solver, N, lo, hi, n0, mu0=0.0):
@@ -636,14 +641,35 @@ def load_params(path):
     return np.array(d['vehicle_params'] + d['tire_front'] + d['tire_rear'], dtype=float)
 
 
-def make_opponent(track_csv, v, d, gap):
-    """--opponent: 트랙 선에서 d 만큼 옆을 v 로 도는 가상 상대 + hmpc_node 와 같은 opponent 로직."""
+def make_opponent(track_csv, v, d, gap, alat=0.0, weave=0.0, gp=True):
+    """--opponent: 트랙 선에서 d 만큼 옆을 v 로 도는 가상 상대 + hmpc_node 와 같은 opponent 로직.
+
+    alat > 0 이면 실제 상대처럼 코너에서 줄인다: v(s) = min(v, √(alat/|κ|)).
+    weave > 0 이면 상대 라인이 트랙 선과 다르다: d(s) = d + weave·sin(4π s / L) (한 바퀴 두 번), 벽 안으로.
+    둘 다 위치에 따라 바뀌어서, 한 바퀴 보고 배우는 GP 예측이 쓸모가 있는 경우다."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../src/mlcs_mpc'))
     from mlcs_mpc.hmpc_core import Track
-    from mlcs_mpc.opponent import Opponent
+    from mlcs_mpc.opponent import Opponent, OppParams
     tr = Track(track_csv)
-    return dict(track=tr, logic=Opponent(tr), v=v, d=d, s=gap, modes={}, min_dist=np.inf,
-                hits=0, passes=0, last_ds=None)
+    return dict(track=tr, logic=Opponent(tr, OppParams(gp=gp)), v=v, d=d, s=gap, modes={}, min_dist=np.inf,
+                hits=0, passes=0, last_ds=None, alat=alat, weave=weave, learned=0, cycles=0, err=[])
+
+
+def wrap_s_len(ds, length):
+    return (ds + length / 2.0) % length - length / 2.0
+
+
+def _opp_line(o, s):
+    """가상 상대의 위치 s 에서 (속도, 횡위치)."""
+    tr = o['track']
+    v = o['v']
+    if o['alat'] > 0:
+        v = min(v, math.sqrt(o['alat'] / max(abs(float(tr.kappa_at(s))), 1e-3)))
+    d = o['d']
+    if o['weave'] > 0:
+        lo, hi = tr.bounds_at(np.array([s]), 0.20)
+        d = float(np.clip(d + o['weave'] * math.sin(4 * math.pi * s / tr.length), lo[0], hi[0]))
+    return v, d
 
 
 def _opp_cycle(o, i, dt, qs, x, lo, hi, v_max):
@@ -651,24 +677,44 @@ def _opp_cycle(o, i, dt, qs, x, lo, hi, v_max):
     tr = o['track']
     t = i * dt
     for j in range(3):          # mocap 100 Hz 쯤
-        so = o['s'] + o['v'] * dt * (j + 1) / 3
+        vj, _ = _opp_line(o, o['s'])
+        o['s'] += vj * dt / 3
+        so = o['s']
+        _, dj = _opp_line(o, so)
         h = float(np.interp(np.mod(so, tr.length), np.r_[tr.s, tr.length],
                             np.unwrap(np.r_[tr.heading, tr.heading[0]])))
-        ox, oy = tr.xy(so, o['d'])
+        ox, oy = tr.xy(so, dj)
         o['logic'].measure(t - dt + dt * (j + 1) / 3, float(ox), float(oy), h)
-    o['s'] += o['v'] * dt
+    o['d_now'] = _opp_line(o, o['s'])[1]
+    if i % max(int(round(1.0 / dt)), 1) == 0:      # hmpc_node 의 _opp_refit 타이머 (1 Hz) 와 같게
+        t0 = time.perf_counter()
+        o['logic'].model.refit()
+        o.setdefault('refit_ms', []).append((time.perf_counter() - t0) * 1e3)
     s_now = np.r_[qs[1:], 2 * qs[-1] - qs[-2]] if i > 0 else qs     # node 와 같은 한 칸 당김
     lo, hi, cap, mode = o['logic'].step(t, s_now, x[1], lo, hi, v_max, len(qs) - 1, dt)
     o['modes'][mode] = o['modes'].get(mode, 0) + 1
     ex, ey = tr.xy(x[0], x[1])
-    ox, oy = tr.xy(o['s'], o['d'])
+    ox, oy = tr.xy(o['s'], o['d_now'])
     o['min_dist'] = min(o['min_dist'], float(np.hypot(ex - ox, ey - oy)))
     ds = (x[0] - o['s'] + tr.length / 2) % tr.length - tr.length / 2
-    if abs(ds) < 0.55 and abs(x[1] - o['d']) < 0.30:   # 차 길이·폭으로 본 겹침
+    if abs(ds) < 0.55 and abs(x[1] - o['d_now']) < 0.30:   # 차 길이·폭으로 본 겹침
         o['hits'] += 1
+        if ds > 0.2:        # 우리가 앞: 가상 상대는 피하지 않으니 뒤에서 박은 것 (우리가 서 있을 때 등)
+            o['hits_rear'] = o.get('hits_rear', 0) + 1
     if o['last_ds'] is not None and o['last_ds'] < 0 <= ds and abs(ds) < 1.0:
         o['passes'] += 1
     o['last_ds'] = ds
+    last = o['logic'].last
+    if last is not None:
+        o['cycles'] += 1
+        o['learned'] += int(bool(last[0].learned))
+        # 예측 오차: 1 s 앞 예측 s 를 저장했다가 1 s 뒤 실제와 비교
+        k1 = min(int(round(1.0 / dt)), len(last[0].s) - 1)
+        o.setdefault('pend', []).append((t + last[0].t[k1], float(last[0].s[k1]), float(last[0].d[k1]),
+                                         bool(last[0].learned)))
+        while o['pend'] and o['pend'][0][0] <= t + 1e-9:
+            _, sp, dp, lr = o['pend'].pop(0)
+            o['err'].append((float(wrap_s_len(sp - o['s'], tr.length)), dp - o['d_now'], lr))
     return lo, hi, cap
 
 
@@ -800,8 +846,9 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                 # hmpc_node 와 같은 뒤따름 정지: 상한이 0.3 아래면 풀지 않고 세운다 (0.4 위로 오르면 다시)
                 mode = opp['logic'].last[2] if opp['logic'].last else None
                 c0 = cap[0] if cap is not None else math.inf
+                # ★ 2026-11-11: 이미 느릴 때 (vx < 0.5) 만 직접 세운다 — hmpc_node trail_stop_vx 와 같게
                 trail_skip = (not args.no_trail_stop and mode == 'trail' and cap is not None
-                              and (c0 < 0.3 or (trail_stopped and c0 < 0.4)))
+                              and ((c0 < 0.3 and (trail_stopped or x[3] < 0.5)) or (trail_stopped and c0 < 0.4)))
                 cap = np.full(N, v_top) if cap is None else cap
                 for k in range(N):
                     solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.max_steer]))
@@ -899,14 +946,26 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
             w = int(round(args.recover_wait / args.dt))
             stuck_n += 1
             recent = hist_x[-w - 1:]
+            # ★ 2026-11-11: hmpc_node _check_stuck 과 같게 — 상대 뒤에서 일부러 느린 건 (뒤따름·뒤따름 정지)
+            #   교착이 아니고, 상대가 뒤쪽 1 m 안이면 후진하지 않는다. 같은 자리 recover_tries (3) 번이면 래치.
+            opp_mode = opp['logic'].last[2] if (opp is not None and opp['logic'].last) else None
+            if trail_stopped or opp_mode == 'trail':
+                stuck_n = 0
             stuck = (stuck_n >= w and len(recent) > w and recent[-1][0] - recent[0][0] < 0.1
                      and np.mean([q[3] for q in recent]) < 0.15)
+            if stuck and opp is not None:
+                st_o = opp['logic'].tracker.state(i * args.dt)
+                if st_o is not None:
+                    L_ = opp['track'].length
+                    back = (x_true[0] - st_o[0] + L_ / 2) % L_ - L_ / 2
+                    if 0.0 < back < 1.0:
+                        stuck, stuck_n = False, 0
+                        opp['rev_blocked'] = opp.get('rev_blocked', 0) + 1
             if stuck:
                 stuck_n = 0
-                # 같은 자리 (s 0.5 m 안) 에서 두 번 실패하면 정지 (노드는 고장 래치)
                 rev_hist = [q for q in rev_hist if abs(q - x_true[0]) < 0.5]
-                if len(rev_hist) >= 2:
-                    print(f'  ✗ {name}: {i} 번째 — 같은 자리에서 후진 탈출 2번 실패 (노드라면 래치)')
+                if len(rev_hist) >= 3:
+                    print(f'  ✗ {name}: {i} 번째 — 같은 자리에서 후진 탈출 3번 뒤에도 교착 (노드라면 래치)')
                     rr = False
                 else:
                     rev_hist.append(x_true[0])
@@ -950,6 +1009,19 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
         print(f'  상대 {opp["v"]:.2f} m/s, d {opp["d"]:+.2f}: 추월 {opp["passes"]}번, '
               f'최소 중심 거리 {opp["min_dist"]:.2f} m, 겹침(충돌) {opp["hits"]} 주기, 모드 {opp["modes"]}, '
               f'뒤따름 정지 {opp.get("trail_stops", 0)}번')
+        print(f'  겹침 중 상대가 뒤에서 박은 것 {opp.get("hits_rear", 0)} 주기 (가상 상대는 피하지 않는다)')
+        if opp.get('rev_blocked'):
+            print(f'  교착인데 상대가 뒤 1 m 안이라 후진 안 함 {opp["rev_blocked"]}번')
+        if opp['err']:
+            e = np.array(opp['err'], float)
+            for name_, m in (('제로샷', e[:, 2] == 0), ('GP', e[:, 2] == 1)):
+                if m.any():
+                    print(f'  1 s 앞 예측 오차 ({name_}, {int(m.sum())}개): s RMS {np.sqrt(np.mean(e[m, 0] ** 2)):.3f} m, '
+                          f'd RMS {np.sqrt(np.mean(e[m, 1] ** 2)):.3f} m')
+        rf = opp.get('refit_ms') or [0.0]
+        print(f'  GP 다시 맞추기 평균 {np.mean(rf):.1f} ms, 최대 {np.max(rf):.1f} ms (1 Hz)')
+        print(f'  GP 사용 {opp["learned"]}/{opp["cycles"]} 주기, 우리 {x_true[0] / max(len(s_hist) * args.dt, 1e-9):.2f} m/s · '
+              f'상대 {(opp["s"] - args.opp_gap) / max(len(s_hist) * args.dt, 1e-9):.2f} m/s 평균')
 
 
 def main():
@@ -995,6 +1067,11 @@ def main():
                     help='--walls 와 함께: 속도 V 로 도는 가상 상대 (추월·뒤따르기 시험). --v-max 도 줄 것')
     ap.add_argument('--opp-d', type=float, default=0.0, help='가상 상대의 선에서 횡위치 m (왼쪽 +)')
     ap.add_argument('--opp-gap', type=float, default=2.0, help='가상 상대가 앞서 출발하는 거리 m')
+    ap.add_argument('--opp-alat', type=float, default=0.0,
+                    help='가상 상대가 코너에서 줄인다: v ≤ √(A/|κ|). 0 = 늘 같은 속도')
+    ap.add_argument('--opp-weave', type=float, default=0.0,
+                    help='가상 상대 라인을 트랙 선에서 ± 이만큼 (한 바퀴 두 번 흔들림) m')
+    ap.add_argument('--opp-no-gp', action='store_true', help='상대 예측에 GP 를 안 쓴다 (제로샷만)')
     ap.add_argument('--hyper', default=None, metavar='NPZ',
                     help='MPC 가 HyperPM 시변 파라미터를 쓴다 (config/hyper/*.npz). 없으면 --params-yaml 상수')
     ap.add_argument('--plant-hyper', default=None, metavar='NPZ',
@@ -1118,7 +1195,8 @@ def main():
                  if args.plant else None)
         if args.friction is not None:
             x0[6] = args.friction
-        opp = (make_opponent(args.track, args.opponent, args.opp_d, args.opp_gap)
+        opp = (make_opponent(args.track, args.opponent, args.opp_d, args.opp_gap, args.opp_alat, args.opp_weave,
+                             gp=not args.opp_no_gp)
                if (walls is not None and args.opponent is not None) else None)
         hyper = HyperStage(args.hyper, args.N, args.dt, params) if args.hyper else None
         plant_hyper = HyperStage(args.plant_hyper, args.N, args.dt, params) if args.plant_hyper else None

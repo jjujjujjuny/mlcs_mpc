@@ -51,6 +51,19 @@ def test_mass_scaling():
     assert abs(fixed[2] / base[2] - o.MASS / o.AUTHOR_MASS) < 1e-9
 
 
+def test_wall_bounds_keeps_corridor_away_from_zero():
+    """relax 뒤 스테이지에서 n = 0 을 허용하면 안 된다 (2026-11-10: 상대 추월 통로 n ≤ −0.40 이 n ≤ 0 으로 풀렸다)."""
+    N = 20
+    lo = np.full(N + 1, -0.5)
+    hi = np.full(N + 1, -0.4)                   # 통로: 트랙 선 (0) 을 막는다
+    a, b = o.wall_bounds(N, lo, hi, n0=-0.1)    # 지금은 통로 밖 (위)
+    assert b[0] > -0.15                         # 처음엔 지금 위치 (−0.1) 근처에서 시작
+    assert np.all(b[10:] <= -0.4 + 2e-3), b[10:]  # relax 뒤엔 통로 그대로
+    assert np.all(np.diff(b[:11]) <= 1e-12)     # 줄여 가기만
+    a, b = o.wall_bounds(N, np.full(N + 1, -0.3), np.full(N + 1, 0.3), n0=0.0)
+    assert np.allclose(a, -0.3 - 1e-3) and np.allclose(b, 0.3 + 1e-3)   # 안에 있으면 그대로
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for f in tests:

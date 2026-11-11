@@ -1,0 +1,31 @@
+/home/jaeung/Desktop/mlcs_mpc/hypermpc/offline_ocp.py:424: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  ocp.code_export_directory = os.path.join(build, 'c_generated_code')
+/home/jaeung/Desktop/mlcs_mpc/hypermpc/offline_ocp.py:431: DeprecationWarning: Call to deprecated function (or staticmethod) code_export_directory. (Use AcadosOcp.code_gen_options.code_export_directory instead.) -- Deprecated since version 0.5.4.
+  and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
+
+■ 정식화  N=60  dt=0.033  예측구간 1.98초  비용 author  0/0 방어 켬  RK4 4회
+  ★ 타이어 계수는 아직 저자 기본값이다 (질량 3.284, I_z, lr 만 우리 차). 동정값이 나오면 다시 잴 것.
+■ 이전 빌드 사용: /home/jaeung/hmpc_build/N60_author_guard_rk4_hard_slack
+/home/jaeung/Desktop/mlcs_mpc/hypermpc/offline_ocp.py:434: DeprecationWarning:  The `json_file` argument is deprecated in v0.5.6 and will be removed in a future release. Set AcadosOcp.code_gen_options.json_file instead.
+  solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse,
+/home/jaeung/acados/interfaces/acados_template/acados_template/acados_code_gen_options.py:361: UserWarning: A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory /home/jaeung/hmpc_build/N60_author_guard_rk4_hard_slack/c_generated_code instead.
+  warnings.warn(f"A path is provided for json_file. This is not supported. The json file will be written to the code_export_directory {self.code_export_directory} instead.")
+OCP formulation matches previous via hash, code reuse possible.
+  ✓ 0.0초
+
+■ track  (1800회, 첫 풀이 15.5 ms 는 통계에서 뺌)
+  status      {0: 1799, 4: 1}  첫 비정상 792 번째
+  비정상 해는 버리고 정지 명령 (노드와 같게). 3번 연속 0회
+  풀이 시간   평균   20.12  p95   27.85  최대   64.24 ms   (예산 33.0 ms, 초과 2.3%)
+  주기 전체   평균   41.70 ms  (곡률 갱신 포함)
+  |n| 최대 0.385 m  (경계 0.50)
+  벽 경계 밖 0.2%  진행 59.63 m (1.00 m/s 평균)
+  마지막 상태 vx 1.851  vy 0.023  r 1.282  n -0.053  ws 1.895  delta -0.087
+  상대 1.00 m/s, d +0.25: 추월 0번, 최소 중심 거리 0.83 m, 겹침(충돌) 0 주기, 모드 {'free': 387, 'trail': 1192, 'right': 221}, 뒤따름 정지 0번
+  겹침 중 상대가 뒤에서 박은 것 0 주기 (가상 상대는 피하지 않는다)
+  1 s 앞 예측 오차 (제로샷, 300개): s RMS 0.033 m, d RMS 0.086 m
+  1 s 앞 예측 오차 (GP, 1470개): s RMS 0.019 m, d RMS 0.009 m
+  GP 다시 맞추기 평균 31.8 ms, 최대 51.9 ms (1 Hz)
+  GP 사용 1500/1800 주기, 우리 1.00 m/s · 상대 1.00 m/s 평균
+
+SQP_RTI: QP solver returned error status 3 (ACADOS_MINSTEP) QP iteration 19.

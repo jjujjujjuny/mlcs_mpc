@@ -195,6 +195,7 @@ class HmpcNode(Node):
         d('wall_heading_r', 0.25)
         d('trail_stop_speed', 0.3)      # 뒤따름 속도 상한이 이보다 낮으면 풀지 않고 세운다 m/s
         d('trail_go_speed', 0.4)        # 세운 뒤 상한이 이보다 높아지면 다시 푼다 m/s
+        d('trail_stop_vx', 0.5)         # 우리 속도가 이보다 낮을 때만 풀지 않고 세운다 m/s (빠를 땐 MPC 가 조향하며 감속)
         d('track_hard', True)
         d('track_width', 0.12)
         d('track_slack', 1000.0)
@@ -268,6 +269,7 @@ class HmpcNode(Node):
         self._warned_age = False
         self.ws_dec_max = float(gp('ws_dec_max'))
         self.trail_stop_speed, self.trail_go_speed = float(gp('trail_stop_speed')), float(gp('trail_go_speed'))
+        self.trail_stop_vx = float(gp('trail_stop_vx'))
         self.reverse_limit = float(gp('reverse_limit'))
         self.friction = float(gp('friction'))
         self.erpm_gain = float(gp('erpm_gain'))
@@ -661,8 +663,11 @@ class HmpcNode(Node):
                 # ★ 뒤따름 정지 (2026-11-09, 메인 PC 제안): 속도 상한이 trail_stop_speed 아래면 풀지 않고
                 #   직접 세운다. 저속 + 상한 0 은 풀이가 status 4 로 깨져 래치된다 (offline 1109_3,
                 #   정지 장애물 뒤 204/600). 감속은 ws_dec_max 안, 조향은 그대로. 상한이 다시 오르면 푼다.
+                #   ★ 2026-11-11: 빠를 때 (커브 1.3 m/s) 조향을 고정한 채 세우면 벽 밖으로 미끄러졌다 (offline 1109_3).
+                #   이미 느릴 때 (trail_stop_vx 아래) 만 직접 세우고, 그 전에는 MPC 가 상한을 지키며 조향·감속한다.
                 stop_now = mode == TRAIL and cap is not None and (
-                    cap[0] < self.trail_stop_speed or (self.trail_stopped and cap[0] < self.trail_go_speed))
+                    (cap[0] < self.trail_stop_speed and (self.trail_stopped or self.twist[0] < self.trail_stop_vx))
+                    or (self.trail_stopped and cap[0] < self.trail_go_speed))
                 if stop_now:
                     if not self.trail_stopped:
                         self.get_logger().info(f'뒤따름 정지 — 상한 {cap[0]:.2f} m/s, 풀지 않고 세움')

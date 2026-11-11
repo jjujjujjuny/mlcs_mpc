@@ -74,7 +74,12 @@ class OppParams:
     gap_switch: float = 0.10    # 반대쪽이 이만큼 더 넓어야 바꿀 후보가 된다 m
     switch_frames: int = 10     # 후보가 이만큼 이어져야 바꾼다 (TRAIL 에서 나올 때도)
     trail_gap: float = 0.80     # 뒤따를 때 목표 간격 (s 차이) m
-    trail_gain: float = 1.0     # 간격 오차 → 속도 1/s
+    trail_gain: float = 1.0     # 목표 간격보다 가까울 때 간격 오차 → 속도 1/s (물러나는 쪽)
+    trail_brake: float = 0.6    # 상대 앞에 서는 속도 곡선 √(2 a 남은 거리) 의 a m/s² (바퀴 지연까지 덮게 낮게)
+    standoff_rate: float = 0.5  # 뒤따를 때 목표 간격이 늘어나는 최대 빠르기 m/s (훅 늘면 상한이 0 으로 떨어진다)
+    trail_headway: float = 0.4  # 간격에 더하는 우리 속도 × 이 시간 s (바퀴 시정수 0.4 s 동안 굴러가는 거리)
+    pass_guard: bool = True     # 추월 중 옆으로 아직 못 비켰으면 상대 앞에 설 수 있는 속도까지만
+    pass_standoff: float = 0.70 # 추월 중 옆으로 아직 못 비켰으면 이 간격 앞에서 설 수 있는 속도까지만 m
     trail_hold: float = 2.0     # 뒤따르는 중 상대가 이 안에 앞서 있으면 겹침이 없어도 계속 뒤따른다 m
     hold_side: bool = True      # 측면을 정하면 첫 겹침 앞 스테이지도 상대 쪽으로 못 가게 (apply_corridor)
     gp: bool = True
@@ -350,8 +355,8 @@ def eval_s(s_ego, t, p):
     return np.maximum(s_ego, s_ego[0] + p.pass_speed * np.asarray(t))
 
 
-def plan(s_ego, n0, lo, hi, pred, length, p):
-    """겹침과 양쪽 남는 폭. s_ego 는 스테이지별 우리 s, lo/hi 는 벽 경계."""
+def plan(s_ego, n0, lo, hi, pred, length, p, kappa=None):
+    """겹침과 양쪽 남는 폭. s_ego 는 스테이지별 우리 s, lo/hi 는 벽 경계, kappa 는 그 s 의 트랙 곡률."""
     s_ego = np.asarray(s_ego, float)
     ds = wrap_s(s_ego - pred.s, length)
     sig_b = pred.sig_s if pred.sig_b is None else pred.sig_b
@@ -368,9 +373,20 @@ def plan(s_ego, n0, lo, hi, pred, length, p):
         # 도달 가능성: 그 스테이지까지 달린 거리로 옆으로 갈 수 있는 만큼
         v0 = max((s_ego[1] - s_ego[0]) / max(pred.t[1], 1e-6), 0.1) if len(s_ego) > 1 else 0.1
         kap = min(p.reach_kappa, p.a_lat / v0 ** 2)
-        r = lateral_reach(s_ego[hit] - s_ego[0], kap, p.reach_heading) + p.reach_margin
+        # ★ 2026-11-10 (offline 1108_7 급커브 안쪽 상자): 커브를 도는 데 이미 곡률 κ_트랙 을 쓰고 있어서
+        #   안쪽으로 비키는 데는 그만큼 덜 남는다 (조향 포화 0.38 인 채로 못 비키고 그 자리에 섰다).
+        #   바깥쪽은 덜 꺾으면 되니 그대로 둔다. n 은 왼쪽 +, κ > 0 은 왼쪽 커브.
+        kap_l = kap_r = kap
+        if kappa is not None:
+            k_end = int(np.nonzero(hit)[0].max()) + 1
+            kb = float(np.mean(np.asarray(kappa, float)[:k_end]))
+            kap_l = max(kap - max(kb, 0.0), 0.05)
+            kap_r = max(kap - max(-kb, 0.0), 0.05)
+        dsh = s_ego[hit] - s_ego[0]
+        r_l = lateral_reach(dsh, kap_l, p.reach_heading) + p.reach_margin
+        r_r = lateral_reach(dsh, kap_r, p.reach_heading) + p.reach_margin
         nl, nr = edge_l - n0, n0 - edge_r
-        reach_l, reach_r = bool(np.all(nl <= r)), bool(np.all(nr <= r))
+        reach_l, reach_r = bool(np.all(nl <= r_l)), bool(np.all(nr <= r_r))
         need_l, need_r = float(max(nl.max(), 0.0)), float(max(nr.max(), 0.0))
     else:
         gl = gr = math.inf
@@ -385,12 +401,17 @@ def apply_corridor(lo, hi, pred, pl, side, p, n0=None):
     통로가 먼 스테이지에만 걸리면 그 앞은 자유라 MPCC 가 레이싱 라인을 따라 상대 쪽으로 가 버리고,
     가까워졌을 땐 옆으로 갈 거리가 모자라 뒤따름으로 떨어진다 (1109_3 왼쪽 상자, 2026-11-09)."""
     lo, hi = np.array(lo, float), np.array(hi, float)
+    lo_w, hi_w = lo.copy(), hi.copy()
     h = pl.hit
     c = p.clear + pred.sig_d
     if side == LEFT:
         lo[h] = np.maximum(lo[h], pred.d[h] + c[h])
     elif side == RIGHT:
         hi[h] = np.minimum(hi[h], pred.d[h] - c[h])
+    # ★ 2026-11-11: 통로가 반대쪽 벽을 넘으면 (나란히 가는 중 상대가 붙어 옴 등) 솔버 쪽 wall_bounds 가
+    #   lo > hi 를 가운데 한 점으로 두는데, 그 점이 벽 밖이라 MPC 가 차를 벽 밖으로 밀었다 (offline 벽 밖
+    #   60~87%). 통로는 벽을 넘지 않게 벽에 붙여 둔다. 상대와의 간격은 속도 상한 (pass_guard) 이 맡는다.
+    lo, hi = np.minimum(lo, hi_w), np.maximum(hi, lo_w)
     if n0 is not None and h.any() and side in (LEFT, RIGHT):
         k0 = int(np.argmax(h))
         if k0 > 0:
@@ -411,11 +432,29 @@ def trail_standoff(pl, p):
     return max(p.trail_gap, p.length + reach_distance(min(needs), p.reach_kappa, p.reach_heading))
 
 
-def trail_cap(pl, pred, v_max, p):
-    """뒤따를 때 스테이지 0..N−1 의 바퀴 속도 상한. 상대가 앞에 있을 때만 의미가 있다."""
-    gap = -pl.ds0
-    cap = pred.v[:-1] + p.trail_gain * (gap - trail_standoff(pl, p))
-    return np.clip(cap, 0.0, v_max)
+def trail_cap(pl, pred, v_max, p, s_ego, length, n0=0.0, kappa=None, standoff=None):
+    """상대 앞에 설 수 있는 스테이지 0..N−1 의 바퀴 속도 상한. 상대가 앞에 있을 때만 의미가 있다.
+
+    ★ 2026-11-10 (offline 1108_7 정지 장애물 241 주기 충돌, 가운데 상대 14 주기): 예전에는 지금 간격
+      하나로 v = v_상대 + 1.0 × (간격 − 목표) 를 모든 스테이지에 같게 줬다. MPC 는 앞에서 서야 한다는
+      것을 못 보고, 바퀴 지연 0.4 s 와 맞물려 0.8 m 를 지나쳐 0.2 m 까지 붙었다. 이제는
+        · 스테이지마다 예측 위치의 간격 gap_k 로 (MPC 가 미리 감속한다)
+        · 남은 거리 e_k = gap_k − 목표 − headway × 우리 속도_k 에서 서는 속도 √(2 a e_k)
+          (가까우면 trail_gain × e_k 로 상대보다 느리게)
+        · s 진행 속도를 바퀴 속도로: × (1 − n κ). 코너 안쪽이면 같은 바퀴 속도로 s 가 더 빨리 간다
+    s_ego 는 스테이지별 우리 s (eval_s 로 늘리지 않은 것), kappa 는 그 s 의 곡률.
+    """
+    s_ego = np.asarray(s_ego, float)
+    gap = -wrap_s(s_ego - pred.s, length)
+    dt = max(float(pred.t[1] - pred.t[0]), 1e-6) if len(pred.t) > 1 else 0.033
+    v_e = np.maximum(np.r_[np.diff(s_ego), s_ego[-1] - s_ego[-2]] / dt, 0.0) if len(s_ego) > 1 else 0.0
+    goal = trail_standoff(pl, p) if standoff is None else standoff
+    e = gap - goal - p.trail_headway * v_e
+    dv = np.where(e >= 0.0, np.sqrt(2.0 * p.trail_brake * np.maximum(e, 0.0)), p.trail_gain * e)
+    sd = np.maximum(pred.v + dv, 0.0)
+    if kappa is not None:
+        sd = sd * np.clip(1.0 - n0 * np.asarray(kappa, float), 0.5, 1.5)
+    return np.clip(sd, 0.0, v_max)[:-1]
 
 
 class SideSelector:
@@ -485,6 +524,8 @@ class Opponent:
         self.model = OpponentModel(track, self.p)
         self.sel = SideSelector(self.p)
         self.last = None    # 마지막 (Prediction, Plan, mode) — 시각화·기록용
+        self.standoff = None    # 뒤따를 때 쓰는 목표 간격 (늘 때는 천천히)
+        self.t_last = None
 
     def measure(self, t, x, y, yaw):
         self.tracker.update(t, x, y, yaw)
@@ -500,12 +541,32 @@ class Opponent:
             self.last = None
             return lo, hi, None, None
         pred = self.model.predict(*st, N, dt)
-        pl = plan(eval_s(s_ego, pred.t, self.p), n0, lo, hi, pred, self.track.length, self.p)
+        s_eval = eval_s(s_ego, pred.t, self.p)
+        pl = plan(s_eval, n0, lo, hi, pred, self.track.length, self.p, self.track.kappa_at(s_eval))
         mode = self.sel.update(pl)
         cap = None
+        kap = self.track.kappa_at(np.asarray(s_ego, float))
         if mode in (LEFT, RIGHT):
             lo, hi = apply_corridor(lo, hi, pred, pl, mode, self.p, n0 if self.p.hold_side else None)
+            # ★ 2026-11-10 (offline 1109_3 가운데 정지 장애물 441 주기 충돌): 오른쪽 통로를 골랐는데 옆으로
+            #   못 비킨 채 2 m/s 로 다가가다 1.4 m 앞에서 뒤따르기로 바뀌어 못 섰다. 옆으로 아직 못 비켰으면
+            #   pass_standoff 앞에서 설 수 있는 속도까지만 간다. 비키고 나면 (need ≤ 여유) 풀린다.
+            need = pl.need_left if mode == LEFT else pl.need_right
+            if self.p.pass_guard and pl.ds0 < 0 and need > self.p.reach_margin:
+                cap = trail_cap(pl, pred, v_max, self.p, s_ego, self.track.length, n0, kap,
+                                standoff=self.p.pass_standoff)
         elif mode == TRAIL and pl.ds0 < 0:
-            cap = trail_cap(pl, pred, v_max, self.p)
+            # ★ 2026-11-11 (offline 1109_3 1.4 m/s 상대): 목표 간격이 0.8 → 1.3 m 로 훅 바뀌면 상한이 1.3 → 0 으로
+            #   떨어지고, 빠를 때 그렇게 서면 차가 커브에서 밀려 벽 밖으로 갔다. 늘 때는 standoff_rate 로 천천히.
+            goal = trail_standoff(pl, self.p)
+            dtc = 0.0 if self.t_last is None else max(t - self.t_last, 0.0)
+            if self.standoff is None or goal <= self.standoff:
+                self.standoff = goal if self.standoff is not None else min(goal, max(self.p.trail_gap, -pl.ds0))
+            else:
+                self.standoff = min(goal, self.standoff + self.p.standoff_rate * dtc)
+            cap = trail_cap(pl, pred, v_max, self.p, s_ego, self.track.length, n0, kap, standoff=self.standoff)
+        if mode != TRAIL:
+            self.standoff = None
+        self.t_last = t
         self.last = (pred, pl, mode)
         return lo, hi, cap, mode

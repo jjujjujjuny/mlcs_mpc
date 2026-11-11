@@ -148,8 +148,10 @@ def test_blocked_trails():
     pl = plan(s_ego, 0.0, lo, hi, pr, t.length, p)
     sel = SideSelector(p)
     assert sel.update(pl) == TRAIL
-    cap = trail_cap(pl, pr, 3.0, p)
-    assert cap.shape == (N,) and np.all(cap >= 0) and abs(cap[0] - (1.0 + 1.0 * (1.0 - 0.8))) < 1e-9
+    cap = trail_cap(pl, pr, 3.0, p, s_ego, t.length)
+    assert cap.shape == (N,) and np.all(cap >= 0)
+    # 간격 1.0 < 목표 0.8 + 0.4 s × 2 m/s: 상대 (1 m/s) 보다 느리게 해서 간격을 벌린다
+    assert cap[0] < 1.0
 
 
 def test_no_switch_alongside():
@@ -261,7 +263,7 @@ def test_unreachable_side_trails_with_room():
     assert SideSelector(p).update(pl) == TRAIL
     room = trail_standoff(pl, p)
     assert room > p.trail_gap
-    assert trail_cap(pl, pr, 2.0, p)[0] == 0.0          # 너무 가깝다: 선다 (물러나지는 못함)
+    assert trail_cap(pl, pr, 2.0, p, s_ego, t.length)[0] == 0.0     # 너무 가깝다: 선다 (물러나지는 못함)
     # 빠질 간격만큼 뒤에 서 있으면 (속도 0) 왼쪽으로 다시 고른다
     s_ego = np.full(N + 1, 0.9 - room - 0.05)
     lo, hi = t.bounds_at(s_ego, 0.22)
@@ -285,6 +287,89 @@ def test_toy_overtake_narrow():
     passed, min_lat, modes = _toy_race(width=1.18, v_ego=2.0, v_opp=1.0, d_opp=-0.28)
     assert passed, modes
     assert min_lat >= 0.40 - 0.03, min_lat
+
+
+def test_trail_cap_brakes_ahead_per_stage():
+    """정지 장애물로 다가가면 상한이 스테이지마다 줄어든다 (MPC 가 미리 감속). 예전엔 모든 스테이지가 같았다."""
+    t, R = circle(width=1.0)
+    p = OppParams()
+    pr = _pred_const(t, 4.0, 0.0, 0.0)
+    s_ego = 0.0 + 2.0 * DT * np.arange(N + 1)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    pl = plan(s_ego, 0.0, lo, hi, pr, t.length, p)
+    cap = trail_cap(pl, pr, 3.0, p, s_ego, t.length)
+    assert cap[0] > cap[N // 2] > cap[-1] >= 0.0, cap[[0, N // 2, -1]]
+
+
+def test_trail_cap_inside_of_curve_is_slower():
+    """코너 안쪽 (n κ > 0) 은 같은 바퀴 속도로 s 가 더 빨리 간다 → 바퀴 상한을 (1 − n κ) 만큼 낮춘다."""
+    t, R = circle(width=1.6)
+    p = OppParams()
+    pr = _pred_const(t, 3.0, 0.0, 1.0)
+    s_ego = 0.0 + 1.0 * DT * np.arange(N + 1)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    pl = plan(s_ego, 0.3, lo, hi, pr, t.length, p)
+    kap = t.kappa_at(s_ego)
+    c0 = trail_cap(pl, pr, 3.0, p, s_ego, t.length)
+    c_in = trail_cap(pl, pr, 3.0, p, s_ego, t.length, n0=0.3, kappa=kap)
+    assert np.allclose(c_in, c0 * (1.0 - 0.3 / R))
+
+
+def test_toy_stop_before_static_with_wheel_lag():
+    """바퀴 시정수 0.4 s 인 간이 차가 2 m/s 로 정지 장애물에 다가가도 부딪히지 않고 선다 (2026-11-10 offline 241 주기 충돌)."""
+    t, R = circle(width=1.0)
+    p = OppParams()
+    opp = Opponent(t, p)
+    s, v, ws, so = 0.0, 2.0, 2.0, 4.0
+    s_pred = s + v * DT * np.arange(N + 1)
+    gaps = []
+    for i in range(int(8.0 / DT)):
+        tt = i * DT
+        for j in range(3):
+            opp.measure(tt - DT + (j + 1) * DT / 3, *xy_on(R, so, 0.0))
+        lo, hi = t.bounds_at(s_pred, 0.22)
+        _, _, cap, mode = opp.step(tt, s_pred, 0.0, lo, hi, 2.0, N, DT)
+        cmd = 2.0 if cap is None else float(cap[0])
+        ws += (cmd - ws) * DT / 0.4                 # 바퀴는 0.4 s 로 따라간다
+        v = max(ws, 0.0)
+        s += v * DT
+        # 다음 예측: 상한을 따라 바퀴가 0.4 s 로 따라간다고 본 궤적 (MPC 대신)
+        sp, wp, out = s, ws, [s]
+        for k in range(N):
+            c = 2.0 if cap is None else float(cap[min(k + 1, N - 1)])
+            wp += (c - wp) * DT / 0.4
+            sp += max(wp, 0.0) * DT
+            out.append(sp)
+        s_pred = np.array(out)
+        gaps.append(so - s)
+    assert min(gaps) > 0.55, min(gaps)          # 차 길이 0.55 m: 범퍼가 안 닿는다
+    assert gaps[-1] < 2.5, gaps[-1]             # 너무 멀리 서지도 않는다
+
+
+def test_corridor_never_crosses_wall():
+    """통로가 반대쪽 벽을 넘으면 벽에 붙여 둔다 (솔버가 lo > hi 를 가운데 점으로 둬 벽 밖으로 밀던 것)."""
+    t, R = circle(width=1.0)
+    p = OppParams()
+    pr = _pred_const(t, 1.0, 0.15, 1.0)        # 상대가 왼쪽 → 왼쪽 통로는 벽 밖까지 요구
+    s_ego = 0.0 + 1.5 * DT * np.arange(N + 1)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    pl = plan(s_ego, 0.0, lo, hi, pr, t.length, p)
+    lo2, hi2 = apply_corridor(lo, hi, pr, pl, LEFT, p)
+    assert np.all(lo2 <= hi + 1e-12) and np.all(hi2 >= lo - 1e-12)
+
+
+def test_reach_inside_of_curve_is_harder():
+    """커브 안쪽으로 비키는 데는 트랙 곡률만큼 덜 남는다 (급커브 안쪽 상자 앞에서 서 버린 것)."""
+    t, R = circle(R=1.0, width=1.6)              # 왼쪽 (안쪽) 커브 κ = 1.0
+    p = OppParams()
+    pr = _pred_const(t, 2.2, -0.1, 0.0)         # 2.2 m 앞 정지 상자, 양쪽 다 자리는 있다
+    s_ego = 0.0 + 1.0 * DT * np.arange(N + 1)
+    lo, hi = t.bounds_at(s_ego, 0.22)
+    s_ev = eval_s(s_ego, pr.t, p)
+    flat = plan(s_ev, 0.0, lo, hi, pr, t.length, p)
+    curve = plan(s_ev, 0.0, lo, hi, pr, t.length, p, t.kappa_at(s_ev))
+    assert flat.reach_left and flat.reach_right
+    assert not curve.reach_left and curve.reach_right     # 안쪽 (왼쪽) 만 못 간다
 
 
 if __name__ == '__main__':
