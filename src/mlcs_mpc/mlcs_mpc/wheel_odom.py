@@ -13,7 +13,7 @@ wheel_odom — 바퀴 속도 + IMU 자이로로 오도메트리를 만든다. Ca
   슬립: Cartographer 는 오도메트리의 분산을 보지 않고 자세만 쓴다 → 속도 자체를 묶는다.
     바퀴가 잠기면 (11-09 급제동, 바퀴 0 인데 차 1.5 m/s) 추정 속도가 max_decel 보다 빨리 줄지 않게,
     출발 때 헛돌면 max_accel 보다 빨리 늘지 않게.
-  자이로 바이어스: 바퀴가 서 있는 동안 (|v| < 0.02) 지수 평균으로 계속 갱신한다.
+  자이로 바이어스: 바퀴가 서 있고 (|v| < 0.02) 자이로가 조용할 때 (|r − b| < 2°/s) 지수 평균으로 갱신한다.
 
   ros2 run mlcs_mpc wheel_odom --ros-args -p gyro_sign:=1.0
 """
@@ -43,6 +43,7 @@ class WheelOdom(Node):
         d('max_accel', 4.0)                 # 추정 속도 변화 상한 m/s² (헛돎)
         d('max_decel', 3.0)                 # m/s² (잠김 — 실측 잠김 감속 p10 −2.7)
         d('bias_tau', 2.0)                  # 정지 중 바이어스 지수 평균 시정수 s
+        d('bias_gate_dps', 2.0)             # |자이로 − 바이어스| 가 이 이하일 때만 갱신 °/s
         d('odom_frame', 'odom')
         d('base_frame', 'base_link')
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
@@ -50,6 +51,7 @@ class WheelOdom(Node):
         self.scale, self.gsign = float(gp('vx_scale')), float(gp('gyro_sign'))
         self.gk = math.pi / 180.0 if bool(gp('gyro_deg')) else 1.0
         self.amax, self.dmax, self.btau = float(gp('max_accel')), float(gp('max_decel')), float(gp('bias_tau'))
+        self.bias_gate = math.radians(float(gp('bias_gate_dps')))
         self.odom_frame, self.base_frame = gp('odom_frame'), gp('base_frame')
         self.v_wheel = 0.0
         self.v = 0.0                # 슬립을 묶은 추정 속도
@@ -84,7 +86,9 @@ class WheelOdom(Node):
             self.t_last = t
             return
         self.t_last = t
-        if abs(self.v_wheel) < 0.02:                # 서 있다 → 바이어스 갱신
+        # 서 있고 자이로도 조용할 때만 바이어스 갱신. 바퀴만 보면 손으로 돌리거나 제자리에서 미끄러질 때
+        # 그 회전을 바이어스로 배워 버린다 (손 90° 시험: +70° 까지 갔다가 2 s 시정수로 +33° 로 되돌아감)
+        if abs(self.v_wheel) < 0.02 and abs(r_raw - self.bias) < self.bias_gate:
             a = min(dt / self.btau, 1.0)
             self.bias += a * (r_raw - self.bias)
         r = r_raw - self.bias
