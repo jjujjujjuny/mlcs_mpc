@@ -462,6 +462,9 @@ def main():
     p.add_argument('--frenet-frac', type=float, default=0.9,
                    help='--walls: 코너 안쪽 폭을 이 비율 × 반경으로 자른다 (1 - n·κ > 0 특이점)')
     p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--strict', action='store_true',
+                   help='기준 (벽 여유·곡률) 을 다 맞춘 선이 없으면 저장하지 않는다 (예전 동작). '
+                        '기본은 가장 나은 후보를 경고와 함께 저장')
     a = p.parse_args()
     if a.walls:
         a.no_author_prep, a.mincurv = True, False
@@ -524,6 +527,7 @@ def main():
     print(f'\n■ 평활화 — 통과하는 최소값을 찾습니다 '
           f'(차 한계 R {1/kappa_lim:.3f} m, 벽 여유 {a.margin:.2f} m)')
     best = None
+    cands = []      # 기준을 못 맞춰도 저장할 수 있게 시도한 것을 모아 둔다 (--strict 가 아니면)
     for dev in np.arange(a.smooth, 0.401, 0.01):
         r = dt.fit_closed_spline(c0, float(dev), a.spacing)
         if r is None:
@@ -553,6 +557,7 @@ def main():
                 prep['bad_run'] = dt.longest_run(pk > kappa_lim,
                                                  prep['spacing'])
                 prun = prep['bad_run']
+        cands.append((float(dev), tck, rmse, prep, float(bad_run), float(1 / ak.max()), float(clr.min())))
         curv_ok = a.allow_infeasible or (
             bad_run <= a.max_bad_run
             and (prep is None or prun <= a.max_bad_run))
@@ -572,6 +577,18 @@ def main():
                   f'@ ({q[0]:+.2f}, {q[1]:+.2f}) — 평활을 올리자 선이 벽 쪽으로 '
                   '당겨졌습니다. 그 근처가 차 한계보다 급한 코너거나 맵 잡음입니다')
             break
+    forced = False
+    if best is None and cands and not a.strict:
+        # ★ 2026-11-11 (사용자): 차가 못 달리더라도 트랙은 만들어지게. 벽 여유를 지킨 것 중 (없으면 전부 중)
+        #   차 한계보다 급한 구간이 가장 짧고, 그다음 R_min 이 가장 큰 후보를 경고와 함께 저장한다.
+        pool = [c for c in cands if c[6] >= a.margin] or cands
+        pick = min(pool, key=lambda c: (round(c[4], 3), -c[5]))
+        best = pick[:4]
+        forced = True
+        print(f'\n⚠ 기준을 다 맞춘 선이 없어 가장 나은 후보로 저장합니다 (평활 {pick[0]:.2f}): '
+              f'R_min {pick[5]:.3f} m, 차 한계보다 급한 구간 최장 {pick[4] * 100:.0f} cm, '
+              f'벽 여유 최소 {pick[6]:.3f} m (기준 {a.margin:.2f})')
+        print('  ★ 이 트랙은 차가 못 도는 곳이 있을 수 있습니다 — 그 코너에서 교착·벽 넘음이 날 수 있어요')
     if best is None:
         print('\n✗ 통과하는 평활화를 못 찾았습니다. 그림을 보세요.')
         print('  곡률만 걸렸다면 트랙이 차 한계보다 급하게 굽은 것입니다.')
@@ -606,6 +623,8 @@ def main():
     wide = (W >= a.max_width - m['res']).any(axis=1)
     bad_m = ak > kappa_lim
     print(f'\n■ 결과   평활 {dev:.2f} m')
+    if forced:
+        print('   ⚠ 기준 미달 트랙 (차가 못 도는 코너가 있을 수 있음) — 그래도 저장합니다. 예전처럼 막으려면 --strict')
     print(f'   길이 {total:.2f} m · {len(c)}점 · 방향 '
           f'{"CCW (왼쪽으로 돈다)" if dt.winding(kap, a.spacing) > 0 else "CW (오른쪽으로 돈다)"}')
     print(f'   R_min {1/ak.max():.3f} m  (차 한계 {1/kappa_lim:.3f})')
