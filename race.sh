@@ -69,10 +69,11 @@ source = str(c.get('source') or 'mocap')
 if source not in ('lidar', 'mocap'):
     err(f'source 는 lidar 또는 mocap: {source}')
 # 장애물: off | watch (찾기만 — RViz 로 확인, MPC 는 모름) | lidar (찾아서 피함)
+#         | learn (watch 와 같고, 끝나면 그 기록으로 맵 헛것 목록 maps/<맵>_ghost.csv 를 갱신 — 빈 트랙에서만)
 #   lidar_obstacles 노드 → /obstacle/pose → hmpc 의 상대 로직 (opponent.py)
 obs = str(c.get('obstacles') or 'off')
-if obs not in ('off', 'watch', 'lidar'):
-    err(f'obstacles 는 off, watch, lidar 중 하나: {obs}')
+if obs not in ('off', 'watch', 'lidar', 'learn'):
+    err(f'obstacles 는 off, watch, lidar, learn 중 하나: {obs}')
 if obs != 'off' and source != 'lidar':
     err(f'obstacles: {obs} 는 source: lidar 에서만 (맵과 비교해 찾는다)')
 if obs == 'lidar':
@@ -105,6 +106,7 @@ print(f'export MLCS_HMPC_DRIVE={1 if drive else 0}')
 print(f'export MLCS_HMPC_SOURCE={source}')
 print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
 print(f'export MLCS_OBSTACLES={0 if obs == "off" else 1}')
+print(f'export MLCS_OBS_LEARN={1 if obs == "learn" else 0}')
 # 위치추정 오도메트리: off = 스캔만 (지금까지), ekf = 바퀴 속도·자이로 (wheel_odom) 로 예측 (source: lidar 에서만)
 lo = str(c.get('loc_odom') or 'off')
 if lo not in ('off', 'ekf'):
@@ -118,6 +120,7 @@ lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
          f'모델   {"★ HyperPM 시변 " + os.path.basename(hm) if hm else "상수 파라미터 (hmpc.yaml)"}',
          f'위치   오도메트리 ' + ('★ 바퀴·자이로 (wheel_odom → Cartographer)' if lo == 'ekf' and source == 'lidar' else '없음 (스캔만)'),
          f'장애물 ' + {'off': '끔', 'watch': '찾기만 (RViz /obstacle/markers — MPC 는 안 피함)',
+                       'learn': '★ 헛것 배우기 — 찾기만, 끝나면 maps/<맵>_ghost.csv 갱신 (트랙에 상대·사람 없이!)',
                        'lidar': '★ 라이다로 찾아 피함 (lidar_obstacles → /obstacle/pose)'}[obs]]
 lines += [f'       {k} = {v}' for k, v in h.items() if k not in ('v_max', 'hyper_model', 'opponent_topic', 'opponent_msg')]
 if v_max > 3.0:
@@ -135,8 +138,24 @@ ARGS=()
 # ★ trap '' 으로 무시하면 자식이 SIGINT 무시를 물려받아 drive.sh 정리가 안 돈다. ':' 로 둔다.
 trap ':' INT
 set +e
+T_START=$(date +%s)
 "$HERE/drive.sh" hmpc "${ARGS[@]}"
 trap - INT
+if [ "${MLCS_OBS_LEARN:-0}" = 1 ]; then
+    echo
+    echo "════════════════ 헛것 자리 배우기 (obstacles: learn) ════════════════"
+    # 이번 실행에서 생긴 lidar_obstacles 기록 (시계가 1970 으로 돌아가도 되게 시각 대신 수정 시각으로)
+    NEW=$(find "$HOME/mlcs_data" -maxdepth 1 -name 'obstacles_*.csv' -newermt "@$((T_START - 5))" 2>/dev/null | sort)
+    MAPNAME=$(basename "$MLCS_HMPC_MAP" .pbstream)
+    PY=python3; [ -x "$HOME/hmpc-venv/bin/python" ] && PY="$HOME/hmpc-venv/bin/python"
+    if [ -n "$NEW" ]; then
+        # shellcheck disable=SC2086
+        "$PY" "$HERE/tools/ghost_mask.py" --map "$MAPNAME" --append $NEW || echo "헛것 목록을 못 만들었습니다"
+        echo "다음 ./race.sh 부터 적용. 되돌리려면: rm maps/${MAPNAME}_ghost.csv"
+    else
+        echo "이번 실행의 obstacles_*.csv 기록이 없습니다 — 목록은 그대로"
+    fi
+fi
 if [ -n "$RACE_LOG" ] && [ "$MLCS_HMPC_SOURCE" = lidar ]; then
     echo
     echo "════════════════ 채점 (mocap 정답) ════════════════"
