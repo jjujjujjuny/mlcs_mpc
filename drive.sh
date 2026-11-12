@@ -6,6 +6,7 @@
 #     ./drive.sh joy                 조이스틱 수동 조종 (+ 차량 브링업)
 #                       --log        몰면서 HyperPM 학습 데이터도 쌓는다
 #     ./drive.sh rally [태그]        원선회용 수동 조종 — 십자키로 최대 속도·조향 조절
+#     ./drive.sh steercheck          조향 점검 (rally 를 띄운 다른 터미널에서) — mocap 없이 자이로로
 #                                    (기록 포함, 태그 기본값 rally)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
@@ -934,6 +935,16 @@ joy)
     load_ros; require_ws_pkg mlcs_mpc
     arm_cleanup
     joy_session "${1:-}"
+    ;;
+
+steercheck)
+    # ./drive.sh steercheck   조향 점검 (tools/steer_check.py). ★ 다른 터미널에서 ./drive.sh rally 를 먼저 띄운다.
+    #   rally 의 노드를 건드리지 않게 정리 (arm_cleanup) 를 하지 않는다. Ctrl+C 로 요약.
+    load_ros
+    if ! pgrep -f '/lib/vesc_driver/vesc_driver_node' >/dev/null 2>&1; then
+        warn "VESC 드라이버가 안 보입니다 — 다른 터미널에서 ./drive.sh rally 를 먼저 띄우세요"
+    fi
+    exec python3 "$SCRIPT_DIR/tools/steer_check.py"
     ;;
 
 rally)

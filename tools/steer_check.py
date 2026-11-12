@@ -3,7 +3,7 @@
 steer_check.py — mocap 없이 조향 점검 (대회장용). ./drive.sh rally 와 같이 띄운다.
 
   터미널 1   ./drive.sh rally                      (VESC·조이스틱. 스틱 끝 = 최대 속도·최대 조향, 십자키로 조절)
-  터미널 2   python3 tools/steer_check.py           (빌드 필요 없음. source ~/f1tenth_ws/install/setup.bash 뒤)
+  터미널 2   ./drive.sh steercheck                 (= python3 tools/steer_check.py, 빌드 필요 없음)
 
   받는 것: /sensors/core (바퀴 ERPM), /sensors/imu/raw (VESC 자이로, deg/s), /commands/servo/position (서보 명령)
   하는 일: 조향을 고정하고 달리는 구간마다 실제 곡률 κ = 요레이트 / 속도 를 모아,
