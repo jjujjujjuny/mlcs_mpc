@@ -57,6 +57,15 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Marker
+      Name: Centerline
+      Enabled: true
+      Topic:
+        Value: /hmpc/centerline
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
     - Class: rviz_default_plugins/MarkerArray
       Name: Obstacles
       Enabled: true

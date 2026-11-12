@@ -361,6 +361,12 @@ class HmpcNode(Node):
         self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.solve_pub = self.create_publisher(Float32, '/mpc/solve_time', 1)
         self.status_pub = self.create_publisher(String, '/hmpc/status', 1)
+        # 컨트롤러가 실제로 기준 삼는 중심선 (track_csv 그대로) — RViz 표시용.
+        #   래치 + 2초마다 재발행: RViz·노트북 브리지를 나중에 켜도 뜬다.
+        self.center_pub = self.create_publisher(Marker, '/hmpc/centerline', LATCHED)
+        self._center_msg = self._make_centerline()
+        self.center_pub.publish(self._center_msg)
+        self.create_timer(2.0, lambda: self.center_pub.publish(self._center_msg))
 
         self.opp = None
         self.opp_mode = None
@@ -452,6 +458,17 @@ class HmpcNode(Node):
             if not getattr(self, '_warned_markers', False):
                 self._warned_markers = True
                 self.get_logger().error(f'상대 마커 그리기 실패 (주행은 계속): {e!r}')
+
+    def _make_centerline(self):
+        m = Marker()
+        m.header.frame_id = 'map'
+        m.ns, m.id, m.type, m.action = 'centerline', 0, Marker.LINE_STRIP, Marker.ADD
+        m.scale.x = 0.03
+        m.color = ColorRGBA(r=0.0, g=1.0, b=0.3, a=0.9)
+        m.pose.orientation.w = 1.0
+        xs, ys = np.r_[self.track.x, self.track.x[0]], np.r_[self.track.y, self.track.y[0]]  # 닫힌 루프
+        m.points = [Point(x=float(a), y=float(b)) for a, b in zip(xs, ys)]
+        return m
 
     def _opp_markers_impl(self):
         with self.lock:

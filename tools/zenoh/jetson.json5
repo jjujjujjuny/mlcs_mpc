@@ -31,6 +31,7 @@
           "^/mpc/predicted_path$", "^/mpc/reference_path$",
           "^/hmpc/status$",
           "^/hmpc/opponent_markers$",
+          "^/hmpc/centerline$",             // MPCC 기준 중심선 (2초마다, 작음)
           "^/obstacle/markers$",
           "^/track/.*", "^/viz/car$",
           "^/sensors/core$",              // 제어판 배터리·VESC (2 Hz 로 솎음)
