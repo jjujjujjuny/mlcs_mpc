@@ -367,6 +367,32 @@ def test_opponent_watch():
     return r
 
 
+def test_centerline():
+    # 11-12 메인 PC: /hmpc/centerline (래치 Marker) — 트랙 csv 의 x, y 를 닫힌 선으로. 나중에 구독해도 받아야 한다
+    from rclpy.qos import DurabilityPolicy
+    from visualization_msgs.msg import Marker
+    x, y, h = track_start()
+    car = FakeCar(x, y, h)
+    n = Harness(car, 'bench:=true')
+    car.enable(True)
+    r = check('워커 준비', n.wait_ready())
+    got = []
+    sub_node = rclpy.create_node('centerline_late_sub')
+    sub_node.create_subscription(Marker, '/hmpc/centerline', lambda m: got.append(m),
+                                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    end = time.monotonic() + 3.0
+    while time.monotonic() < end and not got:
+        rclpy.spin_once(sub_node, timeout_sec=0.1)
+    r &= check('늦게 구독해도 중심선 받음', bool(got), f'{len(got[0].points) if got else 0}점')
+    if got:
+        pts = got[0].points
+        r &= check('닫힌 선 (첫 점 = 끝 점), map 프레임', got[0].header.frame_id == 'map'
+                   and abs(pts[0].x - pts[-1].x) < 1e-9 and abs(pts[0].y - pts[-1].y) < 1e-9)
+    sub_node.destroy_node()
+    n.close()
+    return r
+
+
 def test_lidar_map_pin():
     # 맵 고정 (11-11): /loc/correction 을 맞춤 비율이 좋을 때만 조금씩 적분해 /mpc/state 에 더한다
     from geometry_msgs.msg import PoseStamped
@@ -525,7 +551,7 @@ def main():
     a = ap.parse_args()
     rclpy.init()
     tests = [test_gates, test_stopped_worker, test_real_hang, test_bad_solution, test_bench,
-             test_opponent_watch, test_lidar_map_pin, test_lidar_gyro_rate, test_bridge_frozen_pose]
+             test_opponent_watch, test_centerline, test_lidar_map_pin, test_lidar_gyro_rate, test_bridge_frozen_pose]
     bad = []
     for f in tests:
         if a.only and a.only != f.__name__:
