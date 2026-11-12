@@ -425,8 +425,9 @@ class Panel(QtWidgets.QWidget):
                               tip='/mpc/go — 조이스틱 B 와 같다. 정지는 조이스틱 LB/START')
         self.b_rviz = self._btn('RViz 열기', self.open_rviz, tip='노트북 RViz (2D Pose Estimate 는 여기서)')
         self.b_term = self._btn('젯슨 터미널', self.open_term, tip='젯슨 tmux 화면에 붙기 (Ctrl+b d 로 빠지기)')
-        self.b_quiet = self._btn('젯슨 정리', lambda: self.remote(['quiet'], then_poll=False),
-                                 tip='젯슨의 VS Code·크롬·RViz 를 닫는다 (주행 시작·맵핑 시작은 자동으로 한다)')
+        self.b_quiet = self._btn('젯슨 VS Code·크롬 끄기', self.quiet,
+                                 tip='./drive.sh quiet — 젯슨의 VS Code·크롬·RViz 를 닫아 CPU 를 주행에 몰아준다\n'
+                                     '(주행 시작·맵핑 시작은 자동으로 한다. ROS 노드는 건드리지 않음)')
         for i, b in enumerate([self.b_bench, self.b_race, self.b_mapping,
                                self.b_int, self.b_kill, self.b_go,
                                self.b_rviz, self.b_term, self.b_quiet]):
@@ -907,6 +908,12 @@ class Panel(QtWidgets.QWidget):
                 QtCore.QTimer.singleShot(800, self.poll_status)
         self.note('→ ' + ' '.join(args))
         self.ssh.run(args, done)
+
+    def quiet(self):
+        if not self.ask('젯슨의 VS Code·크롬·RViz 를 모두 닫을까요?\n\n'
+                        'VS Code 안의 Claude 작업도 같이 꺼집니다. 주행 노드는 그대로입니다.'):
+            return
+        self.remote(['quiet'], then_poll=False)
 
     def start(self, what):
         if what == 'race' and not self.ask(
