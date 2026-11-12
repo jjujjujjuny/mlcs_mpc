@@ -7,6 +7,7 @@
 #                       --log        몰면서 HyperPM 학습 데이터도 쌓는다
 #     ./drive.sh rally [태그]        원선회용 수동 조종 — 십자키로 최대 속도·조향 조절
 #     ./drive.sh steercheck          조향 점검 (rally 를 띄운 다른 터미널에서) — mocap 없이 자이로로
+#     ./drive.sh quiet               주행 전에 VS Code·크롬·RViz 를 닫는다 (CPU 를 주행에 몰아주기)
 #                                    (기록 포함, 태그 기본값 rally)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
@@ -935,6 +936,35 @@ joy)
     load_ros; require_ws_pkg mlcs_mpc
     arm_cleanup
     joy_session "${1:-}"
+    ;;
+
+quiet)
+    # ./drive.sh quiet   주행 전에 젯슨의 무거운 데스크톱 프로그램을 닫는다 (2026-11-12)
+    #   코어를 막아 두지 않아서 VS Code·크롬이 MPC 노드 코어 (4) 에서도 돈다 (실측: VS Code 코어 1 개, 크롬 0.4 개).
+    #   ROS 노드·Cartographer·솔버는 건드리지 않는다. ★ 이 대화 (VS Code 안 Claude) 도 같이 꺼진다.
+    #   VS Code 터미널에서 실행하면 자기 터미널도 닫히므로, 정리는 분리된 셸에서 한다.
+    QUIET_NAMES='^(code|chrome|chromium|chromium-browser|firefox|rviz2)$'
+    # 지금 순간 젯슨 전체 CPU 사용률 (top 두 번째 샘플의 idle 로)
+    top_cpu() { top -b -n 2 -d 1 | grep '%Cpu' | tail -1 | sed 's/,/\n/g' | awk '/id/ {printf "%.0f", 100 - $1}'; }
+    if [ -z "$(ps -eo comm= | grep -E "$QUIET_NAMES")" ]; then
+        log "닫을 프로그램 없음 — 젯슨 CPU 지금 $(top_cpu) %"
+        exit 0
+    fi
+    log "닫기 전 젯슨 CPU 지금 $(top_cpu) % (6 코어 전체 기준). 닫을 것 (실행 뒤 평균 CPU):"
+    ps -eo pcpu=,comm= | awk '$2 ~ /^(code|chrome|chromium|chromium-browser|firefox|rviz2)$/ {c[$2]+=$1; n[$2]++}
+        END {for (k in c) printf "    %-18s %2d 개, CPU %.0f %%\n", k, n[k], c[k]}'
+    if [ "${1:-}" = "--dry" ]; then
+        log "(--dry — 닫지 않습니다)"
+        exit 0
+    fi
+    setsid bash -c "
+        for n in code chrome chromium chromium-browser firefox rviz2; do pkill -TERM -x \$n 2>/dev/null; done
+        sleep 3
+        for n in code chrome chromium chromium-browser firefox rviz2; do pkill -KILL -x \$n 2>/dev/null; done
+    " >/dev/null 2>&1 < /dev/null &
+    wait $! 2>/dev/null
+    sleep 1
+    log "${GRN}정리 끝${RST} — 젯슨 CPU 지금 $(top_cpu) %. 노머신 화면 공유도 주행 중엔 끊으세요"
     ;;
 
 steercheck)

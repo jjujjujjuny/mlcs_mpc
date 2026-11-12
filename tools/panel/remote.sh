@@ -164,10 +164,17 @@ start)
             echo "✗ 이미 실행 중입니다 (${m:-터미널}) — 먼저 정지하세요"; exit 1
         fi
     fi
+    # 주행·맵핑은 젯슨 데스크톱의 무거운 프로그램 (VS Code·크롬·RViz) 을 먼저 닫는다 — CPU 를 주행에 (2026-11-12)
+    if [ "$what" = race ] || [ "$what" = mapping ]; then
+        "$ROOT/drive.sh" quiet 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tail -2
+    fi
     echo "$what" > "$MODE_FILE"
     # ★ 끝나면 MODE_FILE 에 ended — tmux 로는 '돌고 있음'과 '프롬프트만 남음'이 구분되지 않는다 (실측)
     tmux new -d -s race "cd '$ROOT' && $cmd; echo ended > '$MODE_FILE'; echo; echo '[끝남 — 노트북 제어판에서 새로 시작할 수 있습니다]'; exec bash -l"
     echo "✓ 시작: $what"
+    ;;
+quiet)
+    "$ROOT/drive.sh" quiet 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
     ;;
 int)
     tmux send-keys -t race C-c 2>/dev/null && echo "✓ Ctrl+C 보냄 — 정리하며 내려갑니다" \

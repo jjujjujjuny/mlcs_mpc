@@ -133,6 +133,11 @@ print('RACE_SUMMARY=' + shlex.quote('\n'.join(lines)))
 PY
 )"
 
+# 젯슨 데스크톱의 무거운 프로그램은 MPC 코어에서도 돈다 — 경고만 (VS Code 터미널에서 실행하면 자기 자신이 죽으므로 닫지 않는다)
+HEAVY="$(ps -eo comm= | grep -cE '^(code|chrome|chromium|chromium-browser|firefox|rviz2)$')"
+if [ "${HEAVY:-0}" -gt 0 ] && [ "${MLCS_RACE_BENCH:-0}" != 1 ]; then
+    echo "⚠ 젯슨에 VS Code·크롬·RViz 가 켜져 있습니다 (프로세스 $HEAVY 개) — 풀이 시간이 튈 수 있어요. 다른 터미널·SSH 에서 ./drive.sh quiet"
+fi
 echo "════════════════ race.yaml ════════════════"
 echo -e "$RACE_SUMMARY"
 echo "════════════════════════════════════════════"
