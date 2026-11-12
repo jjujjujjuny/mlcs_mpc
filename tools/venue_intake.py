@@ -71,6 +71,7 @@ def track_stats(df, trk):
     w = int(np.argmin(margin))
     return dict(랩=len(laps), 랩타임=' / '.join(f'{x:.2f}' for x in laps[:12]) + (' …' if len(laps) > 12 else ''),
                 최고랩=f'{laps.min():.2f}' if len(laps) else '-',
+                랩중앙=f'{np.median(laps[laps < 1.5 * np.median(laps)]):.2f}' if len(laps) else '-',   # 교착 랩 (중앙값 ×1.5 초과) 은 뺀다
                 벽여유최소=f'{margin.min():+.2f} m (s {s[w]:.1f})',
                 벽닿음=f'{(margin < HALF_W).mean():.1%}',
                 벽닿은자리=', '.join(f'{x:.1f}' for x in sorted(set(np.round(s[margin < HALF_W], 0)))[:10]))
