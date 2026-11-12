@@ -89,8 +89,27 @@ def log_stats(f):
              후진=rev,
              배터리=f'{df.voltage.dropna().iloc[:50].median():.2f}/{df.voltage.min():.2f}' if 'voltage' in df else '-',
              duty=f'{df.duty_cycle.abs().max():.2f}' if 'duty_cycle' in df else '-',
-             odom='O' if 'odom_yaw' in df and df.odom_yaw.notna().mean() > 0.5 else 'X')
+             odom='O' if 'odom_yaw' in df and df.odom_yaw.notna().mean() > 0.5 else 'X',
+             바퀴배율=wheel_ratio(df))
     return df, r
+
+
+def wheel_ratio(df):
+    """라이다 이동 속도 / odom_vx (직진·1 m/s 이상). 1.00 ±0.02 면 vx_scale 1.042 가 그 바닥에서도 맞다."""
+    if 'odom_vx' not in df or df.odom_vx.notna().mean() < 0.5:
+        return '-'
+    from scipy.signal import savgol_filter
+    d = df[['time', 'x', 'y', 'odom_vx', 'odom_yaw']].dropna()
+    if len(d) < 200:
+        return '-'
+    t = np.arange(d.time.iloc[0], d.time.iloc[-1], 0.01)
+    g = lambda c: np.interp(t, d.time.to_numpy(), d[c].to_numpy())  # noqa: E731
+    vx_l = np.hypot(savgol_filter(g('x'), 31, 2, deriv=1, delta=0.01), savgol_filter(g('y'), 31, 2, deriv=1, delta=0.01))
+    r = savgol_filter(np.unwrap(g('odom_yaw')), 31, 2, deriv=1, delta=0.01)
+    ov = g('odom_vx')
+    gap = np.interp(t, d.time.to_numpy()[1:], np.diff(d.time.to_numpy()))          # 기록 구멍 근처는 뺀다
+    m = (ov > 1.0) & (np.abs(r) < 0.3) & (gap < 0.1)
+    return f'{np.median(vx_l[m] / ov[m]):.3f}' if m.sum() > 100 else '-'
 
 
 def manifest_tracks(text):
@@ -151,7 +170,7 @@ def intake(tar, a):
     if mtext:
         rep += ['## MANIFEST\n', '```\n' + mtext.strip() + '\n```\n']
     rep += ['## 주행별\n',
-            '해석ms = p50/p99/최대 · 배터리 = 시작/최저 V · 벽여유 = 차 중심에서 벽까지 (차 반폭 0.15 m 보다 작으면 닿음)\n\n',
+            '해석ms = p50/p99/최대 · 배터리 = 시작/최저 V · 바퀴배율 = 라이다 속도/odom_vx (1.00±0.02 정상) · 벽여유 = 차 중심에서 벽까지 (차 반폭 0.15 m 보다 작으면 닿음)\n\n',
             md_table(rows)]
 
     maps = sorted({os.path.splitext(os.path.basename(f))[0] for f in files if f.endswith(('.pgm', '.pbstream'))})
