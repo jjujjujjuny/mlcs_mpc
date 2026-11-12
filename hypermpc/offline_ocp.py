@@ -478,7 +478,7 @@ def make_step(dyn_fun, cfg, dt, substeps=2):
     return step
 
 
-def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None):
+def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None, steer_tau=None):
     """OCP 와 같은 연속 모델을 RK4 로 dt 만큼 적분하는 '차'. → step(x, u, p) → x_next.
 
     ★ 폐루프 시험에서 solver.get(1, 'x') 를 다음 상태로 쓰면 안 된다. SQP_RTI 는 한 번만 반복해서
@@ -490,6 +490,8 @@ def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=N
     pc = dict(cfg)
     if ws_tau is not None:
         pc['wheel_speed_tau'] = ws_tau
+    if steer_tau is not None:       # 차의 조향만 (0 이면 사실상 즉시 = 5 ms. 순수 지연은 --plant-cmd-delay)
+        pc['steering_tau'] = max(steer_tau, 0.005)
     pc['ws_acc_max'] = pc['ws_dec_max'] = 0.0   # 식만 쓰므로 제약은 필요 없다
     build_ocp(dyn_fun, 2, dt, pc)           # 식만 만든다 (빌드 안 함)
     f = build_ocp.last_f
@@ -1141,6 +1143,8 @@ def main():
     ap.add_argument('--ws-dec-max', type=float, default=0.0, help='MPC 바퀴 감속도 한계 m/s² (0 = 끔)')
     ap.add_argument('--plant-ws-tau', type=float, default=None,
                     help='--plant: 차의 바퀴 시정수 (실제처럼). 없으면 MPC 와 같음')
+    ap.add_argument('--plant-steering-tau', type=float, default=None,
+                    help='--plant: 차의 조향 1차 시정수 s (MPC 는 --steering-tau). 0 = 즉시 (5 ms)')
     ap.add_argument('--plant-ws-acc', type=float, default=None, help='--plant: 차의 바퀴 가속도 한계')
     ap.add_argument('--plant-ws-dec', type=float, default=None, help='--plant: 차의 바퀴 감속도 한계')
     ap.add_argument('--steering-tau', type=float, default=0.0436734693877551)
@@ -1223,7 +1227,8 @@ def main():
             continue
         walls = track_walls(args.track, args.walls) if (name == 'track' and args.walls is not None) else None
         plant = (make_plant(dyn_fun, cfg, args.dt, ws_tau=args.plant_ws_tau,
-                            ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec)
+                            ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec,
+                            steer_tau=args.plant_steering_tau)
                  if args.plant else None)
         if args.friction is not None:
             x0[6] = args.friction
