@@ -170,7 +170,12 @@ start)
     fi
     echo "$what" > "$MODE_FILE"
     # ★ 끝나면 MODE_FILE 에 ended — tmux 로는 '돌고 있음'과 '프롬프트만 남음'이 구분되지 않는다 (실측)
-    tmux new -d -s race "cd '$ROOT' && $cmd; echo ended > '$MODE_FILE'; echo; echo '[끝남 — 노트북 제어판에서 새로 시작할 수 있습니다]'; exec bash -l"
+    # ★ 2026-11-13: 화면 출력을 파일에도 남긴다 (script — 터미널은 그대로라 Ctrl+C·색 동작이 같다).
+    #   예전엔 tmux 화면만 있어서, 시작하자마자 끝나면 이유를 볼 수 없었다. 마지막 실행 = ~/mlcs_data/logs/panel_last.log
+    SCREEN_LOG="$HOME/mlcs_data/logs/panel_$(date +%Y%m%d_%H%M%S)_$what.log"
+    mkdir -p "$HOME/mlcs_data/logs"
+    ln -sfn "$SCREEN_LOG" "$HOME/mlcs_data/logs/panel_last.log"
+    tmux new -d -s race "cd '$ROOT' && script -q -f -e -c \"$cmd\" '$SCREEN_LOG'; echo \"[종료 코드 \$?]\" | tee -a '$SCREEN_LOG'; echo ended > '$MODE_FILE'; echo; echo '[끝남 — 노트북 제어판에서 새로 시작할 수 있습니다]'; exec bash -l"
     echo "✓ 시작: $what"
     ;;
 quiet)
