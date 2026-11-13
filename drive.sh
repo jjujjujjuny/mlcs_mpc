@@ -959,7 +959,12 @@ quiet)
     fi
     setsid bash -c "
         for n in code chrome chromium chromium-browser firefox rviz2; do pkill -TERM -x \$n 2>/dev/null; done
-        sleep 3
+        # 스스로 닫힐 시간을 준다 (최대 8 초). 3 초 만에 강제 종료하면 VS Code 가 상태 (폴더 신뢰 등) 를 못 써서
+        #   다시 열 때마다 'Trust this folder?' 를 물었다 (11-13)
+        for i in 1 2 3 4 5 6 7 8; do
+            pgrep -x 'code|chrome|chromium|chromium-browser|firefox|rviz2' >/dev/null 2>&1 || break
+            sleep 1
+        done
         for n in code chrome chromium chromium-browser firefox rviz2; do pkill -KILL -x \$n 2>/dev/null; done
     " >/dev/null 2>&1 < /dev/null &
     wait $! 2>/dev/null
