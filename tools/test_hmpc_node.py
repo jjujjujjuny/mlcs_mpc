@@ -407,21 +407,25 @@ def test_lidar_map_pin():
     got = []
     n.create_subscription(Odometry, '/mpc/state', lambda m: got.append(m.pose.pose.position.x), 10)
 
-    def run(secs, cx, fit, raw_x=1.0):
+    def run(secs, cx, fit, raw_x=1.0, raw_yaw=0.0, truth=None):
         end = time.monotonic() + secs
         k = 0
         while time.monotonic() < end:
             m = PoseStamped()
             m.header.stamp = n.get_clock().now().to_msg()
             m.header.frame_id = 'map'
-            m.pose.position.x, m.pose.orientation.w = raw_x, 1.0
+            m.pose.position.x = raw_x
+            m.pose.orientation.z, m.pose.orientation.w = math.sin(raw_yaw / 2), math.cos(raw_yaw / 2)
             pose_pub.publish(m)
             if k % 4 == 0:      # 라이다 40 Hz 쯤
                 c = PoseStamped()
                 c.header.stamp = m.header.stamp
                 # 노드가 보는 잔차 = 목표 보정 − 지금까지 더한 것 (lidar_obstacles 가 보정된 자세로 맞추므로)
-                cur = (got[-1] - raw_x) if got else 0.0
-                c.pose.position.x, c.pose.position.z, c.pose.orientation.w = cx - cur, fit, 1.0
+                if truth is None:
+                    res = cx - ((got[-1] - raw_x) if got else 0.0)
+                else:       # 실제 차 위치가 truth 로 정해진 경우 — 잔차 = 참 − 지금 출력
+                    res = truth - (got[-1] if got else raw_x)
+                c.pose.position.x, c.pose.position.z, c.pose.orientation.w = res, fit, 1.0
                 corr_pub.publish(c)
             k += 1
             rclpy.spin_once(n, timeout_sec=0.0)
@@ -445,8 +449,12 @@ def test_lidar_map_pin():
         r &= check('맞춤 비율 0.3 이 4 s: 보정이 풀려 Cartographer 쪽으로', abs(got[-1] - 1.0) < 0.03, f'x {got[-1]:.3f}')
         run(3.0, 0.10, 0.95)
         r &= check('다시 좋아지면 다시 보정', abs(got[-1] - 1.10) < 0.02, f'x {got[-1]:.3f}')
-        run(0.5, 0.0, 0.95, raw_x=1.5)        # Cartographer 가 50 cm 튐 → 보정 0 으로 되돌림
-        r &= check('Cartographer 50 cm 튀면 보정 되돌림', abs(got[-1] - 1.5) < 0.03, f'x {got[-1]:.3f}')
+        # 11-14 대회장: Cartographer 가 3.8 m·176° 튐. 직전 맞춤이 좋았으면 흡수해 위치를 잇는다
+        run(1.0, 0.10, 0.95, truth=1.10)                              # 안정 (출력 1.10)
+        run(2.0, 0.0, 0.95, raw_x=5.0, raw_yaw=3.07, truth=1.10)      # 잘못된 튐 — 실제 차는 그대로
+        r &= check('Cartographer 4 m·176° 잘못 튐 → 흡수, 위치 유지', abs(got[-1] - 1.10) < 0.05, f'x {got[-1]:.3f}')
+        run(2.5, 0.0, 0.3, raw_x=5.0, raw_yaw=3.07)                   # 맞는 재위치였다면 맞춤이 계속 나쁨
+        r &= check('흡수 뒤 맞춤 계속 나쁨 → 흡수 버리고 Cartographer 로', abs(got[-1] - 5.0) < 0.1, f'x {got[-1]:.3f}')
     finally:
         os.killpg(proc.pid, signal.SIGINT)
         proc.wait(timeout=5)

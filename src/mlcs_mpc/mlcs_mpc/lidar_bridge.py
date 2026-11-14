@@ -67,7 +67,7 @@ class LidarBridge(Node):
         d('pin_min_fit', 0.80)      # 맞춤 비율 (벽에 붙은 스캔 점 비율) 이 이 이상일 때만
         d('pin_step_xy', 0.01)      # 메시지 하나당 최대 이동 m (튀지 않게. 0.4 m/s 까지 따라감)
         d('pin_step_yaw', 0.3)      # 메시지 하나당 최대 회전 °
-        d('pin_max_xy', 0.6)        # 누적 보정 상한 m (11-11 정상 보정은 출발 때 최대 50 cm)
+        d('pin_max_xy', 1.0)        # 누적 보정 상한 m (11-14 대회장 54~59 m 트랙에서 0.6 에 붙었다 — 맞춤 나쁘면 풀기가 있어 1.0 으로)
         d('pin_max_yaw', 10.0)      # 누적 보정 상한 ° (정상 최대 8°. 20° 였을 때 잘못 잡아 상한까지 감)
         # ★ 11-11 저속 주행: 수동 후진 중 Cartographer 가 12° 튀자 맞춤이 엉뚱한 정렬을 따라가 (−35, −66 cm, −20°)
         #   그 뒤 맞춤 비율이 떨어져 반영을 멈춘 채 틀린 보정을 들고 있었다 → 위치 60~85 cm 틀림, 벽이 장애물로.
@@ -120,6 +120,12 @@ class LidarBridge(Node):
             self.pin_resets = self.pin_decays = 0
             self.pin_raw = None
             self.pin_jump_xy, self.pin_jump_yaw = 0.30, math.radians(5.0)
+            # ★ 11-14 대회장: Cartographer 가 3.8 m·176° 튀어 (거울상 나선 트랙의 반대편) 30 초 동안 위치가 틀렸다.
+            #   튀기 직전 맵 고정 위치가 맵과 잘 맞고 있었다면 (맞춤 좋음) 튐을 흡수해 위치를 잇는다 — 회전까지 (SE2).
+            #   흡수한 뒤 맞춤이 pin_bad_time 넘게 나쁘면 (= Cartographer 쪽이 맞았다) 흡수를 버리고 Cartographer 를 따른다.
+            self.pj = (0.0, 0.0, 0.0)       # 흡수 변환: 보정 전 자세 = R(th)·raw + t
+            self.pin_out = None             # 직전 출력 자세 (흡수 기준)
+            self.pin_absorbs = self.pin_drops = 0
             self.create_subscription(PoseStamped, '/loc/correction', self._corr_cb, 10)
             self.create_timer(5.0, self._pin_report)
             self.get_logger().info(f'맵 고정 켬 — /loc/correction (맞춤 비율 ≥ {self.pin_fit_min}) 을 적분')
@@ -130,6 +136,16 @@ class LidarBridge(Node):
     def _gyro_cb(self, m):
         self.gyro_r = m.twist.twist.angular.z
         self.gyro_t = self.get_clock().now().nanoseconds * 1e-9
+
+    def _apply_pj(self, x, y, yaw):
+        tx, ty, th = self.pj
+        c, s_ = math.cos(th), math.sin(th)
+        return c * x - s_ * y + tx, s_ * x + c * y + ty, yaw + th
+
+    def _kf_restart(self):
+        for k in self.kf:
+            k.init = False
+        self.prev_yaw = None
 
     def _pin_reset(self, why):
         if any(abs(v) > 1e-6 for v in self.pc):
@@ -153,6 +169,13 @@ class LidarBridge(Node):
                 k = math.exp(-dt / self.pin_tau)
                 self.pc = [v * k for v in self.pc]
                 self.pin_decays += 1
+                if self.pj != (0.0, 0.0, 0.0):
+                    # 흡수했던 튐이 사실은 맞는 재위치였다 — 흡수를 버리고 Cartographer 를 따른다
+                    self.get_logger().warn(f'맵 고정: 흡수했던 튐을 버림 (맞춤 {fit:.2f} 이 {self.pin_bad_t:.1f} s 넘게 나쁨) '
+                                           f'— Cartographer 위치로')
+                    self.pj = (0.0, 0.0, 0.0)
+                    self.pin_drops += 1
+                    self._kf_restart()
             return
         self.pin_good_t = now
         q = m.pose.orientation
@@ -181,8 +204,13 @@ class LidarBridge(Node):
                                f'{math.degrees(self.pc[2]):+.1f}° | 맞춤 비율 {self.pin_fit:.2f}, '
                                f'반영 {self.pin_n} / 건너뜀 {self.pin_skip}'
                                + (f' / 풀림 {self.pin_decays}' if self.pin_decays else '')
-                               + (f' / 되돌림 {self.pin_resets}' if self.pin_resets else ''))
+                               + (f' / 되돌림 {self.pin_resets}' if self.pin_resets else '')
+                               + (f' / 튐 흡수 {self.pin_absorbs}' if self.pin_absorbs else '')
+                               + (f' / 흡수 버림 {self.pin_drops}' if self.pin_drops else '')
+                               + (f' | 흡수 중 {math.hypot(self.pj[0], self.pj[1]) * 100:.0f} cm·{math.degrees(self.pj[2]):+.0f}°'
+                                  if self.pj != (0.0, 0.0, 0.0) else ''))
         self.pin_n = self.pin_skip = self.pin_decays = self.pin_resets = 0
+        self.pin_absorbs = self.pin_drops = 0
 
     def _ready_cb(self, m):
         if self.require_ready and bool(m.data) and not self.ready:
@@ -217,7 +245,22 @@ class LidarBridge(Node):
                 dj = math.hypot(p.x - self.pin_raw[0], p.y - self.pin_raw[1])
                 dw = abs((yw - self.pin_raw[2] + math.pi) % (2 * math.pi) - math.pi)
                 if dj > self.pin_jump_xy or dw > self.pin_jump_yaw:
-                    self._pin_reset(f'Cartographer 위치 {dj * 100:.0f} cm·{math.degrees(dw):.0f}° 튐')
+                    good_before = (self.pin_good_t is not None and now - self.pin_good_t < 0.5
+                                   and self.pin_fit >= self.pin_fit_min and self.pin_out is not None)
+                    if good_before:
+                        # 흡수: 새 raw 에 pj 를 다시 잡아 '보정 전 자세 + pc = 직전 출력' 이 되게
+                        ox, oy, oyaw = self.pin_out
+                        txy = (ox - self.pc[0], oy - self.pc[1])
+                        th = (oyaw - self.pc[2]) - yw
+                        c, s_ = math.cos(th), math.sin(th)
+                        self.pj = (txy[0] - (c * p.x - s_ * p.y), txy[1] - (s_ * p.x + c * p.y), th)
+                        self.pin_absorbs += 1
+                        self.get_logger().warn(f'맵 고정: Cartographer 가 {dj * 100:.0f} cm·{math.degrees(dw):.0f}° 튐 — '
+                                               f'직전 맞춤 {self.pin_fit:.2f} 이 좋아 흡수 (위치 유지)')
+                    else:
+                        self._pin_reset(f'Cartographer 위치 {dj * 100:.0f} cm·{math.degrees(dw):.0f}° 튐')
+                        self.pj = (0.0, 0.0, 0.0)
+                        self._kf_restart()
             self.pin_raw = (p.x, p.y, yw)
         if why:
             self.get_logger().error(f'✗ 라이다 위치 불량 ({why}) — 컨트롤러 정지 신호 발행')
@@ -231,7 +274,9 @@ class LidarBridge(Node):
         yaw = yaw_from_quat(o)
         px, py = p.x, p.y
         if self.pin:
+            px, py, yaw = self._apply_pj(px, py, yaw)
             px, py, yaw = px + self.pc[0], py + self.pc[1], yaw + self.pc[2]
+            self.pin_out = (px, py, yaw)
         if self.prev_yaw is None:
             self.yaw_u = yaw
         else:
