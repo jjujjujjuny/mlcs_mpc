@@ -478,7 +478,7 @@ def make_step(dyn_fun, cfg, dt, substeps=2):
     return step
 
 
-def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None, steer_tau=None):
+def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=None, steer_tau=None, steer_gain=1.0):
     """OCP 와 같은 연속 모델을 RK4 로 dt 만큼 적분하는 '차'. → step(x, u, p) → x_next.
 
     ★ 폐루프 시험에서 solver.get(1, 'x') 를 다음 상태로 쓰면 안 된다. SQP_RTI 는 한 번만 반복해서
@@ -508,6 +508,19 @@ def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=N
 
     npar = f.size_in(2)[0]
 
+    stau = pc['steering_tau']
+
+    def fg(x, u, p):
+        """steer_gain ≠ 1: 차가 같은 조향 상태에 gain 배 더 돈다 (11-14 메인 PC A 결론: 대회장 바닥 ×1.1).
+        조향 '상태' 는 명령 모델 그대로 (노드도 명령에서 조향을 추정하니 MPC 가 보는 값과 같게), 동역학만 gain × δ."""
+        if steer_gain == 1.0:
+            return np.array(f(x, u, p)).ravel()
+        xs = np.array(x, float)
+        xs[8] *= steer_gain
+        k = np.array(f(xs, u, p)).ravel()
+        k[8] = (u[1] - x[8]) / stau
+        return k
+
     def step(x, u0, p):
         x = np.asarray(x, float)
         p = np.asarray(p, float)
@@ -515,10 +528,10 @@ def make_plant(dyn_fun, cfg, dt, substeps=16, ws_tau=None, ws_acc=None, ws_dec=N
             p = np.r_[p, np.zeros(npar - len(p))]
         for _ in range(substeps):
             u = actuate(x, u0)
-            k1 = np.array(f(x, u, p)).ravel()
-            k2 = np.array(f(x + h / 2 * k1, u, p)).ravel()
-            k3 = np.array(f(x + h / 2 * k2, u, p)).ravel()
-            k4 = np.array(f(x + h * k3, u, p)).ravel()
+            k1 = fg(x, u, p)
+            k2 = fg(x + h / 2 * k1, u, p)
+            k3 = fg(x + h / 2 * k2, u, p)
+            k4 = fg(x + h * k3, u, p)
             x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
         return x
     return step
@@ -1154,6 +1167,8 @@ def main():
     ap.add_argument('--ws-dec-max', type=float, default=0.0, help='MPC 바퀴 감속도 한계 m/s² (0 = 끔)')
     ap.add_argument('--plant-ws-tau', type=float, default=None,
                     help='--plant: 차의 바퀴 시정수 (실제처럼). 없으면 MPC 와 같음')
+    ap.add_argument('--plant-steer-gain', type=float, default=1.0,
+                    help='--plant: 차가 같은 조향에 이 배수만큼 더 돈다 (대회장 바닥 실측 ×1.1, 메인 PC 11-14 A 결론)')
     ap.add_argument('--plant-steering-tau', type=float, default=None,
                     help='--plant: 차의 조향 1차 시정수 s (MPC 는 --steering-tau). 0 = 즉시 (5 ms)')
     ap.add_argument('--plant-ws-acc', type=float, default=None, help='--plant: 차의 바퀴 가속도 한계')
@@ -1243,7 +1258,7 @@ def main():
                  if (name == 'track' and args.walls is not None) else None)
         plant = (make_plant(dyn_fun, cfg, args.dt, ws_tau=args.plant_ws_tau,
                             ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec,
-                            steer_tau=args.plant_steering_tau)
+                            steer_tau=args.plant_steering_tau, steer_gain=args.plant_steer_gain)
                  if args.plant else None)
         if args.friction is not None:
             x0[6] = args.friction
