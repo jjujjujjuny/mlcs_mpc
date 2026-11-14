@@ -102,6 +102,7 @@ class LidarBridge(Node):
         self.create_timer(0.05, self._watchdog)
         self.gyro_on, self.gyro_to = bool(gp('gyro_rate')), float(gp('gyro_timeout'))
         self.gyro_r, self.gyro_t = 0.0, -1e9
+        self.wheel_v, self.still_since, self.pc_still = 0.0, None, None
         self.gyro_used = self.gyro_fallback = 0
         if self.gyro_on:
             self.create_subscription(Odometry, '/odometry/filtered', self._gyro_cb, 10)
@@ -136,6 +137,11 @@ class LidarBridge(Node):
     def _gyro_cb(self, m):
         self.gyro_r = m.twist.twist.angular.z
         self.gyro_t = self.get_clock().now().nanoseconds * 1e-9
+        self.wheel_v = m.twist.twist.linear.x
+        if abs(self.wheel_v) < 0.05:
+            self.still_since = self.still_since or self.gyro_t
+        else:
+            self.still_since, self.pc_still = None, None
 
     def _apply_pj(self, x, y, yaw):
         tx, ty, th = self.pj
@@ -152,6 +158,7 @@ class LidarBridge(Node):
             self.get_logger().warn(f'맵 고정 보정 되돌림 ({why}) — {self.pc[0] * 100:+.0f}, {self.pc[1] * 100:+.0f} cm, '
                                    f'{math.degrees(self.pc[2]):+.1f}° → 0, 다시 맞춘다')
         self.pc = [0.0, 0.0, 0.0]
+        self.pc_still = None
         self.pin_resets += 1
 
     def _corr_cb(self, m):
@@ -168,6 +175,7 @@ class LidarBridge(Node):
                 # 맞춤이 계속 나쁘다 = 지금 보정을 믿을 수 없다 → Cartographer 쪽으로 천천히 푼다
                 k = math.exp(-dt / self.pin_tau)
                 self.pc = [v * k for v in self.pc]
+                self.pc_still = None
                 self.pin_decays += 1
                 if self.pj != (0.0, 0.0, 0.0):
                     # 흡수했던 튐이 사실은 맞는 재위치였다 — 흡수를 버리고 Cartographer 를 따른다
@@ -188,6 +196,14 @@ class LidarBridge(Node):
             self.pc[0] *= self.pin_mxy / r
             self.pc[1] *= self.pin_mxy / r
         self.pc[2] = max(-self.pin_mw, min(self.pin_mw, self.pc[2]))
+        # ★ 11-14 170753: 출발 전 15 s 서 있는 동안 보정이 직선을 따라 −150 cm 까지 미끄러짐 (맞춤 0.8~0.9 — 직선은
+        #   앞뒤로 밀어도 벽에 맞는다) → 출발하자마자 우회전 자리에서 직진해 충돌. 서 있으면 (바퀴 0, 0.5 s 넘게)
+        #   멈춘 순간의 보정에서 ±15 cm · ±3° 까지만 움직이게 묶는다. 자이로 (wheel_odom) 가 끊기면 묶지 않음.
+        if (self.still_since is not None and now - self.gyro_t < 0.2 and now - self.still_since > 0.5):
+            if self.pc_still is None:
+                self.pc_still = list(self.pc)
+            for i, lim_s in ((0, 0.15), (1, 0.15), (2, math.radians(3.0))):
+                self.pc[i] = max(self.pc_still[i] - lim_s, min(self.pc_still[i] + lim_s, self.pc[i]))
         self.pin_n += 1
 
     def _gyro_report(self):
