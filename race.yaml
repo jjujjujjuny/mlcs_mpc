@@ -11,11 +11,11 @@
 # 위치를 어디서 받나. lidar = Cartographer 위치추정 (대회), mocap = 연구실 mocap.
 source: lidar
 # 라이다로 달릴 때 쓸 맵 (maps/<이름>.pbstream). 맵핑을 시작한 자리·방향 근처에서 출발한다.
-map: "track2a"        # ★ 따옴표 필수 — 1108_5 는 YAML 에서 숫자 11085 가 된다
+map: "track1a"        # ★ 따옴표 필수 — 1108_5 는 YAML 에서 숫자 11085 가 된다
 
 # 트랙 이름 (lab_map/data/tracks/<이름>/) 또는 prep csv 경로.
 #   lidar 면 그 맵에서 만든 트랙 (./drive.sh maptrack <맵>), mocap 이면 *_mocap 트랙.
-track: "track2a_track"
+track: "track1a_track"
 
 # false = bench (속도 항상 0, 조향만). true = 실제로 달린다.
 drive: true
