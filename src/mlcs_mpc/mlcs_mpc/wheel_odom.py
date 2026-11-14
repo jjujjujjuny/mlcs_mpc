@@ -18,6 +18,7 @@ wheel_odom — 바퀴 속도 + IMU 자이로로 오도메트리를 만든다. Ca
   ros2 run mlcs_mpc wheel_odom --ros-args -p gyro_sign:=1.0
 """
 import math
+import numpy as np
 
 import rclpy
 from nav_msgs.msg import Odometry
@@ -56,6 +57,9 @@ class WheelOdom(Node):
         self.v_wheel = 0.0
         self.v = 0.0                # 슬립을 묶은 추정 속도
         self.bias = None            # 자이로 바이어스 rad/s
+        self.off_buf = []           # 정지 중인데 게이트 밖인 자이로 값 (바이어스 다시 잡기)
+        self.off_t0 = None
+        self.n_rebias = 0
         self.x = self.y = self.yaw = 0.0
         self.t_last = None
         self.n_slip = 0
@@ -91,6 +95,23 @@ class WheelOdom(Node):
         if abs(self.v_wheel) < 0.02 and abs(r_raw - self.bias) < self.bias_gate:
             a = min(dt / self.btau, 1.0)
             self.bias += a * (r_raw - self.bias)
+            self.off_buf, self.off_t0 = [], None
+        elif abs(self.v_wheel) < 0.02:
+            # 첫 샘플이 나빠 바이어스가 틀리면 게이트 때문에 영영 못 고친다 (11-14 run 140246: +1.34 rad/s).
+            # 서 있는데 2 s 넘게 게이트 밖이고 그동안 자이로가 고르면 (표준편차 < 1°/s, 손으로 돌리는 것과 구분)
+            # 그 평균으로 다시 잡는다
+            self.off_t0 = self.off_t0 or t
+            self.off_buf.append(r_raw)
+            if t - self.off_t0 > 2.0:
+                b = np.asarray(self.off_buf)
+                if b.std() < math.radians(1.0):
+                    self.get_logger().warn(f'자이로 바이어스 다시 잡음 {math.degrees(self.bias):+.2f} → '
+                                           f'{math.degrees(b.mean()):+.2f}°/s (서 있는데 2 s 넘게 게이트 밖)')
+                    self.bias = float(b.mean())
+                    self.n_rebias += 1
+                self.off_buf, self.off_t0 = [], None
+        else:
+            self.off_buf, self.off_t0 = [], None
         r = r_raw - self.bias
         # 슬립 묶음: 바퀴 속도를 따르되 가감속 상한 안에서만
         dv = self.v_wheel - self.v

@@ -800,8 +800,9 @@ start_localization () {
     #   2026-11-08 라이다 주행에서 풀이 시간 22 → 31~35 ms (p95 47~62) 로 주기를 넘겼다.
     # 오도메트리 (race.yaml loc_odom: ekf): 바퀴 속도·자이로 → /odometry/filtered → Cartographer 예측
     local lua=localization_2d.lua remap=()
-    if [ "${MLCS_LOC_ODOM:-off}" = "ekf" ]; then
+    if [ "${MLCS_LOC_ODOM:-off}" = "ekf" ] || [ "${MLCS_LOC_ODOM:-off}" = "strict" ]; then
         lua=localization_2d_odom.lua
+        [ "${MLCS_LOC_ODOM}" = "strict" ] && lua=localization_2d_odom_strict.lua
         remap=(--ros-args -r odom:=/odometry/filtered)
         log "  오도메트리: ${GRN}바퀴 속도 + 자이로${RST} (wheel_odom, $lua)"
     fi

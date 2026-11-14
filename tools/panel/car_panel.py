@@ -467,8 +467,8 @@ class Panel(QtWidgets.QWidget):
         self.cb_obs.setToolTip('off = 예선 단독 / lidar = 상대 차를 임시 벽으로 피함 (결승) / watch = 찾기만\n'
                                'learn = 빈 트랙에서 2~3 바퀴: 찾기만 하고, 끝나면 맵 헛것 목록 자동 갱신')
         self.cb_odom = nofocus(QtWidgets.QComboBox())
-        self.cb_odom.addItems(['off', 'ekf'])
-        self.cb_odom.setToolTip('ekf = 바퀴 속도 + 자이로로 Cartographer 예측 (직선 미끄러짐 대책)')
+        self.cb_odom.addItems(['off', 'ekf', 'strict'])
+        self.cb_odom.setToolTip('ekf = 바퀴 속도 + 자이로로 Cartographer 예측 (직선 미끄러짐 대책), strict = ekf + 오도메트리 강하게 믿고 먼 곳 맞춤 끔 (위치 튐 대책)')
         self.cb_pin = nofocus(QtWidgets.QComboBox())
         self.cb_pin.addItems(['true', 'false'])
         self.cb_pin.setToolTip('true = 매 스캔을 저장한 맵에 맞춰 위치 보정 (랩이 쌓여도 맵이 안 변함)')

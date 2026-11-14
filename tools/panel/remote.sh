@@ -119,7 +119,7 @@ set)
                    sed -i -E "s/^($k:[[:space:]]*)\"[^\"]*\"/\1\"$v\"/" "$YAML" ;;
         obstacles) [[ "$v" =~ ^(off|watch|lidar|learn)$ ]] || { echo "✗ obstacles: $v"; exit 1; }
                    sed -i -E "s/^(obstacles:[[:space:]]*)[a-z]+/\1$v/" "$YAML" ;;
-        loc_odom)  [[ "$v" =~ ^(off|ekf)$ ]] || { echo "✗ loc_odom: $v"; exit 1; }
+        loc_odom)  [[ "$v" =~ ^(off|ekf|strict)$ ]] || { echo "✗ loc_odom: $v"; exit 1; }
                    if grep -q '^loc_odom:' "$YAML"; then sed -i -E "s/^(loc_odom:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
                    else printf '\nloc_odom: %s\n' "$v" >> "$YAML"; fi ;;
         map_pin)   [[ "$v" =~ ^(true|false)$ ]] || { echo "✗ map_pin: $v"; exit 1; }

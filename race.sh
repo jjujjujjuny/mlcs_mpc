@@ -112,8 +112,8 @@ pin = bool(c.get('map_pin', True))
 print(f'export MLCS_MAP_PIN={1 if (pin and source == "lidar") else 0}')
 # 위치추정 오도메트리: off = 스캔만 (지금까지), ekf = 바퀴 속도·자이로 (wheel_odom) 로 예측 (source: lidar 에서만)
 lo = str(c.get('loc_odom') or 'off')
-if lo not in ('off', 'ekf'):
-    err(f'loc_odom 은 off 또는 ekf: {lo}')
+if lo not in ('off', 'ekf', 'strict'):
+    err(f'loc_odom 은 off / ekf / strict: {lo}')
 print(f'export MLCS_LOC_ODOM={lo if source == "lidar" else "off"}')
 print(f'RACE_LOG={shlex.quote(log)}')
 lines = [f'위치   {source}' + (f'  (맵 {mp})' if source == 'lidar' else ''),
