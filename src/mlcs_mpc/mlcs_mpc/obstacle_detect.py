@@ -36,6 +36,10 @@ class DetectParams:
     max_size: float = 0.8       # 묶음의 대각 크기가 이보다 크면 버림 (벽 조각 등) m
     depth_shift: float = 0.10   # 보이는 면 → 중심까지 m (상자 깊이의 절반)
     refine: bool = True         # 스캔을 맵 벽에 맞춰 자세 국소 보정
+    fit_exclude_obstacles: bool = True   # 맞춤 비율에서 트랙 안 차 크기 덩어리 점을 뺀다 (가림에 맞춤이 무너지지 않게, 11-14)
+    fit_exclude_pad: float = 0.10        # 덩어리 반지름 (크기/2) 에 더하는 여유 m
+    fit_exclude_min_adj: float = 0.90    # 뺀 뒤 맞춤이 이 이상일 때만 그 값을 쓴다 (위치가 틀린 경우 부풀림 막기)
+    fit_exclude_max: float = 0.45        # 빼는 점이 이 비율을 넘으면 빼지 않음 (위치가 틀린 것으로 본다). 0.6 m 앞에 붙은 차 = 36 %
     refine_xy: float = 0.30     # 보정 탐색 범위 ± m (지난 보정값 둘레)
     refine_yaw: float = math.radians(8.0)   # ± rad
     refine_sigma: float = 0.05  # 점수 exp(−(d/σ)²) 의 σ m
@@ -199,13 +203,42 @@ def scan_to_map(ranges, angle_min, angle_inc, pose, laser, p):
 def detect_scan(ranges, angle_min, angle_inc, pose, laser, walls, band, p, corr=(0.0, 0.0, 0.0), coarse=True):
     """스캔 하나 → (장애물 목록, 쓴 자세, 새 corr, 맞춤 비율 (뒤, 앞)). refine 이 꺼져 있으면 자세 그대로."""
     fit = (math.nan, math.nan)
+    pb = None
     if p.refine:
         pb = scan_base(ranges, angle_min, angle_inc, laser, p.refine_range)
         if len(pb) >= 30:
             pose, corr, f1, f0 = refine_pose(pb, pose, walls, p, corr, coarse)
             fit = (f1, f0)
+        else:
+            pb = None
     pts, org = scan_to_map(ranges, angle_min, angle_inc, pose, laser, p)
-    return detect(pts, org, walls, band, p), pose, corr, fit
+    dets = detect(pts, org, walls, band, p)
+    if pb is not None and dets and p.fit_exclude_obstacles:
+        fit = (fit_without_obstacles(pb, pose, walls, p, dets), fit[1])
+    return dets, pose, corr, fit
+
+
+def fit_without_obstacles(pb, q, walls, p, dets):
+    """맞춤 비율을 트랙 안 차 크기 덩어리 (검출 후보) 점을 빼고 다시 계산한다.
+    ★ 11-14 161502: 상대 차가 가리자 맞춤 0.88 → 0.04 (차 점이 분모에 들어가고 뒤 벽이 가려짐) → 맵 고정이
+      '위치가 틀렸다' 로 읽고 맞던 흡수를 버림 → 7 m 틀린 곳으로. 맞춤 계산 (위치 찾기) 자체는 벽 점만 점수를
+      받아 차 점에 끌려가지 않는다 — 비율만 고친다.
+    안전장치: 덩어리는 detect 의 max_size (0.8 m) 이하만 (위치가 틀려 트랙 안에 보이는 벽은 길어서 빠짐),
+      빼는 점이 fit_exclude_max (45 %) 를 넘으면 빼지 않는다 (그만큼 이상하면 가림이 아니라 위치가 틀린 것)."""
+    if len(pb) > p.refine_points:
+        pb = pb[np.linspace(0, len(pb) - 1, p.refine_points).astype(int)]
+    x, y = _xy(pb, q)
+    excl = np.zeros(len(pb), bool)
+    for cx, cy, size, _, _ in dets:
+        excl |= np.hypot(x - cx, y - cy) < size / 2 + p.fit_exclude_pad
+    on = walls.dist(x, y, occ_only=True) < 2 * p.refine_sigma
+    raw = float(np.mean(on))
+    if not excl.any() or excl.mean() > p.fit_exclude_max or (~excl).sum() < 30:
+        return raw
+    adj = float(np.mean(on[~excl]))
+    # 가림이면 남은 점은 거의 다 벽에 붙는다 (합성 시험 1.00). 위치가 틀린데 벽 조각이 덩어리로 빠져 오른 것은
+    # 여기서 걸러진다 (fit_exclude_min_adj 미만이면 원래 값)
+    return adj if adj >= p.fit_exclude_min_adj else raw
 
 
 def detect(pts, origin, walls, band, p):

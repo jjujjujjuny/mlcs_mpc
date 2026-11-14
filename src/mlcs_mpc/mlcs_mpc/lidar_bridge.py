@@ -127,6 +127,9 @@ class LidarBridge(Node):
             self.pj = (0.0, 0.0, 0.0)       # 흡수 변환: 보정 전 자세 = R(th)·raw + t
             self.pin_out = None             # 직전 출력 자세 (흡수 기준)
             self.pin_absorbs = self.pin_drops = 0
+            self.pin_hold_xy, self.pin_hold_yaw = 1.0, math.radians(20.0)   # 이보다 큰 흡수는 버리지 않음
+            self.pin_drop_t = 3.0       # 작은 흡수를 버리기 전 기다림 s (가림 1~2 s)
+            self.pin_hold_log = -1e9
             self.create_subscription(PoseStamped, '/loc/correction', self._corr_cb, 10)
             self.create_timer(5.0, self._pin_report)
             self.get_logger().info(f'맵 고정 켬 — /loc/correction (맞춤 비율 ≥ {self.pin_fit_min}) 을 적분')
@@ -171,6 +174,18 @@ class LidarBridge(Node):
             self.pin_good_t = now
         if not fit >= self.pin_fit_min:
             self.pin_skip += 1
+            big = (math.hypot(self.pj[0], self.pj[1]) > self.pin_hold_xy or abs(self.pj[2]) > self.pin_hold_yaw)
+            if big:
+                # ★ 11-14 161502: 6.7 m·88° 튐을 흡수해 15 s 잘 달리다 상대 차 가림으로 맞춤 1 s 나쁨 → 흡수 버림 →
+                #   7 m 틀린 Cartographer 위치로. 크게 튄 것 (≥ 1 m 또는 ≥ 20°) 은 거의 늘 거울상 오정합이라
+                #   맞춤이 나빠도 버리지도 풀지도 않고 그대로 든다. 정말 틀렸으면 사람이 2D Pose / LT 로 다시 찍는다
+                if now - self.pin_good_t > self.pin_bad_t and now - self.pin_hold_log > 5.0:
+                    self.get_logger().warn(f'맵 고정: 맞춤 {fit:.2f} 나쁨 — 큰 흡수 ({math.hypot(self.pj[0], self.pj[1]):.1f} m·'
+                                           f'{math.degrees(self.pj[2]):+.0f}°) 라 버리지 않고 유지. 위치가 틀렸으면 멈추고 다시 찍기')
+                    self.pin_hold_log = now
+                return
+            if self.pj != (0.0, 0.0, 0.0) and now - self.pin_good_t <= self.pin_drop_t:
+                return      # 작은 흡수: 가림 (보통 1~2 s) 이 지나가기를 pin_drop_t 까지 기다린다 (보정도 그대로)
             if now - self.pin_good_t > self.pin_bad_t:
                 # 맞춤이 계속 나쁘다 = 지금 보정을 믿을 수 없다 → Cartographer 쪽으로 천천히 푼다
                 k = math.exp(-dt / self.pin_tau)
@@ -179,7 +194,7 @@ class LidarBridge(Node):
                 self.pin_decays += 1
                 if self.pj != (0.0, 0.0, 0.0):
                     # 흡수했던 튐이 사실은 맞는 재위치였다 — 흡수를 버리고 Cartographer 를 따른다
-                    self.get_logger().warn(f'맵 고정: 흡수했던 튐을 버림 (맞춤 {fit:.2f} 이 {self.pin_bad_t:.1f} s 넘게 나쁨) '
+                    self.get_logger().warn(f'맵 고정: 흡수했던 튐을 버림 (맞춤 {fit:.2f} 이 {self.pin_drop_t:.1f} s 넘게 나쁨) '
                                            f'— Cartographer 위치로')
                     self.pj = (0.0, 0.0, 0.0)
                     self.pin_drops += 1
