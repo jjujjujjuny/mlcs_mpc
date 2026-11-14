@@ -49,6 +49,25 @@ class Track:
         wr = np.interp(q, S, np.r_[self.w_right, self.w_right[0]])
         return -(wr - margin), wl - margin
 
+    def bounds_asym(self, s, margin, inner=None, outer=None, k_full=1.0):
+        """bounds_at 과 같은데 코너 안쪽·바깥쪽 여유를 따로 (11-14 대회장: 차 앞모서리가 안쪽 벽에 닿음).
+        여유 = margin + (inner 또는 outer − margin) × min(|κ| / k_full, 1). κ > 0 (왼쪽 커브) 이면 왼쪽이 안쪽.
+        inner·outer 가 None 이면 margin 그대로 (= bounds_at)."""
+        if inner is None and outer is None:
+            return self.bounds_at(s, margin)
+        inner = margin if inner is None else inner
+        outer = margin if outer is None else outer
+        q = np.mod(s, self.length)
+        S = np.r_[self.s, self.length]
+        wl = np.interp(q, S, np.r_[self.w_left, self.w_left[0]])
+        wr = np.interp(q, S, np.r_[self.w_right, self.w_right[0]])
+        k = self.kappa_at(q)
+        w = np.clip(np.abs(k) / k_full, 0.0, 1.0)
+        m_in, m_out = margin + (inner - margin) * w, margin + (outer - margin) * w
+        m_l = np.where(k > 0, m_in, m_out)
+        m_r = np.where(k > 0, m_out, m_in)
+        return -(wr - m_r), wl - m_l
+
     def xy(self, s, n):
         """(s, n) → (x, y). 선 위 점에서 왼쪽 법선 방향으로 n. 시각화용 (점 사이는 선형 보간)."""
         q = np.mod(s, self.length)

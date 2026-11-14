@@ -208,6 +208,9 @@ class HmpcNode(Node):
         #   fixed = 선에서 ±track_width (선을 따라가게 묶는다. 예전 방식)
         d('track_bounds', 'walls')
         d('wall_margin', 0.22)      # 차 반폭 0.15 + 여유. CoG 기준이라 차가 비스듬하면 모서리가 더 나간다
+        # 코너 안쪽·바깥쪽 여유 따로 (11-14 대회장). 음수 = wall_margin 그대로 (끔). 곡률 |κ| ≥ 1 (R ≤ 1 m) 에서 다 적용
+        d('wall_margin_inner', -1.0)
+        d('wall_margin_outer', -1.0)
         d('control_rate', 30.0)
         d('solve_timeout', 0.15)
         d('restart_timeout', 0.5)
@@ -292,6 +295,8 @@ class HmpcNode(Node):
         self.track = Track(rel(gp('track_csv')))
         self.track_width = float(gp('track_width'))
         self.wall_margin = float(gp('wall_margin'))
+        self.wm_in = float(gp('wall_margin_inner')); self.wm_in = None if self.wm_in < 0 else self.wm_in
+        self.wm_out = float(gp('wall_margin_outer')); self.wm_out = None if self.wm_out < 0 else self.wm_out
         mode = str(gp('track_bounds'))
         if mode not in ('walls', 'fixed'):
             raise ValueError(f'track_bounds 는 walls 또는 fixed: {mode}')
@@ -682,7 +687,7 @@ class HmpcNode(Node):
                 s = x[0] + s_shift + x[3] * self.dt * np.arange(self.N + 1)
             kappa = self.track.kappa_at(s)
             if self.walls:
-                n_lo, n_hi = self.track.bounds_at(s, self.wall_margin)
+                n_lo, n_hi = self.track.bounds_asym(s, self.wall_margin, self.wm_in, self.wm_out)
             else:
                 n_lo = np.full(self.N + 1, -self.track_width)
                 n_hi = -n_lo

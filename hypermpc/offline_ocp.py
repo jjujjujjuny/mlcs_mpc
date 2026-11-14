@@ -592,7 +592,7 @@ def set_wall_bounds(solver, N, lo, hi, n0, mu0=0.0):
             solver.constraints_set(k, 'uh', np.array([fh[k - 1], rh[k - 1]]))
 
 
-def track_walls(path, margin):
+def track_walls(path, margin, inner=None, outer=None, k_full=1.0):
     """prep_*.csv → q ↦ (κ, n 하한, n 상한). w_left/w_right 열이 없으면 track_width/2."""
     d = np.genfromtxt(path, delimiter=',', names=True)
     length = d['s'][-1] + np.hypot(d['x'][0] - d['x'][-1], d['y'][0] - d['y'][-1])
@@ -605,9 +605,15 @@ def track_walls(path, margin):
 
     def at(q):
         q = np.mod(q, length)
-        return (np.interp(q, S, ext(d['curvature'])),
-                -(np.interp(q, S, ext(wr)) - margin),
-                np.interp(q, S, ext(wl)) - margin)
+        k = np.interp(q, S, ext(d['curvature']))
+        if inner is None and outer is None:
+            m_l = m_r = margin
+        else:       # 노드 Track.bounds_asym 과 같은 식
+            w = np.clip(np.abs(k) / k_full, 0.0, 1.0)
+            m_in = margin + ((margin if inner is None else inner) - margin) * w
+            m_out = margin + ((margin if outer is None else outer) - margin) * w
+            m_l, m_r = np.where(k > 0, m_in, m_out), np.where(k > 0, m_out, m_in)
+        return (k, -(np.interp(q, S, ext(wr)) - m_r), np.interp(q, S, ext(wl)) - m_l)
     return at
 
 
@@ -1116,6 +1122,8 @@ def main():
                     help='--plant: 차가 이만큼 (s, 주기 단위로 반올림) 늦은 명령으로 움직인다')
     ap.add_argument('--delay-extra', type=float, default=0.0,
                     help='--delay-comp 와 (state-delay 없이): 상태를 이만큼 앞으로 예측 (노드 delay_extra)')
+    ap.add_argument('--walls-inner', type=float, default=None, help='코너 안쪽 벽 여유 (노드 wall_margin_inner)')
+    ap.add_argument('--walls-outer', type=float, default=None, help='코너 바깥쪽 벽 여유 (노드 wall_margin_outer)')
     ap.add_argument('--steer-plan-frac', type=float, default=1.0,
                     help='스테이지 --steer-plan-from 부터 조향 상한 × 이 값 (노드 steer_plan_frac, 1.0 = 끔)')
     ap.add_argument('--steer-plan-from', type=int, default=3)
@@ -1231,7 +1239,8 @@ def main():
             st = solver.solve()
             print(f'\n■ zero-guess  status {st}  u0 {solver.get(0, "u")}')
             continue
-        walls = track_walls(args.track, args.walls) if (name == 'track' and args.walls is not None) else None
+        walls = (track_walls(args.track, args.walls, args.walls_inner, args.walls_outer)
+                 if (name == 'track' and args.walls is not None) else None)
         plant = (make_plant(dyn_fun, cfg, args.dt, ws_tau=args.plant_ws_tau,
                             ws_acc=args.plant_ws_acc, ws_dec=args.plant_ws_dec,
                             steer_tau=args.plant_steering_tau)

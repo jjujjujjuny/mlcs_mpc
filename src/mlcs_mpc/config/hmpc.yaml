@@ -107,6 +107,9 @@
     # 조향 여유 (11-14 대회장): 스테이지 steer_plan_from 부터 조향 상한 × steer_plan_frac. 1.0 = 끔. 재빌드 없음
     steer_plan_frac: 1.0
     steer_plan_from: 3
+    # 코너 안쪽·바깥쪽 벽 여유 따로 (11-14). 음수 = wall_margin 그대로. |κ| ≥ 1 에서 다 적용, 직선은 wall_margin
+    wall_margin_inner: -1.0
+    wall_margin_outer: -1.0
     # ★ 지연 보상: 상태 측정 시각 → 지금 + 예상 풀이 시간 만큼 그동안 낸 명령으로 x0 를 당긴다 (워커에서 적분).
     #   라이다 센서→명령 60~100 ms. offline 1109_4 v2.0 80 ms 지연: 보상 없음 랩 6.60~7.52 / 벽밖 1.6%,
     #   보상 6.24~6.30 / 0% (2026-11-10). 실차 A/B 전이라 끔
