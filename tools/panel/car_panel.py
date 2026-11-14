@@ -478,11 +478,17 @@ class Panel(QtWidgets.QWidget):
         self.sp_fric.setDecimals(2)
         self.sp_fric.setToolTip('MPC 가 믿는 접지력 (재빌드 없음). 낮추면 코너 앞에서 일찍 감속한다\n'
                                 '0.36 = 11-11 로비 급커브 교착 대책, 0.41 = 연구실 실측')
+        self.sp_steer = QtWidgets.QDoubleSpinBox()
+        self.sp_steer.setRange(0.50, 1.00)
+        self.sp_steer.setSingleStep(0.05)
+        self.sp_steer.setDecimals(2)
+        self.sp_steer.setToolTip('조향 여유 (재빌드 없음). 1.0 = 끔, 0.9 = 3 단계 뒤 계획부터 조향 상한 90 %\n'
+                                 '급코너에 조향 최대로 들어가 교착하면 낮춘다 (11-14 대회장)')
         self.le_log = QtWidgets.QLineEdit()
         self.le_log.setPlaceholderText('비우면 기록 안 함')
         rows = [('맵', self.cb_map), ('트랙', self.cb_track), ('최고 속도 [m/s]', self.sp_vmax),
                 ('장애물', self.cb_obs), ('오도메트리', self.cb_odom), ('맵 고정', self.cb_pin),
-                ('마찰 계수', self.sp_fric),
+                ('마찰 계수', self.sp_fric), ('조향 여유', self.sp_steer),
                 ('기록 태그', self.le_log)]
         for r, (t, w) in enumerate(rows):
             g.addWidget(QtWidgets.QLabel(t), r, 0)
@@ -841,6 +847,10 @@ class Panel(QtWidgets.QWidget):
                 self.sp_fric.setValue(float(s.get('friction', '0.41')))
             except ValueError:
                 pass
+            try:
+                self.sp_steer.setValue(float(s.get('steer_plan_frac', '1.0')))
+            except ValueError:
+                pass
             lg = s.get('log', '')
             self.le_log.setText('' if lg in ("''", '""') else lg)
             self.yaml_loaded = True
@@ -868,11 +878,12 @@ class Panel(QtWidgets.QWidget):
         want = {'map': self.cb_map.currentText(), 'track': self.cb_track.currentText(),
                 'v_max': f'{self.sp_vmax.value():.1f}', 'obstacles': self.cb_obs.currentText(),
                 'loc_odom': self.cb_odom.currentText(), 'map_pin': self.cb_pin.currentText(),
-                'friction': f'{self.sp_fric.value():.2f}',
+                'friction': f'{self.sp_fric.value():.2f}', 'steer_plan_frac': f'{self.sp_steer.value():.2f}',
                 'log': self.le_log.text().strip()}
         def same(k, v):
             cur = self.st.get(k, '') or ''
-            if k == 'friction':         # 0.4 와 0.40 은 같다
+            if k in ('friction', 'steer_plan_frac'):     # 0.4 와 0.40 은 같다 (없으면 1.0)
+                cur = cur or ('1.0' if k == 'steer_plan_frac' else cur)
                 try:
                     return abs(float(cur) - float(v)) < 1e-9
                 except ValueError:
