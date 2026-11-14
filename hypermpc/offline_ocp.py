@@ -881,7 +881,7 @@ def run_scenario(solver, args, cfg, name, kappa_of_s, x0, laps, params, walls=No
                               and ((c0 < 0.3 and (trail_stopped or x[3] < 0.5)) or (trail_stopped and c0 < 0.4)))
                 cap = np.full(N, v_top) if cap is None else cap
                 for k in range(N):
-                    solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.max_steer]))
+                    solver.constraints_set(k, 'ubu', np.array([max(cap[k], cfg['min_ws_ref']), args.steer_k[k]]))
             if solver.bounds_param:
                 B = bound_params(N, lo, hi, x[1], x[2], solver.heading)
                 for k in range(N + 1):
@@ -1116,6 +1116,9 @@ def main():
                     help='--plant: 차가 이만큼 (s, 주기 단위로 반올림) 늦은 명령으로 움직인다')
     ap.add_argument('--delay-extra', type=float, default=0.0,
                     help='--delay-comp 와 (state-delay 없이): 상태를 이만큼 앞으로 예측 (노드 delay_extra)')
+    ap.add_argument('--steer-plan-frac', type=float, default=1.0,
+                    help='스테이지 --steer-plan-from 부터 조향 상한 × 이 값 (노드 steer_plan_frac, 1.0 = 끔)')
+    ap.add_argument('--steer-plan-from', type=int, default=3)
     ap.add_argument('--vel-lag', type=float, default=0.0,
                     help='OCP 에 주는 vx·vy·r 만 이만큼 (s) 늦게 (실차 lidar_bridge KF 속도 지연 약 0.11)')
     ap.add_argument('--state-delay', type=float, default=0.0,
@@ -1192,10 +1195,13 @@ def main():
 
     if args.build_only:
         return 0
+    # 조향 여유 (노드 steer_plan_frac / steer_plan_from 과 같게)
+    args.steer_k = np.where(np.arange(args.N) >= args.steer_plan_from,
+                            args.max_steer * min(max(args.steer_plan_frac, 0.5), 1.0), args.max_steer)
     if args.v_max is not None:
         for k in range(args.N):
-            solver.constraints_set(k, 'lbu', np.array([cfg['min_ws_ref'], -args.max_steer]))
-            solver.constraints_set(k, 'ubu', np.array([args.v_max, args.max_steer]))
+            solver.constraints_set(k, 'lbu', np.array([cfg['min_ws_ref'], -args.steer_k[k]]))
+            solver.constraints_set(k, 'ubu', np.array([args.v_max, args.steer_k[k]]))
 
     params = load_params(args.params_yaml) if args.params_yaml else default_params()
     args.plant_params = load_params(args.plant_params_yaml) if args.plant_params_yaml else None

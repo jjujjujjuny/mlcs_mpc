@@ -191,6 +191,11 @@ class HmpcNode(Node):
         d('recover_tries', 3)           # 같은 자리 (s 1.0 m 안) 에서 이만큼 후진해도 막히면 고장 래치
         d('q_delta', 2.0)               # ★ 조향 명령과 조향 상태 차이 비용 (저자 2.0). 생성 코드에 들어간다
         d('qp_cond_n', 0)               # ★ HPIPM 부분 응축 길이 (0 = acados 기본 N). 생성 코드에 들어간다
+        # 조향 여유 (11-14 대회장): 급코너에 조향 최대 (23°) 로 들어가 덜 돌고 바깥으로 밀려 교착.
+        #   steer_plan_from 스테이지부터는 조향 상한을 max × steer_plan_frac 로 — 앞으로의 계획은 여유를 남겨
+        #   더 느리게·넓게 돌고, 지금 명령은 최대까지 쓸 수 있다. 1.0 = 끔. 재빌드 없음 (실행 중 경계)
+        d('steer_plan_frac', 1.0)
+        d('steer_plan_from', 3)
         d('wall_heading', 0.0)
         d('wall_heading_r', 0.25)
         d('trail_stop_speed', 0.3)      # 뒤따름 속도 상한이 이보다 낮으면 풀지 않고 세운다 m/s
@@ -324,6 +329,7 @@ class HmpcNode(Node):
                         track_slack=float(gp('track_slack')),
                         mass=float(gp('mass')), friction=float(gp('friction')), v_max=self.v_max,
                         max_steer=self.map_act[-1], params=params, core=int(gp('solver_core')),
+                        steer_plan_frac=float(gp('steer_plan_frac')), steer_plan_from=int(gp('steer_plan_from')),
                         hyper=rel(gp('hyper_model')) if gp('hyper_model') else '',
                         hyper_v_min=float(gp('hyper_v_min')), hyper_blend=float(gp('hyper_blend'))),
             extra=[a for a in gp('worker_extra_args') if a], N=self.N)

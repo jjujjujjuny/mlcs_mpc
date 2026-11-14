@@ -152,9 +152,18 @@ def main():
     n_hyper, a_sum, ms_hyper = 0, 0.0, 0.0
     lbu = np.array([cfg['min_ws_ref'], -c['max_steer']])
     ubu = np.array([c['v_max'], c['max_steer']])
+    # 조향 여유 (11-14): steer_plan_from 스테이지부터 조향 상한 × steer_plan_frac (1.0 = 끔)
+    s_frac, s_from = float(c.get('steer_plan_frac', 1.0)), int(c.get('steer_plan_from', 3))
+    steer_k = np.where(np.arange(N) >= s_from, c['max_steer'] * min(max(s_frac, 0.5), 1.0), c['max_steer'])
+    if s_frac < 1.0:
+        print(f'조향 여유: 스테이지 {s_from} 부터 상한 {steer_k[-1]:.3f} rad (최대 {c["max_steer"]:.3f} × {s_frac})', flush=True)
+
+    def set_u_bounds(k, v_hi):
+        solver.constraints_set(k, 'lbu', np.array([lbu[0], -steer_k[k]]))
+        solver.constraints_set(k, 'ubu', np.array([v_hi, steer_k[k]]))
+
     for k in range(N):
-        solver.constraints_set(k, 'lbu', lbu)
-        solver.constraints_set(k, 'ubu', ubu)
+        set_u_bounds(k, ubu[0])
 
     def restart(x0, dv=0.0):
         solver.reset()
@@ -166,8 +175,7 @@ def main():
         for k in range(N):
             solver.set(k, 'u', np.array([np.clip(xg[7], lbu[0], ubu[0]), 0.0]))
         for k in range(N):      # reset 이 경계까지 지우지는 않지만 다시 넣어 둔다
-            solver.constraints_set(k, 'lbu', lbu)
-            solver.constraints_set(k, 'ubu', ubu)
+            set_u_bounds(k, ubu[0])
 
     # 첫 풀이는 메모리를 처음 건드려 느리다. 감시 제한에 걸리지 않게 준비 전에 한 번 푼다.
     # 슬립을 0 이 아니게 둔다.
@@ -251,7 +259,7 @@ def main():
             if hyper is not None:
                 hyper.plan = None       # 다시 깐 추측은 계획이 아니다. 관측 기록은 둔다
         for k in np.flatnonzero(v_cap != ubu_k):
-            solver.constraints_set(int(k), 'ubu', np.array([v_cap[k], ubu[1]]))
+            solver.constraints_set(int(k), 'ubu', np.array([v_cap[k], steer_k[int(k)]]))
             ubu_k[k] = v_cap[k]
         if hyper is not None:
             th = time.perf_counter()
