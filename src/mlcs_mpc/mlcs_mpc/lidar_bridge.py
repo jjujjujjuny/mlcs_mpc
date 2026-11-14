@@ -232,6 +232,17 @@ class LidarBridge(Node):
         if self.require_ready and bool(m.data) and not self.ready:
             self.get_logger().info('✓ 위치 설정됨 — 이제 출발할 수 있습니다')
         self.ready = bool(m.data) or not self.require_ready
+        if self.pin and bool(m.data):
+            # 사람이 위치를 다시 찍었다 (RViz 2D Pose Estimate / LT → relocalize 가 맞춘 뒤 발행).
+            # 그 자리를 정답으로: 맵 고정 보정·흡수·정지 묶음 기준을 모두 비우고, 궤적 재시작을 튐으로 보지 않게 한다
+            if any(abs(v) > 1e-6 for v in self.pc) or self.pj != (0.0, 0.0, 0.0):
+                self.get_logger().info(f'위치 다시 설정 — 맵 고정 보정 {self.pc[0] * 100:+.0f}, {self.pc[1] * 100:+.0f} cm, '
+                                       f'{math.degrees(self.pc[2]):+.1f}° 와 흡수를 비움')
+            self.pc = [0.0, 0.0, 0.0]
+            self.pj = (0.0, 0.0, 0.0)
+            self.pc_still = None
+            self.pin_raw = None
+            self._kf_restart()
 
     def _pose_cb(self, msg):
         now = self.get_clock().now().nanoseconds * 1e-9
