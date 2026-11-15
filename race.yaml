@@ -28,7 +28,7 @@ log: race
 #   저장한 맵과 비교해 '맵에 없는 것' 을 상대 차로 본다 (lidar_obstacles). 맵핑 때 트랙 위엔 아무것도 없어야 하고,
 #   맵핑 뒤 트랙이 바뀌면 그것도 상대 차로 보인다.
 #   뒤따르기·추월 로직 (opponent.py) 은 재웅 offline 28 경우 우리 탓 충돌 0 (11-11). 실차는 처음엔 v_max 1.0 에서.
-obstacles: watch
+obstacles: lidar
 
 # 위치추정 오도메트리 (source: lidar 에서만): off = 스캔만 (지금까지), ekf = 바퀴 속도 ×1.042 + 자이로로
 #   Cartographer 가 다음 위치를 예측 (wheel_odom, localization_2d_odom.lua). 긴 직선 앞뒤 미끄러짐 대책
