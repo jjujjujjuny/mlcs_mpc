@@ -19,7 +19,7 @@
 #     lists               맵·트랙 목록 (필요할 때만)
 #     screen              tmux 'race' 화면 마지막 80줄 (그 탭을 볼 때만)
 #     logs                로그 파일들 tail -F (연결 하나로 계속)
-#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction steer_plan_frac wall_margin wall_margin_inner delay_comp act_delay)
+#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction steer_plan_frac wall_margin wall_margin_inner steer_gain delay_comp act_delay)
 #     start bench|race|mapping
 #     int                 tmux 'race' 에 Ctrl+C (drive.sh 가 정리하며 내린다)
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
@@ -77,7 +77,9 @@ status)
         /^  friction:/ && !fr { v=$2; print "friction=" v; fr=1 }
         /^  steer_plan_frac:/ && !sp { v=$2; print "steer_plan_frac=" v; sp=1 }
         /^  wall_margin:/ && !wm { v=$2; print "wall_margin=" v; wm=1 }
-        /^  wall_margin_inner:/ && !wi { v=$2; print "wall_margin_inner=" v; wi=1 }' "$YAML"
+        /^  wall_margin_inner:/ && !wi { v=$2; print "wall_margin_inner=" v; wi=1 }
+        /^  steer_map_act:/ && !sg { v=$0; sub(/.*,[ \t]*/,"",v); sub(/\].*/,"",v); printf "steer_gain=%.2f\n", v/0.3776; sg=1 }
+        END { if (!sg) print "steer_gain=1.00" }' "$YAML"
     ;;
 lists)
     light
@@ -135,6 +137,12 @@ set)
         friction)  [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
                    awk -v x="$v" 'BEGIN{exit !(x >= 0.2 && x <= 0.6)}' || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
                    sed -i -E "s/^(  friction:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
+        steer_gain)
+                   [[ "$v" =~ ^1(\.[0-9]+)?$ ]] || { echo "✗ steer_gain (1.0~1.3): $v"; exit 1; }
+                   awk -v x="$v" 'BEGIN{exit !(x >= 1.0 && x <= 1.3)}' || { echo "✗ steer_gain (1.0~1.3): $v"; exit 1; }
+                   act=$(awk -v g="$v" 'BEGIN{printf "[0.0, %.4f, %.4f, %.4f]", 0.2021*g, 0.2972*g, 0.3776*g}')
+                   if grep -qE "^  steer_map_act:" "$YAML"; then sed -i -E "s/^(  steer_map_act:[[:space:]]*)\[[^]]*\]/\1$act/" "$YAML"
+                   else sed -i -E "0,/^hmpc:/s//hmpc:\n  steer_map_cmd: [0.0, 0.2, 0.3, 0.4]\n  steer_map_act: $act/" "$YAML"; fi ;;
         wall_margin|wall_margin_inner)
                    [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
                    awk -v x="$v" 'BEGIN{exit !(x >= 0.25 && x <= 0.60)}' || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
@@ -152,6 +160,7 @@ set)
                    else sed -i -E "0,/^hmpc:/s//hmpc:\n  $k: $v/" "$YAML"; fi ;;
         *) echo "✗ 바꿀 수 없는 키: $k"; exit 1 ;;
     esac
+    [ "$k" = steer_gain ] && { echo "✓ steer_gain = $v ($(sed -n 's/^  steer_map_act:[[:space:]]*//p' "$YAML" | head -1))"; exit 0; }
     echo "✓ $k = $(case "$k" in v_max|friction|steer_plan_frac|wall_margin|wall_margin_inner|delay_comp|act_delay) sed -n "s/^  $k:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$YAML" | head -1 ;; *) yaml_get "$k" ;; esac)"
     ;;
 start)
