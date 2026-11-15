@@ -484,11 +484,23 @@ class Panel(QtWidgets.QWidget):
         self.sp_steer.setDecimals(2)
         self.sp_steer.setToolTip('조향 여유 (재빌드 없음). 1.0 = 끔, 0.9 = 3 단계 뒤 계획부터 조향 상한 90 %\n'
                                  '급코너에 조향 최대로 들어가 교착하면 낮춘다 (11-14 대회장)')
+        self.sp_wall = QtWidgets.QDoubleSpinBox()
+        self.sp_wall.setRange(0.25, 0.60)
+        self.sp_wall.setSingleStep(0.01)
+        self.sp_wall.setDecimals(2)
+        self.sp_wall.setToolTip('직선 벽 여유 m (재빌드 없음). 차 중심이 벽에서 이만큼 떨어져야 벌점 없음 (반폭 0.15 포함)\n'
+                                '급코너 (반경 1 m 보다 급함) 는 안쪽/바깥 여유만 써서 통로 폭이 안 바뀜. 11-15: 0.38 → 0.43 시험')
+        self.sp_wall_in = QtWidgets.QDoubleSpinBox()
+        self.sp_wall_in.setRange(0.25, 0.60)
+        self.sp_wall_in.setSingleStep(0.01)
+        self.sp_wall_in.setDecimals(2)
+        self.sp_wall_in.setToolTip('급코너 안쪽 벽 여유 m (재빌드 없음). 안쪽 벽에 닿으면 0.48 → 0.53')
         self.le_log = QtWidgets.QLineEdit()
         self.le_log.setPlaceholderText('비우면 기록 안 함')
         rows = [('맵', self.cb_map), ('트랙', self.cb_track), ('최고 속도 [m/s]', self.sp_vmax),
                 ('장애물', self.cb_obs), ('오도메트리', self.cb_odom), ('맵 고정', self.cb_pin),
                 ('마찰 계수', self.sp_fric), ('조향 여유', self.sp_steer),
+                ('직선 벽 여유 [m]', self.sp_wall), ('코너 안쪽 여유 [m]', self.sp_wall_in),
                 ('기록 태그', self.le_log)]
         for r, (t, w) in enumerate(rows):
             g.addWidget(QtWidgets.QLabel(t), r, 0)
@@ -851,6 +863,11 @@ class Panel(QtWidgets.QWidget):
                 self.sp_steer.setValue(float(s.get('steer_plan_frac', '1.0')))
             except ValueError:
                 pass
+            for sp, key, dflt in ((self.sp_wall, 'wall_margin', '0.38'), (self.sp_wall_in, 'wall_margin_inner', '0.48')):
+                try:
+                    sp.setValue(float(s.get(key, dflt)))
+                except ValueError:
+                    pass
             lg = s.get('log', '')
             self.le_log.setText('' if lg in ("''", '""') else lg)
             self.yaml_loaded = True
@@ -879,10 +896,11 @@ class Panel(QtWidgets.QWidget):
                 'v_max': f'{self.sp_vmax.value():.1f}', 'obstacles': self.cb_obs.currentText(),
                 'loc_odom': self.cb_odom.currentText(), 'map_pin': self.cb_pin.currentText(),
                 'friction': f'{self.sp_fric.value():.2f}', 'steer_plan_frac': f'{self.sp_steer.value():.2f}',
+                'wall_margin': f'{self.sp_wall.value():.2f}', 'wall_margin_inner': f'{self.sp_wall_in.value():.2f}',
                 'log': self.le_log.text().strip()}
         def same(k, v):
             cur = self.st.get(k, '') or ''
-            if k in ('friction', 'steer_plan_frac'):     # 0.4 와 0.40 은 같다 (없으면 1.0)
+            if k in ('friction', 'steer_plan_frac', 'wall_margin', 'wall_margin_inner'):     # 0.4 와 0.40 은 같다 (없으면 1.0)
                 cur = cur or ('1.0' if k == 'steer_plan_frac' else cur)
                 try:
                     return abs(float(cur) - float(v)) < 1e-9

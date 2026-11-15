@@ -19,7 +19,7 @@
 #     lists               맵·트랙 목록 (필요할 때만)
 #     screen              tmux 'race' 화면 마지막 80줄 (그 탭을 볼 때만)
 #     logs                로그 파일들 tail -F (연결 하나로 계속)
-#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction steer_plan_frac delay_comp act_delay)
+#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction steer_plan_frac wall_margin wall_margin_inner delay_comp act_delay)
 #     start bench|race|mapping
 #     int                 tmux 'race' 에 Ctrl+C (drive.sh 가 정리하며 내린다)
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
@@ -75,7 +75,9 @@ status)
         /^  delay_comp:/ && !dc { v=$2; print "delay_comp=" v; dc=1 }
         /^  act_delay:/ && !ad { v=$2; print "act_delay=" v; ad=1 }
         /^  friction:/ && !fr { v=$2; print "friction=" v; fr=1 }
-        /^  steer_plan_frac:/ && !sp { v=$2; print "steer_plan_frac=" v; sp=1 }' "$YAML"
+        /^  steer_plan_frac:/ && !sp { v=$2; print "steer_plan_frac=" v; sp=1 }
+        /^  wall_margin:/ && !wm { v=$2; print "wall_margin=" v; wm=1 }
+        /^  wall_margin_inner:/ && !wi { v=$2; print "wall_margin_inner=" v; wi=1 }' "$YAML"
     ;;
 lists)
     light
@@ -133,6 +135,11 @@ set)
         friction)  [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
                    awk -v x="$v" 'BEGIN{exit !(x >= 0.2 && x <= 0.6)}' || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
                    sed -i -E "s/^(  friction:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
+        wall_margin|wall_margin_inner)
+                   [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
+                   awk -v x="$v" 'BEGIN{exit !(x >= 0.25 && x <= 0.60)}' || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
+                   grep -qE "^  $k:" "$YAML" || { echo "✗ race.yaml 에 $k 줄이 없습니다"; exit 1; }
+                   sed -i -E "s/^(  $k:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
         steer_plan_frac)
                    [[ "$v" =~ ^(0\.[5-9][0-9]*|1(\.0+)?)$ ]] || { echo "✗ steer_plan_frac (0.5~1.0): $v"; exit 1; }
                    if grep -qE "^  steer_plan_frac:" "$YAML"; then sed -i -E "s/^(  steer_plan_frac:[[:space:]]*)[0-9.]+/\1$v/" "$YAML"
@@ -145,7 +152,7 @@ set)
                    else sed -i -E "0,/^hmpc:/s//hmpc:\n  $k: $v/" "$YAML"; fi ;;
         *) echo "✗ 바꿀 수 없는 키: $k"; exit 1 ;;
     esac
-    echo "✓ $k = $(case "$k" in v_max|friction|steer_plan_frac|delay_comp|act_delay) sed -n "s/^  $k:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$YAML" | head -1 ;; *) yaml_get "$k" ;; esac)"
+    echo "✓ $k = $(case "$k" in v_max|friction|steer_plan_frac|wall_margin|wall_margin_inner|delay_comp|act_delay) sed -n "s/^  $k:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$YAML" | head -1 ;; *) yaml_get "$k" ;; esac)"
     ;;
 start)
     # ★ light 를 부르지 않는다 (위 원칙)

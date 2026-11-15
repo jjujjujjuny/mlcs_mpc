@@ -41,7 +41,7 @@ Visualization Manager:
       Decay Time: 0
     - Class: rviz_default_plugins/MarkerArray
       Name: Trajectory
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /trajectory_node_list
         Depth: 5
