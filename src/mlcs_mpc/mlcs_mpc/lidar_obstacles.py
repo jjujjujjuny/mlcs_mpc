@@ -30,7 +30,7 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from mlcs_mpc.hmpc_core import Track
-from mlcs_mpc.obstacle_detect import DetectParams, TrackBand, WallField, detect_scan
+from mlcs_mpc.obstacle_detect import DetectParams, NearWallStaticFilter, TrackBand, WallField, detect_scan
 
 BEST_EFFORT = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 
@@ -54,6 +54,8 @@ class LidarObstacles(Node):
         d('confirm_window', 0.3)
         d('confirm_radius', 0.3)
         d('log_dir', os.path.expanduser('~/mlcs_data'))     # '' 면 기록 안 함
+        d('wall_far', 0.30)         # 확정 후보 중심이 벽에서 이만큼 넘게 떨어지면 장애물. 아니면 꾸준히 움직일 때만 m
+        d('moving_speed', 0.8)      # 벽 옆 후보가 장애물이 되는 순이동 속도 m/s (헛것은 앞뒤로 튀어 곧음이 낮다)
         for k, v in DetectParams().__dict__.items():
             d(k, v)
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
@@ -61,9 +63,11 @@ class LidarObstacles(Node):
         if not gp('map_yaml') or not gp('track_csv'):
             raise SystemExit('map_yaml 과 track_csv 가 필요합니다')
         self.walls = WallField(gp('map_yaml'))
-        # 맵별 헛것 자리 (빈 트랙 주행에서 늘 잡히던 곳). 없으면 빈 목록
-        gpath = os.path.splitext(gp('map_yaml'))[0] + '_ghost.csv'
-        self.walls.ghost = np.loadtxt(gpath, delimiter=',', ndmin=2) if os.path.exists(gpath) else np.zeros((0, 2))
+        # ★ 11-15: 헛것 목록 (maps/<맵>_ghost.csv) 은 없앴다 — 천 배관 벽이 계속 밀려 헛것이 새 자리에 생긴다.
+        #   대신 '벽 옆 + 가만히' 를 매 순간 버린다 (NearWallStaticFilter, 아래 확정 단계)
+        self.walls.ghost = np.zeros((0, 2))
+        self.flt = NearWallStaticFilter(wall_far=float(gp('wall_far')), min_speed=float(gp('moving_speed')))
+        self.n_sup = 0
         self.band = TrackBand(Track(gp('track_csv')))
         self.base_frame = gp('base_frame')
         self.laser = tuple(float(v) for v in gp('laser_xy_yaw'))
@@ -76,7 +80,7 @@ class LidarObstacles(Node):
         self.corr = (0.0, 0.0, 0.0) # 스캔 맞춤 보정 (dx, dy, dyaw) — 다음 스캔의 탐색 시작점
         self.last_fit = 0.0         # 지난 스캔의 맞춤 비율 — 낮으면 다음엔 넓게 찾는다
         self.hist = []              # [(시각, cx, cy)]
-        self.n_scan = self.n_pub = 0
+        self.n_scan = self.n_pub = self.n_sup = 0
         self.t_cost = 0.0
         self.log = None
         if gp('log_dir'):
@@ -98,7 +102,8 @@ class LidarObstacles(Node):
         self.create_timer(5.0, self._report)
         self.get_logger().info(
             f'lidar_obstacles: 맵 {gp("map_yaml")}, 벽 여유 {self.p.wall_clear}+{self.p.clear_per_m}/m, '
-            f'확정 {self.c_hits}번/{self.c_win}s/{self.c_rad}m, 헛것 자리 {len(self.walls.ghost)}곳 (±{self.p.ghost_radius} m)')
+            f'확정 {self.c_hits}번/{self.c_win}s/{self.c_rad}m, 벽 옆 정지 버림 (벽 < {self.flt.wall_far} m 이고 '
+            f'순이동 < {self.flt.min_speed} m/s)')
 
     def _state_cb(self, m):
         p = m.pose.pose
@@ -159,12 +164,15 @@ class LidarObstacles(Node):
         for c in dets:
             self.hist.append((now, c[0], c[1]))
         self.hist = [h for h in self.hist if now - h[0] < self.c_win]
+        ids = self.flt.update(now, [(c[0], c[1]) for c in dets])
         best = None
-        for c in dets:      # 가까운 순
+        for c, tid in zip(dets, ids):      # 가까운 순
             hits = sum(1 for h in self.hist if math.hypot(h[1] - c[0], h[2] - c[1]) < self.c_rad)
             if hits >= self.c_hits:
-                best = c
-                break
+                if self.flt.accept(float(self.walls.dist(c[0], c[1])), tid):
+                    best = c
+                    break
+                self.n_sup += 1     # 벽 옆에 가만히 있는 확정 후보 = 헛것으로 버림
         if best is not None:
             m = PoseStamped()
             m.header.stamp, m.header.frame_id = s.header.stamp, 'map'
@@ -204,7 +212,7 @@ class LidarObstacles(Node):
 
     def _report(self):
         if self.n_scan:
-            self.get_logger().info(f'스캔 {self.n_scan}개, 장애물 발행 {self.n_pub}번, '
+            self.get_logger().info(f'스캔 {self.n_scan}개, 장애물 발행 {self.n_pub}번, 벽 옆 정지 버림 {self.n_sup}번, '
                                    f'계산 평균 {self.t_cost / self.n_scan * 1e3:.1f} ms')
         elif self.pose is None:
             self.get_logger().warn('자세 (/mpc/state) 가 아직 없습니다')

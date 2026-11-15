@@ -285,3 +285,46 @@ def detect(pts, origin, walls, band, p):
         out.append((float(c[0]), float(c[1]), size, len(g), float(band.h[near[g[len(g) // 2]]]), dist))
     out.sort(key=lambda o: o[5])
     return [o[:5] for o in out]
+
+
+class NearWallStaticFilter:
+    """★ 11-15 대회장 (헛것 목록 대신). 벽 옆 + 가만히 = 헛것 (밀린 천 배관 벽 등). 헛것 목록 없이 매 순간 판단.
+    - 벽에서 wall_far 넘게 떨어진 확정 후보는 그대로 장애물
+    - 벽 옆이면 '한 방향으로 꾸준히 움직이는' 추적일 때만 장애물 (상대 차). 헛것은 시점이 바뀌며 중심이 앞뒤로 튀어
+      겉보기 속도는 1~3 m/s 가 나오지만 방향이 왔다 갔다 해서 곧음 (순이동/경로 길이) 이 낮다.
+    계산: 후보 수 (보통 ≤ 3) × 추적 수 (≤ 10) 거리 계산 — 스캔당 0.1 ms 미만."""
+    def __init__(self, wall_far=0.30, gate=0.5, keep=0.5, min_age=0.25, min_speed=0.8, min_straight=0.7):
+        self.wall_far, self.gate, self.keep = wall_far, gate, keep
+        self.min_age, self.min_speed, self.min_straight = min_age, min_speed, min_straight
+        self.tracks = []    # [x, y, t, x0, y0, t0, path]
+
+    def update(self, now, pts):
+        """pts = [(x, y)] 이번 스캔 후보. 각 후보의 추적 번호 목록."""
+        self.tracks = [k for k in self.tracks if now - k[2] < self.keep]
+        ids = []
+        for x, y in pts:
+            best, bd = None, self.gate
+            for i, k in enumerate(self.tracks):
+                d = math.hypot(x - k[0], y - k[1])
+                if d < bd:
+                    best, bd = i, d
+            if best is None:
+                self.tracks.append([x, y, now, x, y, now, 0.0])
+                ids.append(len(self.tracks) - 1)
+            else:
+                k = self.tracks[best]
+                k[6] += bd
+                k[0], k[1], k[2] = x, y, now
+                ids.append(best)
+        return ids
+
+    def moving(self, i):
+        x, y, t, x0, y0, t0, path = self.tracks[i]
+        age = t - t0
+        if age < self.min_age:
+            return False
+        disp = math.hypot(x - x0, y - y0)
+        return disp / age >= self.min_speed and disp >= self.min_straight * max(path, 1e-6)
+
+    def accept(self, wall_d, i):
+        return wall_d >= self.wall_far or self.moving(i)

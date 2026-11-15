@@ -151,7 +151,7 @@ set +e
 T_START=$(date +%s)
 "$HERE/drive.sh" hmpc "${ARGS[@]}"
 trap - INT
-if [ "${MLCS_OBS_LEARN:-0}" = 1 ]; then
+if false && [ "${MLCS_OBS_LEARN:-0}" = 1 ]; then    # ★ 11-15 헛것 목록 없앰 — learn 은 watch 와 같다
     echo
     echo "════════════════ 헛것 자리 배우기 (obstacles: learn) ════════════════"
     # 이번 실행에서 생긴 lidar_obstacles 기록 (시계가 1970 으로 돌아가도 되게 시각 대신 수정 시각으로)
