@@ -138,8 +138,8 @@ set)
                    awk -v x="$v" 'BEGIN{exit !(x >= 0.2 && x <= 0.6)}' || { echo "✗ friction (0.2~0.6): $v"; exit 1; }
                    sed -i -E "s/^(  friction:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
         steer_gain)
-                   [[ "$v" =~ ^(1(\.[0-9]+)?|2(\.0+)?)$ ]] || { echo "✗ steer_gain (1.0~2.0): $v"; exit 1; }
-                   awk -v x="$v" 'BEGIN{exit !(x >= 1.0 && x <= 2.0)}' || { echo "✗ steer_gain (1.0~2.0): $v"; exit 1; }
+                   [[ "$v" =~ ^([12](\.[0-9]+)?|3(\.0+)?)$ ]] || { echo "✗ steer_gain (1.0~3.0): $v"; exit 1; }
+                   awk -v x="$v" 'BEGIN{exit !(x >= 1.0 && x <= 3.0)}' || { echo "✗ steer_gain (1.0~3.0): $v"; exit 1; }
                    act=$(awk -v g="$v" 'BEGIN{printf "[0.0, %.4f, %.4f, %.4f]", 0.2021*g, 0.2972*g, 0.3776*g}')
                    if grep -qE "^  steer_map_act:" "$YAML"; then sed -i -E "s/^(  steer_map_act:[[:space:]]*)\[[^]]*\]/\1$act/" "$YAML"
                    else sed -i -E "0,/^hmpc:/s//hmpc:\n  steer_map_cmd: [0.0, 0.2, 0.3, 0.4]\n  steer_map_act: $act/" "$YAML"; fi ;;

@@ -496,7 +496,7 @@ class Panel(QtWidgets.QWidget):
         self.sp_wall_in.setDecimals(2)
         self.sp_wall_in.setToolTip('급코너 안쪽 벽 여유 m (재빌드 없음). 안쪽 벽에 닿으면 0.48 → 0.53')
         self.sp_sgain = QtWidgets.QDoubleSpinBox()
-        self.sp_sgain.setRange(1.00, 2.00)
+        self.sp_sgain.setRange(1.00, 3.00)
         self.sp_sgain.setSingleStep(0.05)
         self.sp_sgain.setDecimals(2)
         self.sp_sgain.setToolTip('조향 맵 배율 (재빌드 없음). MPC 에 "같은 명령에 차가 이만큼 더 돈다" 를 알려 덜 꺾게 한다\n'
