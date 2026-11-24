@@ -20,6 +20,7 @@
 #     MLCS_SIM_BENCH=1             mpcc bench (속도 0, 조향만)
 #     MLCS_SIM_NORVIZ=1            RViz 를 안 띄운다
 #     MLCS_SIM_LOGS=<저장소>/logs/sim  차 상태 기록 → sim_<시각>.csv (튜닝 그림은 logs/tune/)
+#     MLCS_CONDA_ENV=mlcs_ros      /opt/ros 가 없을 때 (macOS) 쓰는 RoboStack conda 환경 (ROS 2 Humble + acados_template)
 #
 #  ★ race.yaml 의 source·map·drive·log 는 시뮬에서 쓰지 않는다. 트랙 좌표계 그대로 달린다.
 # ============================================================================
@@ -43,11 +44,25 @@ source_ros () {
             [ -f "/opt/ros/$d/setup.bash" ] && { source "/opt/ros/$d/setup.bash"; break; }
         done
     fi
-    [ -n "${ROS_DISTRO:-}" ] || { echo "ROS 2 가 없습니다 (/opt/ros/humble 또는 foxy)"; exit 1; }
+    # macOS: /opt/ros 가 없으면 RoboStack conda 환경 (docs/SETUP_MAC.md)
+    if [ -z "${ROS_DISTRO:-}" ] && command -v conda >/dev/null 2>&1; then
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+        conda activate "${MLCS_CONDA_ENV:-mlcs_ros}" 2>/dev/null || true
+    fi
+    [ -n "${ROS_DISTRO:-}" ] || { echo "ROS 2 가 없습니다 (/opt/ros/humble·foxy, macOS 는 conda 환경 ${MLCS_CONDA_ENV:-mlcs_ros})"; exit 1; }
     # 젯슨이면 차 워크스페이스 (vesc_msgs 가 있다) 위에 얹는다
     [ -f "$HOME/f1tenth_ws/install/setup.bash" ] && source "$HOME/f1tenth_ws/install/setup.bash"
     [ "${1:-}" = ws ] && [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
     set -u
+}
+
+# acados 공유 라이브러리 경로 (macOS 는 DYLD_LIBRARY_PATH)
+add_acados_lib () {
+    if [ "$(uname)" = Darwin ]; then
+        export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-}:$ACADOS_SOURCE_DIR/lib"
+    else
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:$ACADOS_SOURCE_DIR/lib"
+    fi
 }
 
 case "${1:-}" in
@@ -67,7 +82,7 @@ build)
 main|fast)
     source_ros ws
     if [ -z "${ACADOS_SOURCE_DIR:-}" ] && [ -d "$HOME/acados" ]; then export ACADOS_SOURCE_DIR="$HOME/acados"; fi
-    [ -n "${ACADOS_SOURCE_DIR:-}" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:$ACADOS_SOURCE_DIR/lib"
+    [ -n "${ACADOS_SOURCE_DIR:-}" ] && add_acados_lib
     PY="$HOME/hmpc-venv/bin/python"; [ -x "$PY" ] || PY="$(command -v python3)"
     F=main_sim.py; [ "$1" = fast ] && F=main.py
     shift
@@ -84,7 +99,10 @@ go|halt)
 status)
     source_ros ws
     # Foxy 의 ros2 topic echo 에는 --once 가 없다
-    timeout 3 ros2 topic echo /sim/status 2>/dev/null | head -2 || true
+    # macOS 에는 timeout 이 없다 (coreutils 의 gtimeout)
+    T=$(command -v timeout || command -v gtimeout || true)
+    if [ -n "$T" ]; then "$T" 3 ros2 topic echo /sim/status 2>/dev/null | head -2 || true
+    else ros2 topic echo /sim/status 2>/dev/null | head -2 || true; fi
     exit 0 ;;
 track)
     [ -n "${2:-}" ] || { echo "사용법: ./sim.sh track <트랙> [v_max]"; exit 1; }
@@ -95,6 +113,7 @@ track)
 esac
 [ -f "$CFG" ] || { echo "설정 파일이 없습니다: $CFG"; exit 1; }
 
+source_ros ws     # 아래 python3 (yaml·numpy) 도 ROS 환경 것을 쓴다 (macOS 는 conda)
 # race.sh 와 같은 규칙으로 읽는다: mpcc: 는 config/mpcc.yaml 에 있는 이름만, 트랙은 이름 또는 prep csv.
 eval "$(python3 - "$CFG" "$HERE" "$OUT" <<'PY'
 import os, shlex, sys
@@ -129,14 +148,13 @@ print('SUMMARY=' + shlex.quote('\n'.join(lines)))
 PY
 )"
 
-source_ros ws
 ros2 pkg executables mlcs_mpc 2>/dev/null | grep -q sim_node || { echo "✗ 시뮬 워크스페이스가 없거나 오래됐습니다 — ./sim.sh build"; exit 1; }
 PY_WORKER="$HOME/hmpc-venv/bin/python"
 [ -x "$PY_WORKER" ] || PY_WORKER="$(command -v python3)"
 if [ -z "${ACADOS_SOURCE_DIR:-}" ] && [ -d "$HOME/acados" ]; then
     export ACADOS_SOURCE_DIR="$HOME/acados"
 fi
-[ -n "${ACADOS_SOURCE_DIR:-}" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:$ACADOS_SOURCE_DIR/lib"
+[ -n "${ACADOS_SOURCE_DIR:-}" ] && add_acados_lib
 LOG_CSV="${MLCS_SIM_LOGS:-$HERE/logs/sim}/sim_$(date +%Y%m%d_%H%M%S).csv"
 
 echo "════════════════ 시뮬 ($(basename "$CFG")) ════════════════"

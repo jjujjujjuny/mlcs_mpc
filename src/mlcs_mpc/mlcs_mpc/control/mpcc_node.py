@@ -70,6 +70,7 @@ from mlcs_mpc.env.config import MpccConfig
 from mlcs_mpc.env.mpc.core import make_state, solution_ok, to_command
 from mlcs_mpc.env.track import Track
 from mlcs_mpc.env.opponent import LEFT, RIGHT, Opponent, OppParams
+from mlcs_mpc.utils.runenv import LIB_PATH_VAR
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -94,7 +95,7 @@ class Worker:
         env = dict(os.environ)
         home = os.path.expanduser('~')
         env.setdefault('ACADOS_SOURCE_DIR', home + '/acados')
-        env['LD_LIBRARY_PATH'] = env.get('LD_LIBRARY_PATH', '') + ':' + home + '/acados/lib'
+        env[LIB_PATH_VAR] = env.get(LIB_PATH_VAR, '') + ':' + home + '/acados/lib'   # macOS 는 DYLD_LIBRARY_PATH
         self.proc = subprocess.Popen(
             [python, '-u', script, '--fd-in', str(p_in), '--fd-out', str(p_out),
              '--config', json.dumps(config)] + extra,

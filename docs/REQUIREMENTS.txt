@@ -1,0 +1,99 @@
+mlcs_mpc — 요구사항 정리 (2026-11-24)
+================================================================
+지금까지 정해진 요구사항·제약을 한 곳에 모았다. "근거" 는 그 요구가 나온 곳 (문서·실측·요청).
+상태: [완료] 구현·시험됨  [부분] 일부만  [미정] 아직  [실차X] 시뮬에서만 확인 (README 검증 표 기준)
+
+
+1. 시스템
+----------------------------------------------------------------
+R1.1  차: F1TENTH, Jetson Orin Nano (Ubuntu 22.04, ROS 2 Humble), VESC 6, 서보, 3S 배터리.
+R1.2  위치추정: 연구실 = OptiTrack mocap (100 Hz, 기준점 = 앞축 중심 위 강체), 대회 = LiDAR + Cartographer.
+R1.3  워크플로: PC 시뮬 (./sim.sh, main.py) 에서 튜닝 → 커밋 → 젯슨 (./race.sh). 둘 다 같은 race.yaml·mpcc.yaml.
+R1.4  주기: MPC 30 Hz (OCP dt 0.033 s, N 60), 풀이 p95 ≤ 33 ms (실측 젯슨 약 21 ms), VESC 속도 PID 1 kHz.   [완료]
+R1.5  문서·주석·커밋·CLI 출력은 한국어.
+
+
+2. 안전 (모든 노드)
+----------------------------------------------------------------
+R2.1  발행을 멈춰도 차는 서지 않는다 (VESC 가 마지막 속도 유지) → 모든 실패 경로가 속도 0 을 직접 발행.   [완료]
+R2.2  /mpc/enabled 가 true 가 되기 전에는 움직이지 않는다 (./drive.sh go / halt).                       [완료]
+R2.3  acados 풀이는 별도 프로세스 (NaN 에서 멈출 수 있음). 시간 초과면 SIGKILL, 속도 0, enabled false→true 까지 고장 래치. [완료]
+R2.4  조이스틱 끊김이면 속도 0 (mux 우선순위 조이스틱 100 > 내비 10).                                    [완료]
+
+
+3. 제어기 (MPCC)
+----------------------------------------------------------------
+R3.1  MPC 설정값은 config/mpcc.yaml (→ race.yaml mpcc: → --config → --set) 에서만. 다른 곳에 하드코딩 금지.
+R3.2  차 모델은 env/vehicle_model.py 하나 (MPC·시뮬·RL 공통). 바꾸면 env/vec/vehicle.py 도 같이 (test_vec_vehicle).
+R3.3  학습 파라미터 모델은 env/mpc/param_model.py 인터페이스로만 붙인다 (기본 ConstantParams).
+R3.4  플랫폼 차이는 utils/runenv.LIB_PATH_VAR, acados_solver.LIB_EXT 로 (LD_LIBRARY_PATH·.so 하드코딩 금지).
+
+
+4. ODE 시뮬레이터 (2026-11-24 요청)
+----------------------------------------------------------------
+R4.1  상위 → 저수준 → 동역학 3 계층 (f1tenth_gym 과 같은 구조). /drive 목표 (δ_ref, ω_ref) 는 저수준 제어기를
+      거쳐 (조향 각속도·바퀴 가속도) 적분된다. 저수준은 적분 안에서 더 세밀하게 (RK4 1 ms 단계마다) 계산한다.
+      느려져도 된다.                                                                                 [완료] env/lowlevel.py
+R4.2  저수준 파라미터는 나중에 고칠 수 있게 파일로: config/lowlevel.yaml, --lowlevel KEY=VALUE.        [완료]
+R4.3  저수준 종류: 조향 lag | gym(뱅뱅) + 각속도 한계 + 지연, 속도 lag | gym(P) + 가속·감속 한계 + 지연,
+      wheel_model vesc = 펌웨어 속도 PID·전류·제동 (env/drivetrain.py).                                [완료]
+R4.4  기본값 (LowLevelConfig()) 은 예전 시뮬레이터와 같은 결과 (회귀 시험 차 0).                       [완료] test_simulator
+R4.5  공용 차 모델 식은 바꾸지 않는다 (u = x + τ·ẋ 로 저수준 출력을 넣는다).                            [완료]
+
+
+5. 실차 파라미터 반영 (2026-11-24 전달, 대회장 11-15 실차 설정)
+----------------------------------------------------------------
+요구: 실제 구동 문제 때문에 제어기 쪽에 넣은 임시 제한이 아니라면 반영한다.
+
+  항목                            값                  반영 위치                         상태
+  종방향 타이어 Dx                ×0.45               mpcc.yaml tire_*[8] (MPC·시뮬)    [완료] 손 보정 — 동정값 아님
+  바퀴 감속 한계 (실측)           2.5 m/s²            mpcc.yaml·race.yaml ws_dec_max    [완료]
+  마찰 (대회장 바닥)              0.52                race.yaml (연구실 0.41 은 mpcc.yaml) [완료]
+  VESC 가속 램프                  5.23 m/s²           lowlevel.yaml acc_max (시뮬만)    [완료] MPC 모델에는 없음
+  실제 속도 / erpm 환산           ×1.044              lowlevel.yaml speed_scale (시뮬만) [완료]
+  vesc.yaml (erpm 4781.5, 서보 −0.8845/0.5077, 23250 erpm, 서보 0.08~0.87)  env/vesc.py — 이미 같음  [완료]
+  VESC 설정 XML (11-24)           PID 0.003/0.0002/0.0002, R 7.6 mΩ, L 2.89 µH,
+                                  개루프 1800 erpm·0.1 s·보조 5 A     docs/vesc/vesc6_f1tenth_1124.xml  [완료]
+                                  — 개루프 보조 전류 모델 추가 (numpy·torch 동일, ★ 근사), L·전류 루프 이득은 안 씀
+
+  반영하지 않음 (벽 충돌 대응 임시방편): 최대 조향각 ×2.2, 계획 조향 상한 85 %, 조향 비용 q_δ 2 → 3.
+
+  확인 필요:
+  - 조향 지연 τ 0.13 이 실제보다 커서 MPC 가 일찍 꺾는다는 의심 → 시뮬에서 --car steering_tau=<작은 값> 으로
+    차만 바꿔 시험할 수 있다. 실측 (서보 계단 응답) 필요.                                            [미정]
+  - 젯슨 풀이 지연 (약 21 ms) 은 PC 보다 길다 → 시뮬에서 steer_delay/speed_delay ≈ 0.013 로 차이를 넣을 수 있다. [미정]
+
+
+6. 강화학습 (2026-11-20 ~ 24 요청)
+----------------------------------------------------------------
+R6.1  저수준을 VESC 모델로 (actuator='vesc', 펌웨어 PID 1 kHz 를 환경 안에서 적분).                    [완료]
+R6.2  GPU 로 (CUDA: RTX 3060, --profile fast, 65536 환경 × 32). 한 프로세스 GPU 60 % → 여러 실험 병렬로 100 %.  [완료]
+R6.3  다른 기계에서 이어 학습 (맥 mps → PC cuda): train.py --resume <폴더> --device cuda:0.            [완료]
+R6.4  도메인 랜덤화: 수준 비교 (DR 0 / 0.5 / 1.0), 강건성 평가 (eval_vec.py --dr-scales, 학습 DR 의 0~2 배 ×
+      명령 끊김).                                                                                    [완료] docs/RL_RACING.md 결과
+R6.5  실패 분석: 출발 직후 (DR 때문, s ≈ 8~11.5 m S자 앞에서 정지 출발) vs 주행 중 (명령 끊김).          [완료]
+R6.6  최종 영상: logs/rl/video/final_I_vs_F_A_vesc.mp4 (casadi Simulator, VESC, 정지 출발 2 랩).        [완료]
+R6.7  VESC 설정 11-24 로 바뀐 뒤 재평가·추가 학습 (J).                                                [진행 — RL_RACING.md]
+R6.8  rl17_track 은 논문 트랙이다 — 실차에 쓰려면 실제 트랙 (*_mocap 또는 대회 track1c) 으로 다시 학습.     [미정][실차X]
+
+
+7. 트랙·맵
+----------------------------------------------------------------
+R7.1  트랙: env/track/data/<이름>/prep_<이름>.csv (s,x,y,heading,curvature,track_width[,w_right,w_left]), 맵 좌표계는
+      위치추정과 같아야 한다 (*_mocap = mocap, 나머지 = 라이다 맵).
+R7.2  대회장 트랙 (MAGP 2026) 을 우리 트랙 파일로: track1/1a/1b/1c, track2/2a + 맵 → data/maps/.         [완료] docs/TRACKS.md
+      결승 = track1c. track1 은 노이즈 맵 (벽 최소 0.01 m) — 쓰지 말 것. race.yaml 은 아직 comp1 (사람이 고를 것).
+
+
+8. 소프트웨어 환경
+----------------------------------------------------------------
+젯슨      Ubuntu 22.04, ROS 2 Humble, ~/f1tenth_ws (src/mlcs_mpc 심볼릭 링크, colcon --symlink-install),
+          casadi·acados 는 ~/hmpc-venv 에만. numpy 1.26.x 고정 (2.x 면 cv2·matplotlib·colcon 깨짐).
+메인 PC   Ubuntu 20.04, ROS 1 Noetic (.bashrc) + ROS 2 Foxy (/opt/ros/foxy) — sim.sh 가 ROS 1 을 걷어낸다.
+          python 3.8.10, numpy 1.24.4, casadi 3.7.0, scipy 1.10.1, matplotlib 3.7.5, pyyaml 5.3.1,
+          acados v0.5.2 (~/acados) + acados_template, torch 2.4.1+cu121 (RTX 3060 = cuda:0, GTX 1050 Ti 는 쓰지 않음),
+          ffmpeg (영상). 한글 글꼴: Noto Sans CJK (matplotlib 이름 'Noto Sans CJK JP').
+맥북      RoboStack conda 환경 mlcs_ros (ROS 2 Humble, casadi, acados_template, torch, numpy 2.x, setuptools<80)
+          + ~/acados v0.6.1. 항상 그 환경의 python (SIP 가 DYLD_LIBRARY_PATH 를 지운다). docs/SETUP_MAC.md.
+학습만    pip install torch numpy scipy pyyaml casadi matplotlib  (acados·ROS 불필요 — docs/RL_RACING.md)
+금지      learned/hyperpm/train/train.sh 의 WANDB_MODE=disabled 를 지우지 말 것 (상류 main.py 에 저자 W&B 키).

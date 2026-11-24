@@ -7,12 +7,16 @@ acados_solver — acados_ocp 의 OCP 에 솔버 옵션을 붙여 생성 코드�
 import glob
 import hashlib
 import os
+import sys
 import time
 
 import numpy as np
 from acados_template import AcadosOcpSolver
 
 from mlcs_mpc.env.mpc.acados_ocp import build_ocp
+
+# 생성 솔버 라이브러리 확장자 (macOS 는 .dylib — 이것을 못 찾으면 매번 다시 빌드한다)
+LIB_EXT = '.dylib' if sys.platform == 'darwin' else '.so'
 
 
 def set_solver_options(ocp, cfg):
@@ -60,7 +64,7 @@ def make_solver(model, track_grid, cfg, build_dir, log=print):
     json_file = os.path.join(build, 'ocp.json')
     stamp_file = os.path.join(build, 'source.md5')
     reuse = (os.path.exists(stamp_file) and open(stamp_file).read() == stamp
-             and glob.glob(os.path.join(ocp.code_export_directory, 'libacados_ocp_solver_*.so')))
+             and glob.glob(os.path.join(ocp.code_export_directory, f'libacados_ocp_solver_*{LIB_EXT}')))
     log(f'■ {"이전 빌드 사용" if reuse else "코드 생성 + 빌드 중"}: {build}')
     t0 = time.perf_counter()
     solver = AcadosOcpSolver(ocp, json_file=json_file, build=not reuse, generate=not reuse, verbose=False)

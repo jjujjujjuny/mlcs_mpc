@@ -41,6 +41,7 @@ from vesc_msgs.msg import VescStateStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
 from mlcs_mpc.env.config import read_params
+from mlcs_mpc.env.lowlevel import LowLevelConfig
 from mlcs_mpc.env.simulator import Simulator
 from mlcs_mpc.env.track import Track
 from mlcs_mpc.env.vesc import DEFAULT_PATH as VESC_PATH, Vesc
@@ -67,6 +68,10 @@ class SimNode(Node):
         d('vesc_rate', 50.0)            # /sensors/core 주기 Hz
         d('vesc_yaml', '')              # 비우면 env/vesc.DEFAULT_PATH, 없으면 패치 값
         d('integrator', 'rk4')          # rk4 (고정 간격) | scipy solve_ivp 방법 (RK45, LSODA ...)
+        d('wheel_model', 'lag')         # lag = 1차 지연 | vesc = ackermann_to_vesc + VESC 속도 PID + 모터 전류 (env/drivetrain.py)
+        d('lowlevel', [''])             # 저수준 (env/lowlevel.py): config/lowlevel.yaml 위에 덮어쓰기 — ['gym'], ['none'], ['steer_delay=0.02', ...]
+        d('drive_mass', 0.3)            # wheel_model vesc 의 구동계 등가 질량 kg (★ 추정)
+        d('vesc_xml', '')               # 비우면 docs/vesc/vesc6_f1tenth_1124.xml (11-24 최신)
         d('start_s', 0.0)
         d('autostart_delay', 2.0)
         d('on_wall', 'warn')
@@ -91,13 +96,23 @@ class SimNode(Node):
         self.track = Track(path)
         self.dt = 1.0 / float(gp('rate'))
         self.vesc = Vesc.load(gp('vesc_yaml') or VESC_PATH)
+        wheel = str(gp('wheel_model'))
+        drivetrain = None
+        if wheel == 'vesc':
+            from mlcs_mpc.env.drivetrain import Drivetrain, FocConfig, VESC_XML
+            drivetrain = Drivetrain(self.vesc, cfg=FocConfig.from_xml(gp('vesc_xml') or VESC_XML),
+                                    m_eq=float(gp('drive_mass')))
+            self.get_logger().info(f'바퀴 모델 vesc — {drivetrain.cfg.source}, 구동계 질량 {drivetrain.m_eq} kg')
         self.sim = Simulator(
             model, self.track, dt=self.dt, integrator=str(gp('integrator')),
             steer_map_cmd=cfg.get('steer_map_cmd', (0.0, 0.2, 0.3, 0.4)),
             steer_map_act=cfg.get('steer_map_act', (0.0, 0.2021, 0.2972, 0.3776)),
             ws_acc=over.get('ws_acc_max', float(cfg.get('ws_acc_max', 0.0))),
             ws_dec=over.get('ws_dec_max', float(cfg.get('ws_dec_max', 0.0))),
-            half_width=float(gp('car_half_width')), vesc=self.vesc)
+            half_width=float(gp('car_half_width')), vesc=self.vesc, wheel_model=wheel, drivetrain=drivetrain,
+            lowlevel=LowLevelConfig.parse([v for v in gp('lowlevel') if v], base=LowLevelConfig.from_yaml()))
+        if not self.sim.lowlevel.cfg.is_default:
+            self.get_logger().info(f'저수준 제어기 {self.sim.lowlevel.cfg}')
         self.state_every = max(1, round(float(gp('rate')) / float(gp('state_rate'))))
         self.vesc_every = max(1, round(float(gp('rate')) / float(gp('vesc_rate'))))
         self.on_wall = str(gp('on_wall'))
@@ -205,8 +220,10 @@ class SimNode(Node):
         if self.k % self.vesc_every == 0:
             vs = VescStateStamped()
             vs.header.stamp = stamp
-            vs.state.speed = self.vesc.erpm(self.sim.wheel_speed)
+            vs.state.speed = self.vesc.erpm(self.sim.wheel_speed_meas)
             vs.state.voltage_input = 11.4
+            if self.sim.drivetrain is not None:     # 차의 VESC 처럼 모터 전류도 (data_logger 의 motor_current)
+                vs.state.current_motor = float(self.sim.drivetrain.iq)
             self.vesc_pub.publish(vs)
         if self.k % 5 == 0:
             self.valid_pub.publish(Bool(data=True))

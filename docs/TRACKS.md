@@ -27,6 +27,23 @@ track_1~4 의 가장 급한 코너는 조향 **48.3°** 가 필요한데 우리 
 
 ---
 
+## 대회장 트랙 (MAGP 2026, 11-14 ~ 11-15) — `track1*_track`, `track2*_track`
+
+출처·쓴 때·크기는 `docs/competition_tracks/README.md` (원본 `jjujjujjuny/mlcs_mpc` `cf8b4ad`, 11-15 결승 최종).
+트랙 파일은 `env/track/data/<이름>_track/`, Cartographer 맵은 `data/maps/<이름>.{yaml,pgm,pbstream}` (라이다 맵 좌표).
+그림 (전체 맵, HyperMPC 트랙과 축척 비교) 은 `docs/competition_tracks/`.
+
+| 트랙 | 둘레 | 최대 \|κ\| | 벽까지 최소 | 비고 |
+|---|---|---|---|---|
+| **track1c** | 58.48 m | 1.52 | 0.51 m | 11-15 예선 2차 ~ **결승** (최종) |
+| track1b | 58.62 m | 1.68 | 0.45 m | 11-15 오전 |
+| track1a | 59.20 m | 1.61 | 0.43 m | 11-14 연습 |
+| track2a | 54.60 m | 1.88 | 0.43 m | 11-14 연습 |
+| track1 / track2 | 58.59 / 54.40 m | 1.26 / 1.21 | **0.01** / 0.15 m | 11-14 첫 맵 — 노이즈가 많아 다시 만들었다. 쓰지 말 것 |
+
+(`Track(find(이름))` 로 읽은 값, 2026-11-24.) `comp1_track` (11.3 m) 은 이것과 다른 트랙이다.
+라이다로 달리려면 race.yaml 에 `map: "track1c"`, `track: "track1c_track"`.
+
 ## track_5 — 해석적으로 만든 스타디움 (`_generate.py` 있음)
 
 유일하게 생성 스크립트가 남아 있다. 학교 운동장 모양이다:

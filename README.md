@@ -24,6 +24,10 @@ Jetson Orin Nano / Ubuntu 22.04 (Jammy) / ROS 2 Humble 대상.
 | Stanley 컨트롤러 | ✅ 시뮬 검증 — track_5 에서 횡오차 평균 0.3cm (노이즈·지연 포함) |
 | 조이스틱 실동작 | ✅ 젯슨 실차 확인 (2026-09-17) — 수동 주행 성공 |
 | 젯슨 환경 구축 | ✅ 젯슨 실기 확인 — ROS 2 Humble + f1tenth_stack 빌드·구동 |
+| macOS 개발 환경 | ✅ 맥북 (arm64) 확인 (2026-11-20) — acados MPC 폐루프·`./sim.sh` (ROS 2 RoboStack) 랩 완주 (`docs/SETUP_MAC.md`). RViz 창은 미확인 |
+| 벡터화 차 모델 (torch) | ✅ casadi 식과 대조 — 미분식 7e-15, 1 초 적분 4e-16 (`test/test_vec_vehicle.py`) |
+| VESC 저수준 모델 (`wheel_model: vesc`) | ⚠️ 구현·단위 시험만 — 실로그 바퀴 속도 RMSE 0.349 m/s 로 1차 지연 (0.306) 보다 아직 나쁨 (`docs/VEHICLE_DYNAMICS.md`) |
+| RL 정책 (arXiv:2504.02420) | ❌ **실차 미검증** — 시뮬 학습만 (`docs/RL_RACING.md`) |
 | **mocap 실연동** | ❌ **미검증** — 실제 NatNet 스트림으로 테스트 안 됨 |
 | **실차 주행** | ❌ **미검증** |
 | **VESC 캘리브레이션** | ❌ **미측정** — 값이 전부 잠정치 |
@@ -183,37 +187,52 @@ ros2 run mlcs_mpc smooth_path --ros-args -p input:=track1.csv -p output:=track1_
 ```
 mlcs_mpc/
 ├── drive.sh  race.sh  sim.sh  bat.sh  race.yaml   실행 진입점 / 레이스 설정 (실차·시뮬 공통)
-├── src/mlcs_mpc/        ROS 2 패키지 (launch/, config/mpcc.yaml, waypoints/, mlcs_mpc/)
-├── learned/             학습 모델 — MPC 에 스테이지별 동역학 파라미터를 주는 쪽
-│   ├── param_model.py   인터페이스 (기본 = 상수). 학습 모델은 여기에 붙인다
-│   └── hyperpm/         HyperPM: numpy 추론, export_hyper, train/ (학습)
+├── src/mlcs_mpc/        ROS 2 패키지
+│   ├── main.py  main_sim.py   ROS 없는 튜닝 루프 (MPC + ODE 시뮬, main_sim 은 실시간 + RViz)
+│   ├── config/          mpcc.yaml (★ MPC·차 모델 값), lowlevel.yaml (시뮬 차의 저수준), mocap·safety·vehicle …
+│   ├── launch/  waypoints/
+│   └── mlcs_mpc/        파이썬 패키지 (아래)
+├── learned/             학습
+│   ├── hyperpm/         HyperPM: numpy 추론, export_hyper, train/ (학습)
+│   └── rl/              PPO 레이싱 정책 (arXiv:2504.02420) — train, evaluate, eval_vec (DR 강건성), compare,
+│                        render (영상), experiments/ (실험 묶음 스크립트)
 ├── tools/
-│   ├── track/           트랙 만들기 — draw_track, track_from_map, track_from_lap,
+│   ├── track/           트랙 만들기 — draw_track, track_from_map, track_from_lap, track_from_paper_2504_02420,
 │   │                    prep_track, make_s_track, preview_track, map_mocap_align
 │   ├── analysis/        주행 로그 분석·학습 데이터 — race_report, race_to_mocap_log,
 │   │                    clean_drive_log, prep_hpm_dataset, actuator_id, check_kinematic_fit
 │   └── hw/              차 점검 — check_state, servo_sweep
 ├── test/                시험 전부 (python3 test/<이름>.py)
 ├── data/
-│   ├── tracks/          트랙 (<이름>/prep_<이름>.csv)
-│   ├── maps/            Cartographer 맵 (.pbstream/.pgm/.yaml, .mocap.yaml)
+│   ├── maps/            Cartographer 맵 (.pbstream/.pgm/.yaml, .mocap.yaml) — 연구실 1108_*, 대회장 track1*·track2*
 │   ├── runs/            주행 로그 묶음 (tar.gz)
 │   └── lab_map/         실험실 경계 19각형 + 옛 DeepRacer 트랙 도구
-├── docs/                설명서 + notes/ (날짜별 기록)
-└── third_party/         patches/ (서드파티 수정본), vesc_msgs/ (시뮬 PC 용 메시지)
+├── docs/                설명서 (아래 "문서")
+│   ├── REFERENCES.txt   참고 문헌·코드 목록      REQUIREMENTS.txt  요구사항·실차 값·환경
+│   ├── vesc/            VESC 설정 XML (11-24 최신, 11-08 비교용, 앱 설정)
+│   ├── references/      논문 PDF, HyperMPC 저자 정식화 원본, 다른 팀 VESC 튜닝표
+│   ├── competition_tracks/  대회장 트랙 README·그림
+│   └── notes/           날짜별 기록 (옛 경로 그대로 둔다)
+├── third_party/         patches/ (서드파티 수정본), vesc_msgs/ (시뮬 PC 용 메시지)
+└── logs/                (git 제외) sim/, tune/, rl/ — 학습·평가 결과
 ```
 
 ROS 패키지 내부 (`src/mlcs_mpc/mlcs_mpc/`):
 
 ```
-env/     ROS 없는 핵심 — 차·트랙·MPC·시뮬레이터
+env/     ROS 없는 핵심 — 차·트랙·MPC·시뮬레이터·RL 환경
   config.py          MpccConfig — N, dt, 입력·트랙 경계, 비용 가중치 (값은 config/mpcc.yaml)
-  vehicle_model.py   ★ 공통 차 모델 (Pacejka 단일 궤적 + 액추에이터). MPC 와 시뮬이 같은 식
-  track.py           닫힌 트랙 — Frenet, 지점별 벽, κ(s) 격자 (OCP 가 생성 코드에 넣는다)
-  simulator.py       ODE 시뮬레이터 — step() 이 vehicle_model 을 적분
+  vehicle_model.py   ★ 공통 차 모델 (Pacejka 단일 궤적 + 액추에이터 1차 지연). MPC·시뮬·RL 이 같은 식
+  vesc.py            차의 vesc.yaml (erpm gain·상한, 서보 gain·offset·한계)
+  lowlevel.py        시뮬 차의 저수준 제어기 — 명령 지연, 조향 lag|gym + 각속도 한계, 속도 lag|gym + 가속 한계
+  drivetrain.py      VESC 펌웨어 경로 (정지 제동 패치 → 속도 PID 1 kHz → 전류 제한·개루프 출발 → 바퀴 힘)
+  simulator.py       ODE 시뮬레이터 — /drive → VESC·서보 맵 → 저수준 → vehicle_model 을 RK4 1 ms 로
+  racing.py          main.py / main_sim.py 공통 설정 (MPC + 시뮬, ROS 경로와 같은 계산)
+  track/             닫힌 트랙 (Frenet, 지점별 벽, κ(s)) + data/<이름>/ 트랙 파일
+  mpc/               MPCC — acados_ocp, acados_solver, bounds, core, mpcc, param_model, worker, offline (README.md)
+  vec/               배치 torch 판 — vehicle (== vehicle_model), drivetrain (== drivetrain.py), track, race_env (RL 환경)
   opponent.py        상대 차 예측 → 스테이지별 통로 (추월/뒤따르기)
   path_manager.py    웨이포인트 → 참조 궤적 (옛 컨트롤러·시각화)
-  mpc/               MPCC — acados_ocp, acados_solver, bounds, core, worker, offline (README.md)
   legacy/            옛 iLQR 의 운동학 모델·솔버
 control/ 컨트롤러 노드
   mpcc_node.py       ★ MPCC 컨트롤러 (풀이는 env/mpc/worker.py 프로세스)
@@ -229,8 +248,9 @@ ui/      사람 입력·화면
   joystick_teleop.py 로지텍 F710 수동 조종 (+ /joy 워치독)
   rally_limits.py    랠리 모드 십자키 조종 상한 (원선회용)
   track_viz.py       트랙·차량·궤적 RViz 시각화
-utils/   안전·캘리브레이션·기록
+utils/   안전·캘리브레이션·기록·실행 환경
   safety_node.py     경계 감시 / 비상 정지
+  runenv.py          acados·ROS 2 환경 잡기 (ensure_acados / ensure_ros2), 플랫폼별 라이브러리 변수
   track_info.py      트랙 기하 + 안전 여유 점검
   calibrate.py       mocap 으로 VESC 값 측정
   mocap_calibrate.py 마커 지그 → 뒤축 중심 오프셋 측정
@@ -238,6 +258,7 @@ utils/   안전·캘리브레이션·기록
   waypoint_logger.py 주행 경로 기록
   smooth_path.py     경로 평활화
   import_track.py    DeepRacer 트랙 → 웨이포인트 (+주행가능성 검사)
+  sim_report.py  sim_rviz.py  sim_viz.py   시뮬 결과 요약·시각화
 ```
 
 노드 이름(`ros2 run mlcs_mpc <노드>`)은 폴더와 상관없이 `setup.py` 의 entry point 가 잇는다.
@@ -295,11 +316,14 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 
 ## 참고한 것
 
+전체 목록 (논문·코드·어디에 썼나) 은 [docs/REFERENCES.txt](docs/REFERENCES.txt).
+
+- [HyperMPC](https://github.com/hyper-mpc/hypermpc_code) (arXiv:2508.06181) — 최종 목표, OCP 정식화의 출발점
+- arXiv:2504.02420 (IROS 2025) — RL 레이싱 환경 (`learned/rl`, `env/vec`)
 - [f1tenth_system](https://github.com/f1tenth/f1tenth_system) — VESC/센서 배관
-- [f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros) — 시뮬레이터
+- [f1tenth_gym](https://github.com/f1tenth/f1tenth_gym) / [f1tenth_gym_ros](https://github.com/f1tenth/f1tenth_gym_ros) — 시뮬레이터 (저수준 구조 비교)
 - `26-jetson-f1tenth-car1-car2merge` — 같은 연구실 pure-pursuit 스택.
   캘리브레이션 실패 사례, DDS 함정, 안전장치 설계가 이 저장소 곳곳에 반영돼 있다.
-- [HyperMPC](https://github.com/hyper-mpc/hypermpc_code) — 최종 목표
 
 ---
 
@@ -311,6 +335,12 @@ ros2 topic echo /mpc/solve_time      # 50ms(20Hz) 안에 들어와야 한다
 - [data/lab_map/](data/lab_map/) — 실험실 경계(19각형) + 옛 트랙 생성 도구 (메인 PC 에서 가져옴)
 - [docs/TRACKS.md](docs/TRACKS.md) — 트랙 출처와 **주행 가능성** (★ 주행 전 확인)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — HyperMPC 까지 가는 길 (논문 분석 포함)
+- [docs/REQUIREMENTS.txt](docs/REQUIREMENTS.txt) — 요구사항·실차 파라미터 반영 현황·소프트웨어 환경
+- [docs/REFERENCES.txt](docs/REFERENCES.txt) — 참고 문헌·코드
+- [docs/VEHICLE_DYNAMICS.md](docs/VEHICLE_DYNAMICS.md) — 차 모델·저수준 (VESC, f1tenth_gym 비교, 실측)
+- [docs/RL_RACING.md](docs/RL_RACING.md) — 강화학습 (VESC 저수준, 도메인 랜덤화, 결과)
+- [docs/SETUP_MAC.md](docs/SETUP_MAC.md) — 맥북 환경
+- [docs/competition_tracks/](docs/competition_tracks/) — 대회장 트랙 (MAGP 2026)
 
 > ★ **데이터는 지금부터 모으세요.** HyperPM 학습에 36분이 필요한데
 > (논문 기준), 나중에 몰아서 모으기 어렵습니다. 차를 몰 때마다

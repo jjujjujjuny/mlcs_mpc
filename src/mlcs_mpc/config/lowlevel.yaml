@@ -1,0 +1,21 @@
+# ═══════════════════════════════════════════════════════════════════
+#  시뮬레이터 차의 저수준 제어기 (env/lowlevel.py) — ODE 시뮬레이터만 쓴다 (MPC 모델은 config/mpcc.yaml).
+#  /drive 목표 → 명령 지연 → 저수준 (조향 각속도·바퀴 가속도) → 차 동역학 RK4 1 ms.
+#  main.py / main_sim.py / sim_node 가 기본으로 읽고, --lowlevel KEY=VALUE (none = 예전 식) 로 덮어쓴다.
+#  wheel_model vesc 이면 속도 법칙 (speed_model, kp_*, acc_max, dec_max, v_switch) 대신 VESC 펌웨어 모델을 쓴다.
+# ═══════════════════════════════════════════════════════════════════
+lowlevel:
+  # ── 조향 (서보) ──────────────────────────────────────────────────
+  steer_model: lag      # lag = 1차 지연 (τ = mpcc.yaml steering_tau 0.13) | gym = f1tenth_gym 뱅뱅
+  steer_rate: 0.0       # rad/s 서보 최대 각속도 (0 = 없음). 실차 미측정
+  steer_delay: 0.0      # s 조향 명령 지연. 실차 미측정 (MPC 풀이 지연은 main.py --delay / ROS 에서 실제로)
+
+  # ── 속도 (lag 바퀴) ──────────────────────────────────────────────
+  speed_model: lag      # lag = 1차 지연 (τ = wheel_speed_tau 0.4, 실측 0.40~0.45) | gym = P 제어
+  acc_max: 5.23         # m/s² VESC 가속 램프 s_pid_ramp_erpms_s 25000 / erpm gain 4781.5 (MPC 모델에는 없다)
+  dec_max: 0.0          # m/s² 0 이면 mpcc.yaml ws_dec_max (실측 2.5) 를 쓴다
+  v_switch: 0.0
+  speed_delay: 0.0      # s
+
+  # ── 속도 환산 ────────────────────────────────────────────────────
+  speed_scale: 1.044    # 실제 속도 / erpm 환산 속도 (실차 실측 — 환산보다 4.4 % 빠르다)

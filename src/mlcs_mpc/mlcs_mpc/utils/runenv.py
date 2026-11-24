@@ -9,16 +9,21 @@ import os
 import shlex
 import sys
 
+# 공유 라이브러리 경로 변수. macOS 는 DYLD_LIBRARY_PATH (acados 의 libacados.dylib 가 @rpath 로 qpOASES 등을 찾는다).
+#   ★ macOS 시스템 python (/usr/bin/python3) 은 SIP 때문에 DYLD_* 가 지워진다 — conda/venv python 을 쓴다.
+LIB_PATH_VAR = 'DYLD_LIBRARY_PATH' if sys.platform == 'darwin' else 'LD_LIBRARY_PATH'
+
 
 def ensure_acados():
     src = os.environ.get('ACADOS_SOURCE_DIR') or os.path.expanduser('~/acados')
     lib = os.path.join(src, 'lib')
     if not os.path.isdir(lib):
         return      # acados 가 다른 곳에 있으면 ACADOS_SOURCE_DIR 를 주고 돌린다
-    if lib in os.environ.get('LD_LIBRARY_PATH', '').split(':') and os.environ.get('ACADOS_SOURCE_DIR'):
+    var = LIB_PATH_VAR
+    if lib in os.environ.get(var, '').split(':') and os.environ.get('ACADOS_SOURCE_DIR'):
         return
-    env = dict(os.environ, ACADOS_SOURCE_DIR=src,
-               LD_LIBRARY_PATH=':'.join(p for p in (os.environ.get('LD_LIBRARY_PATH', ''), lib) if p))
+    env = dict(os.environ, ACADOS_SOURCE_DIR=src)
+    env[var] = ':'.join(p for p in (os.environ.get(var, ''), lib) if p)
     os.execve(sys.executable, [sys.executable] + sys.argv, env)
 
 

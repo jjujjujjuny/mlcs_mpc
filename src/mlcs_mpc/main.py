@@ -48,6 +48,14 @@ def add_args(ap):
                     help=f'차만 다른 값 ({", ".join(CAR_KEYS)}, ws_acc_max, ws_dec_max) — MPC 는 그대로')
     ap.add_argument('--start-s', type=float, default=0.0)
     ap.add_argument('--vesc', default='', help='vesc.yaml (기본 젯슨 경로, 없으면 패치 값)')
+    ap.add_argument('--wheel', choices=('lag', 'vesc'), default='lag',
+                    help='차의 바퀴 모델: lag = 1차 지연 (wheel_speed_tau), vesc = VESC 속도 PID·모터 전류 (env/drivetrain.py)')
+    ap.add_argument('--lowlevel', nargs='*', metavar='KEY=VALUE',
+                    help='시뮬레이터 차의 저수준 (env/lowlevel.py) — config/lowlevel.yaml 위에 덮어쓴다: none (예전 식), '
+                         'gym (f1tenth_gym 프리셋), steer_model=lag|gym steer_rate= steer_delay= speed_model=lag|gym '
+                         'kp_acc= kp_dec= acc_max= dec_max= v_switch= speed_delay= speed_scale=')
+    ap.add_argument('--drive-mass', type=float, default=None,
+                    help='--wheel vesc 의 구동계 등가 질량 kg (모터·바퀴 관성, 추정 0.3)')
     ap.add_argument('--build-dir', default=os.path.expanduser('~/mpcc_build'))
 
 

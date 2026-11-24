@@ -8,10 +8,18 @@ simulator — 차 없이 컨트롤러를 시험하는 ODE 시뮬레이터 (ROS �
 ■ 차 모델은 MPC 와 같은 VehicleModel.cartesian() 이다 (env/vehicle_model.py). step() 은 그 ODE 를
   dt 만큼 푼다 — 기본은 고정 간격 RK4 (substep), integrator 로 scipy solve_ivp 방법 (RK45, LSODA ...) 도 된다.
 
-  명령 → 액추에이터 입력은 차와 같다:
-    VESC  vesc (env/vesc.py — 차의 vesc.yaml 튜닝값) 가 있으면 속도는 ERPM 상한, 조향은 서보 한계로 자른다
-    조향  서보 명령 → 실제 조향 (steer_map, mpc/core.command_to_steer) → 1차 지연 (steering_tau)
-    바퀴  속도 명령 → 1차 지연 (wheel_speed_tau, 실측), ws_acc / ws_dec 가 있으면 가속도를 묶는다
+  명령은 항상 저수준 제어기를 거쳐 적분된다 (f1tenth_gym 과 같은 구조 — 상위 → 저수준 → 동역학):
+    /drive (서보 명령, 속도 m/s)
+    → VESC  vesc (env/vesc.py — 차의 vesc.yaml 튜닝값) 가 있으면 속도는 ERPM 상한, 조향은 서보 한계로 자른다
+    → 서보 맵  서보 명령 → 실제 조향 목표 δ_ref (steer_map, mpc/core.command_to_steer)
+    → 저수준  env/lowlevel.py (lowlevel=LowLevelConfig) — 명령 지연 → 조향 각속도 δ̇ (lag: 1차 지연 | gym: 뱅뱅,
+              각속도 한계), 바퀴 가속도 ω̇ (lag: 1차 지연 | gym: P 제어, 가속·감속 한계). substep·RK4 단계마다
+    → 동역학  공용 VehicleModel.cartesian() 을 RK4 1 ms 로 적분
+    바퀴  wheel_model='lag' (기본): 위 저수준의 속도 법칙 (기본 = 1차 지연 wheel_speed_tau, ws_acc / ws_dec 는 가속 한계)
+          wheel_model='vesc': 실차 경로 그대로 — ackermann_to_vesc (정지 제동 패치) → VESC 펌웨어 속도 PID
+          → 모터 전류 → 바퀴 힘 → m_eq·ws' = F − 타이어 반력 (env/drivetrain.py, docs/VEHICLE_DYNAMICS.md).
+          조향·속도 명령 지연은 이때도 저수준 설정을 따른다
+    기본 LowLevelConfig() 는 예전 시뮬레이터와 같은 식이다 (서보·바퀴 1차 지연, 지연 없음).
 
   model 과 다른 차를 쓰고 싶으면 (모델 불일치 시험) model.copy(wheel_speed_tau=0.66) 처럼 넘긴다.
 
@@ -24,6 +32,7 @@ import math
 
 import numpy as np
 
+from mlcs_mpc.env.lowlevel import LowLevel, LowLevelConfig
 from mlcs_mpc.env.mpc.core import command_to_steer
 
 
@@ -31,18 +40,39 @@ class Simulator:
 
     def __init__(self, model, track=None, dt=0.01, substep=0.001, integrator='rk4',
                  steer_map_cmd=(0.0, 0.2, 0.3, 0.4), steer_map_act=(0.0, 0.2021, 0.2972, 0.3776),
-                 max_steer=None, ws_acc=0.0, ws_dec=0.0, v_lo=0.2, v_hi=0.4, half_width=0.135, vesc=None):
+                 max_steer=None, ws_acc=0.0, ws_dec=0.0, v_lo=0.2, v_hi=0.4, half_width=0.135, vesc=None,
+                 wheel_model='lag', drivetrain=None, lowlevel=None):
         self.model, self.track = model, track
         self.dt, self.substep, self.integrator = dt, substep, integrator
         self.map_cmd, self.map_act, self.max_steer = list(steer_map_cmd), list(steer_map_act), max_steer
-        self.ws_acc = ws_acc if ws_acc > 0 else math.inf
-        self.ws_dec = ws_dec if ws_dec > 0 else math.inf
+        # 저수준. ws_acc / ws_dec (mpcc.yaml ws_acc_max·ws_dec_max) 는 설정에 한계가 없을 때 바퀴 가속 한계로
+        ll = lowlevel if lowlevel is not None else LowLevelConfig()
+        over = {}
+        if ws_acc > 0 and ll.acc_max == 0:
+            over['acc_max'] = ws_acc
+        if ws_dec > 0 and ll.dec_max == 0:
+            over['dec_max'] = ws_dec
+        self.lowlevel = LowLevel(ll.replace(**over), model.steering_tau, model.wheel_speed_tau)
         self.half_width = half_width
         self.vesc = vesc            # env/vesc.Vesc — None 이면 자르지 않는다
         self.f = model.function('cartesian', v_lo=v_lo, v_hi=v_hi)
         self.p = np.asarray(model.p, dtype=float)
+        self.wheel_model = wheel_model
+        self.drivetrain = None
+        if wheel_model == 'vesc':
+            from mlcs_mpc.env.drivetrain import Drivetrain, reaction_function
+            if vesc is None:
+                from mlcs_mpc.env.vesc import Vesc
+                self.vesc = vesc = Vesc()
+            if integrator != 'rk4':
+                raise ValueError("wheel_model='vesc' 는 integrator='rk4' 만 된다")
+            self.drivetrain = drivetrain or Drivetrain(vesc)
+            self.f_reaction = reaction_function(model, v_lo, v_hi)
+        elif wheel_model != 'lag':
+            raise ValueError(f'wheel_model: lag | vesc ({wheel_model!r})')
         self.x = np.zeros(8)
         self.t = 0.0
+        self._vesc_n = 0
         self.on_wall, self.wall_hits = False, 0
         self.lap_t0, self.lap_s0, self.laps = None, None, []
 
@@ -53,6 +83,10 @@ class Simulator:
         self.x = np.array([x + lr * math.cos(yaw), y + lr * math.sin(yaw), yaw, 0, 0, 0, 0, 0], dtype=float)
         if self.track is not None:
             self.track.reset()
+        if self.drivetrain is not None:
+            self.drivetrain.reset()
+        self.lowlevel.reset()
+        self._vesc_n = 0
         self.on_wall, self.lap_t0, self.lap_s0 = False, None, None
 
     def track_pose(self, s):
@@ -80,38 +114,72 @@ class Simulator:
         return float(self.x[6])
 
     @property
+    def wheel_speed_meas(self):
+        """/sensors/core 로 재는 바퀴 속도 (erpm 을 명목 gain 으로 되돌린 값 = 실제 / speed_scale)."""
+        return float(self.x[6]) / self.lowlevel.cfg.speed_scale
+
+    @property
     def steer(self):
         return float(self.x[7])
 
     # ── 적분 ───────────────────────────────────────────────────────────
-    def _rhs(self, x, ws_ref, delta_ref):
-        # 바퀴 가속도 한계: ws' = clip((ref − ws)/tau) 가 되도록 입력을 바꾼다 (mpc/offline.make_plant 와 같다)
-        if self.ws_acc < math.inf or self.ws_dec < math.inf:
-            tau = self.model.wheel_speed_tau
-            rate = min(max((ws_ref - x[6]) / tau, -self.ws_dec), self.ws_acc)
-            ws_ref = x[6] + rate * tau
-        return np.array(self.f(x, [ws_ref, delta_ref], self.p)).ravel()
+    def _rhs(self, x, d_cmd, w_cmd, drive=True):
+        """저수준 (상태 → δ̇·ω̇ → 모델 입력) + 공용 모델."""
+        return np.array(self.f(x, self.lowlevel.model_input(x, d_cmd, w_cmd, drive), self.p)).ravel()
+
+    def _rk4(self, x, h, d_cmd, w_cmd, drive=True):
+        k1 = self._rhs(x, d_cmd, w_cmd, drive)
+        k2 = self._rhs(x + 0.5 * h * k1, d_cmd, w_cmd, drive)
+        k3 = self._rhs(x + 0.5 * h * k2, d_cmd, w_cmd, drive)
+        k4 = self._rhs(x + h * k3, d_cmd, w_cmd, drive)
+        return x + h / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
 
     def step(self, steer_cmd, speed_cmd, dt=None):
         """/drive 명령으로 dt 만큼. 반환: 상태 요약 dict (트랙이 있으면 s, n, 벽, 랩)."""
         dt = self.dt if dt is None else dt
+        if self.drivetrain is not None:
+            return self._step_vesc(steer_cmd, speed_cmd, dt)
         if self.vesc is not None:   # 차의 vesc_driver 가 하는 것처럼
             steer_cmd, speed_cmd = self.vesc.steer(steer_cmd), self.vesc.speed(speed_cmd)
         d_ref = command_to_steer(steer_cmd, self.map_cmd, self.map_act, self.max_steer)
+        ll = self.lowlevel
+        ll.command(self.t, d_ref, speed_cmd)
         if self.integrator == 'rk4':
             n = max(1, int(math.ceil(dt / self.substep - 1e-9)))
             h = dt / n
             x = self.x
-            for _ in range(n):
-                k1 = self._rhs(x, speed_cmd, d_ref)
-                k2 = self._rhs(x + 0.5 * h * k1, speed_cmd, d_ref)
-                k3 = self._rhs(x + 0.5 * h * k2, speed_cmd, d_ref)
-                k4 = self._rhs(x + h * k3, speed_cmd, d_ref)
-                x = x + h / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
-        else:
+            for i in range(n):
+                d_cmd, w_cmd = ll.targets(self.t + i * h)
+                x = self._rk4(x, h, d_cmd, w_cmd)
+        else:                       # scipy — 지연은 step 해상도 (step 시작 때의 목표를 dt 동안)
             from scipy.integrate import solve_ivp
-            x = solve_ivp(lambda _t, xx: self._rhs(xx, speed_cmd, d_ref), (0.0, dt), self.x,
+            d_cmd, w_cmd = ll.targets(self.t)
+            x = solve_ivp(lambda _t, xx: self._rhs(xx, d_cmd, w_cmd), (0.0, dt), self.x,
                           method=self.integrator, max_step=self.substep * 10).y[:, -1]
+        x[2] = (x[2] + math.pi) % (2 * math.pi) - math.pi
+        self.x = x
+        self.t += dt
+        return self._info()
+
+    def _step_vesc(self, steer_cmd, speed_cmd, dt):
+        """wheel_model='vesc'. substep 마다: PID·전류 → 바퀴 힘 → ws (선형화 후진 오일러, 타이어 반력이 딱딱해서)
+        → ws 를 고정하고 나머지 상태 RK4. 속도 명령은 ackermann_to_vesc 가 erpm 으로 자른다 (vesc.speed 안 씀)."""
+        steer_cmd = self.vesc.steer(steer_cmd)
+        d_ref = command_to_steer(steer_cmd, self.map_cmd, self.map_act, self.max_steer)
+        dtr, ll = self.drivetrain, self.lowlevel
+        ll.command(self.t, d_ref, speed_cmd)
+        n = max(1, int(math.ceil(dt / self.substep - 1e-9)))
+        h = dt / n
+        x = self.x.copy()
+        for i in range(n):
+            d_cmd, w_cmd = ll.targets(self.t + i * h)
+            if ll.w_buf.n != self._vesc_n:          # 명령 하나 = /drive 메시지 하나 (지연을 거쳐 들어온 때 한 번)
+                dtr.command(w_cmd, x[6])
+                self._vesc_n = ll.w_buf.n
+            F = dtr.force(h, x[6])
+            R, dR = (float(v) for v in self.f_reaction(x, self.p))
+            x[6] += h * (F - R) / (dtr.m_eq + h * max(dR, 0.0))
+            x = self._rk4(x, h, d_cmd, w_cmd, drive=False)   # ω_ref = ω → ω̇ = 0 (RK4 동안 ω 고정)
         x[2] = (x[2] + math.pi) % (2 * math.pi) - math.pi
         self.x = x
         self.t += dt

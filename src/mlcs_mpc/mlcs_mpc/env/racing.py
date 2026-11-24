@@ -15,6 +15,7 @@ import numpy as np
 from mlcs_mpc.env.config import read_params
 from mlcs_mpc.env.mpc.core import command_to_steer
 from mlcs_mpc.env.mpc.mpcc import MpccController
+from mlcs_mpc.env.lowlevel import LowLevelConfig
 from mlcs_mpc.env.simulator import Simulator
 from mlcs_mpc.env.track import Track, find
 from mlcs_mpc.env.vehicle_model import VehicleModel
@@ -78,11 +79,19 @@ def setup(args, extra=None, car_extra=None, quiet=False):
     car_over.update(car_extra or {})
     car_model = mpc_model.copy(**{k: float(v) for k, v in car_over.items() if k in CAR_KEYS})
     vesc = Vesc.load(args.vesc) if args.vesc else Vesc.load()
+    wheel = getattr(args, 'wheel', 'lag') or 'lag'
+    drivetrain = None
+    if wheel == 'vesc':
+        from mlcs_mpc.env.drivetrain import Drivetrain
+        m_eq = getattr(args, 'drive_mass', None)
+        drivetrain = Drivetrain(vesc, m_eq=m_eq if m_eq else Drivetrain.M_EQ_DEFAULT)
     ctrl = MpccController(mpc_model, track, params, args.build_dir, log=(lambda m: None) if quiet else print)
     sim = Simulator(car_model, Track(track_csv), dt=0.01,
                     steer_map_cmd=params['steer_map_cmd'], steer_map_act=params['steer_map_act'],
                     ws_acc=float(car_over.get('ws_acc_max', params['ws_acc_max'])),
-                    ws_dec=float(car_over.get('ws_dec_max', params['ws_dec_max'])), vesc=vesc)
+                    ws_dec=float(car_over.get('ws_dec_max', params['ws_dec_max'])), vesc=vesc,
+                    wheel_model=wheel, drivetrain=drivetrain,
+                    lowlevel=LowLevelConfig.parse(getattr(args, 'lowlevel', None), base=LowLevelConfig.from_yaml()))
     sim.reset_to_s(args.start_s)
     if quiet:
         return params, track, ctrl, sim
@@ -96,6 +105,13 @@ def setup(args, extra=None, car_extra=None, quiet=False):
     if car_over:
         print(f'  ★ 차만 다른 값 {car_over}')
     print(f'■ VESC {vesc.source}  모터 상한 {vesc.v_motor:.2f} m/s')
+    if drivetrain is not None:
+        c = drivetrain.cfg
+        print(f'■ 바퀴 모델 vesc — 속도 PID kp {c.s_pid_kp} ki {c.s_pid_ki} kd {c.s_pid_kd} {c.pid_rate:.0f} Hz, '
+              f'램프 {c.s_pid_ramp_erpms_s:.0f} erpm/s, 전류 {c.l_current_min:.0f}~{c.l_current_max:.0f} A '
+              f'(입력 {c.l_in_current_min:.0f}~{c.l_in_current_max:.0f}), 구동계 질량 {drivetrain.m_eq} kg ({c.source})')
+    else:
+        print(f'■ 바퀴 모델 lag — 1차 지연 tau {car_model.wheel_speed_tau}')
     return params, track, ctrl, sim
 
 
@@ -106,7 +122,7 @@ def control_tick(ctrl, sim):
                 cmd=(속도, 서보 조향 명령) — /drive, applied=(속도, 실제 조향 ref) — VESC·조향 맵을 지난 뒤 차가 받는 값,
                 x=지금 실제 OCP 상태 (바퀴·조향은 시뮬 실제값), x1=MPC 가 예측한 다음 주기 상태)
     """
-    speed, steer, r = ctrl.step(sim.pose(), sim.twist(), sim.wheel_speed, sim.t)
+    speed, steer, r = ctrl.step(sim.pose(), sim.twist(), sim.wheel_speed_meas, sim.t)
     x = np.array(r['x'], dtype=float)
     x[3], x[4] = sim.x[3], sim.x[4]               # v_floor 로 올리기 전의 실제 vx, 무게중심 vy
     x[7], x[8] = sim.wheel_speed, sim.steer       # 노드는 조향을 못 재서 예측값을 쓴다 — 여기서는 실제값

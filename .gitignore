@@ -15,3 +15,11 @@ logs/
 .vscode/
 .idea/
 *.swp
+
+# 맥·오피스 찌꺼기
+.DS_Store
+~$*
+
+# 큰 데이터 묶음 (git 밖에서 따로 보관)
+data/runs/*.tar.gz
+learned/hyperpm/train/data/*.tar.gz

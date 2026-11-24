@@ -74,7 +74,7 @@ def main():
     ap.add_argument('--no-guard', action='store_true', help='시험 전용. 슬립 0 에서 solve 가 멈춘다')
     a = ap.parse_args()
     c = json.loads(a.config)
-    if c.get('solver_core', -1) >= 0:
+    if c.get('solver_core', -1) >= 0 and hasattr(os, 'sched_setaffinity'):   # 리눅스만 (macOS 에는 없다)
         os.sched_setaffinity(0, {c['solver_core']})
 
     cfg = MpccConfig.from_params(c)

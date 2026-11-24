@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# B 가 끝나길 기다렸다가 C, D (40M, 에포크 3·배치 65536), E (B 에서 이어 30M) — 2 시간 → 약 45 분으로 줄인 판
+cd "$(dirname "$0")/../../.."
+P=/opt/homebrew/Caskroom/miniforge/base/envs/mlcs_ros/bin/python
+while pgrep -f "out logs/rl/exp/B_vesc_cur" >/dev/null; do sleep 10; done
+tail -1 logs/rl/exp/B_vesc_cur.log
+run () { name=$1; shift; echo "=== $name $(date +%T)"; $P -u learned/rl/train.py --profile fast --epochs 3 --batch-size 65536 "$@" --out logs/rl/exp/$name > logs/rl/exp/$name.log 2>&1; tail -2 logs/rl/exp/$name.log; }
+run C_none_cur   --total-steps 40e6 --actuator none --dr full --curriculum adaptive
+run E_vesc_fromA --total-steps 120e6 --actuator vesc --dr full --curriculum none --dr-level 0.5 --start-spread 1 --dr-drop 0.03 --num-envs 65536 --n-steps 32 --init logs/rl/exp/A_lag_cur/best.pt --lr-start 3e-4 --det-eval-every 10 --sim-check
+run D_lag_fixed  --total-steps 40e6 --actuator lag  --dr full --curriculum none --det-eval-every 10 --sim-check
+echo ALLDONE

@@ -1,0 +1,87 @@
+mlcs_mpc — 참고 문헌·코드 정리 (2026-11-24)
+================================================================
+이 저장소의 문서·코드에서 근거로 쓴 것만 모았다. 어디에 쓰였는지는 [사용처] 에 적었다.
+로컬 사본은 docs/references/ 에 있다.
+
+
+1. 이 프로젝트의 기준 논문
+----------------------------------------------------------------
+[HyperMPC]  arXiv:2508.06181  https://arxiv.org/abs/2508.06181
+    코드: https://github.com/hyper-mpc/hypermpc_code
+    로컬: docs/references/mpc_formulation_car.py (저자 OCP 정식화 원본 — 우리 OCP 의 출발점)
+    [사용처] env/mpc/acados_ocp.py, acados_solver.py, env/vehicle_model.py (Pacejka 단일 궤적 식),
+             learned/hyperpm/ (HyperPM), docs/ROADMAP.md, test/test_vehicle_model.py (원본 식 대조)
+
+[RL 레이싱]  G. Czechmanowski, J. Węgrzynowski, P. Kicki, K. Walas,
+    "On learning racing policies with reinforcement learning", IROS 2025.  arXiv:2504.02420
+    로컬: docs/references/2504.02420v2.pdf
+    [사용처] env/vec/race_env.py (관측·행동·보상·DR), learned/rl/ (PPO 하이퍼파라미터),
+             rl17_track (논문 Fig. 6 에서 디지타이즈 — tools/track/track_from_paper_2504_02420.py),
+             docs/RL_RACING.md
+
+
+2. 도메인 랜덤화·심투리얼 (docs/RL_RACING.md "관련 연구" 표)
+----------------------------------------------------------------
+[ADR]        OpenAI et al., "Solving Rubik's Cube with a Robot Hand", 2019.  arXiv:1910.07113
+             — 성능 임계로 분포를 넓히는 자동 커리큘럼 → --curriculum adaptive 의 착안
+[DORAEMON]   Tiboni et al., "Domain Randomization via Entropy Maximization", 2023.  arXiv:2311.01885
+[Peng 2018]  Peng et al., "Sim-to-Real Transfer of Robotic Control with Dynamics Randomization".  arXiv:1710.06537
+             — 지연·관측 노이즈·마찰 랜덤화 ablation → DR_FULL 의 지연·센서 노이즈 항목
+[Xie 2020]   Xie et al., "Dynamics Randomization Revisited: A Case Study for Quadrupedal Locomotion".  arXiv:2011.02404
+             — 질량·관성 랜덤화는 이득 작고 보수적 → 차·타이어 σ 를 작게 (0.02)
+[Hwangbo 2019] Hwangbo et al., "Learning agile and dynamic motor skills for legged robots".  arXiv:1901.08652
+             — 액추에이터 모델의 필요성 → actuator='vesc'
+[Rudin 2021] Rudin et al., "Learning to Walk in Minutes Using Massively Parallel Deep RL".  arXiv:2109.11978
+             — 대량 병렬 (--profile fast), 레벨 되돌림 (무랜덤 비율 25 %)
+[Chisari 2021] Chisari et al., "Learning from Simulation, Racing in Reality".  arXiv:2011.13332
+[RLPP]       arXiv:2501.17311 — F1TENTH sim→real 랩 갭 (순수 RL vs 잔차 RL)
+[Tan 2018]   "Sim-to-Real: Learning Agile Locomotion For Quadruped Robots" — 모터 강도 ±20 %, 지연 0~40 ms
+[Werner 2023] 서보 캘리브레이션 오차 ±0.03 rad (조향 오프셋 DR 크기의 근거, RL_RACING.md 표)
+
+
+3. 차량 동역학·시뮬레이터
+----------------------------------------------------------------
+[f1tenth_gym]     https://github.com/f1tenth/f1tenth_gym (main) — dynamic_models.py (pid(), accl_constraints,
+                  vehicle_dynamics_st), base_classes.py (조향 버퍼 2 스텝), f110_env.py (기본값)
+                  [사용처] env/lowlevel.py (--lowlevel gym 프리셋), docs/VEHICLE_DYNAMICS.md §3 비교
+[f1tenth_gym_ros] https://github.com/f1tenth/f1tenth_gym_ros — 옛 시뮬 (io/sim_bridge.py)
+[CommonRoad]      Althoff et al., CommonRoad vehicle models — gym 의 단일 궤적 모델 (vehicle_dynamics_st) 출처
+[Pacejka]         H. B. Pacejka, "Tire and Vehicle Dynamics" — Magic Formula 타이어 (합성 슬립)
+[vectorized-vehicle-control] https://github.com/codemoo/vectorized-vehicle-control
+                  — env/vec 의 배치 torch 방식, learned/rl/ppo.py 의 tanh 가우시안 정책
+
+
+4. 저수준 (VESC)
+----------------------------------------------------------------
+[VESC bldc 펌웨어] https://github.com/vedderb/bldc (master) — motor/foc_math.c foc_run_pid_control_speed,
+                  motor/mcpwm_foc.c (전류 제한·제동·센서리스 개루프)  [사용처] env/drivetrain.py, env/vec/drivetrain.py
+[VESC 설정]       docs/vesc/vesc6_f1tenth_1124.xml (11-24 최신), docs/vesc/vesc_app_f1tenth_1124.xml (앱),
+                  docs/vesc/vesc6_upennmy_foc.xml (11-08, 비교용)
+                  docs/references/vesc_tuning_other_team.jpeg (다른 팀 튜닝표 — kp 0.003, ki 0.005, kd 0.0002, 제동 켬)
+[f1tenth_system]  https://github.com/f1tenth/f1tenth_system — VESC 드라이버·ackermann_to_vesc
+                  (third_party/patches/ 에 정지 제동·서보 오프셋 수정)
+
+
+5. MPC·경로
+----------------------------------------------------------------
+[MPCC]       A. Liniger et al., 1:43 RC 카 MPCC — https://github.com/alexliniger/MPCC (Frenet 컨투어링 MPC 원형)
+[acados]     https://github.com/acados/acados (메인 PC v0.5.2, 맥 v0.6.1) + acados_template, casadi
+[Global-Race-Trajectory-Optimization] https://github.com/Technion-F1Tenth/Global-Race-Trajectory-Optimization
+[ryanxxxhuang/F1tenth] https://github.com/ryanxxxhuang/F1tenth
+             (위 둘은 docs/F1TENTH MPC 연구 및 코드 적용 정리.md 의 조사 항목)
+
+
+6. 위치추정·데이터
+----------------------------------------------------------------
+[natnet_ros2] https://github.com/L2S-lab/natnet_ros2 (기준 커밋 f379296, third_party/patches 에 bitstream 수정)
+[F1TENTH-Mocap-Data-Recording-Pipeline] https://github.com/Tinker-Twins/F1TENTH-Mocap-Data-Recording-Pipeline
+[Cartographer] 라이다 위치추정 (대회) — data/maps/*.pbstream
+[강의]       https://www.youtube.com/watch?v=SvAYJC7jug8&list=PLZnJoM76RM6IAJfMXd1PgGNXn3dxhkVgI
+             (docs/F1TENTH MPC 연구 및 코드 적용 정리.md)
+
+
+7. 같은 연구실 자료
+----------------------------------------------------------------
+- 26-jetson-f1tenth-car1-car2merge — pure-pursuit 스택 (캘리브레이션 실패 사례, DDS 함정, 안전장치 설계)
+- jjujjujjuny/mlcs_mpc 커밋 cf8b4ad — 대회장 (MAGP 2026, 11-14~15) 맵·트랙 원본 (docs/competition_tracks/README.md)
+- 대회장 실차 설정 메모 (2026-11-24 전달) — Dx×0.45, 감속 2.5, 마찰 0.52, 속도 환산 +4.4 %, 주기 → docs/REQUIREMENTS.txt §5
