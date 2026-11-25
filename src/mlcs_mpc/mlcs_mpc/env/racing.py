@@ -115,14 +115,17 @@ def setup(args, extra=None, car_extra=None, quiet=False):
     return params, track, ctrl, sim
 
 
-def control_tick(ctrl, sim):
+def control_tick(ctrl, sim, meas=None):
     """한 제어 주기: MPC 풀이 → 명령. 입력이 차까지 어떻게 들어가는지와 실제 상태를 같이 기록한다.
 
     tick = dict(t, status, ms, u=(바퀴 속도 ref, 실제 조향 ref) — MPC 해,
                 cmd=(속도, 서보 조향 명령) — /drive, applied=(속도, 실제 조향 ref) — VESC·조향 맵을 지난 뒤 차가 받는 값,
                 x=지금 실제 OCP 상태 (바퀴·조향은 시뮬 실제값), x1=MPC 가 예측한 다음 주기 상태)
     """
-    speed, steer, r = ctrl.step(sim.pose(), sim.twist(), sim.wheel_speed_meas, sim.t)
+    # meas = (pose, twist, 바퀴 속도, t) — --realtime 에서 추정기 (env/estimation.py) 가 낸 값. 없으면 시뮬 참값
+    if meas is None:
+        meas = (sim.pose(), sim.twist(), sim.wheel_speed_meas, sim.t)
+    speed, steer, r = ctrl.step(*meas)
     x = np.array(r['x'], dtype=float)
     x[3], x[4] = sim.x[3], sim.x[4]               # v_floor 로 올리기 전의 실제 vx, 무게중심 vy
     x[7], x[8] = sim.wheel_speed, sim.steer       # 노드는 조향을 못 재서 예측값을 쓴다 — 여기서는 실제값

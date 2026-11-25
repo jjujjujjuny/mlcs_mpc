@@ -12,7 +12,7 @@ lowlevel — 시뮬레이터의 저수준 제어기 (/drive 목표값 → 조향
   RK4 의 단계마다 다시 계산한다 (저수준 = 상태의 함수, 연속 시간).
 
 ■ 조향 (steer_model)
-    lag   δ̇ = (δ_cmd − δ)/τ_δ                         실차 서보 근사 (기본, 지금까지와 같다)
+    lag   δ̇ = (δ_cmd − δ)/τ_δ                         실차 서보 근사. τ_δ = steer_tau (0 이면 MPC 모델 steering_tau)
     gym   δ̇ = sign(δ_cmd − δ)·steer_rate  (|e| > 1e-4) f1tenth_gym pid() 의 뱅뱅
     + steer_rate > 0 이면 |δ̇| ≤ steer_rate (lag 에도 — 서보 최대 각속도)
 ■ 속도 (speed_model) — wheel_model 'vesc' 이면 쓰지 않는다 (drivetrain.py 가 펌웨어 PID 로)
@@ -42,6 +42,7 @@ class LowLevelConfig:
     steer_model: str = 'lag'        # lag | gym
     steer_rate: float = 0.0         # rad/s 조향 각속도 한계 (gym 이면 뱅뱅 크기, 0 이면 3.2)
     steer_delay: float = 0.0        # s
+    steer_tau: float = 0.0          # s 시뮬 차 서보 1차 시정수 (lag). 0 = MPC 모델 steering_tau 와 같게 (예전)
     speed_model: str = 'lag'        # lag | gym
     kp_acc: float = 4.755           # 1/s (gym: 10·a_max/v_max)
     kp_dec: float = 19.02           # 1/s (gym: 10·a_max/|v_min|)
@@ -107,7 +108,7 @@ class LowLevelConfig:
             raise ValueError(f'steer_model: lag | gym ({self.steer_model!r})')
         if self.speed_model not in ('lag', 'gym'):
             raise ValueError(f'speed_model: lag | gym ({self.speed_model!r})')
-        for k in ('steer_rate', 'steer_delay', 'kp_acc', 'kp_dec', 'acc_max', 'dec_max', 'v_switch', 'speed_delay'):
+        for k in ('steer_rate', 'steer_delay', 'steer_tau', 'kp_acc', 'kp_dec', 'acc_max', 'dec_max', 'v_switch', 'speed_delay'):
             if getattr(self, k) < 0:
                 raise ValueError(f'{k} < 0')
         if self.speed_scale <= 0:
@@ -177,7 +178,7 @@ class LowLevel:
         if c.steer_model == 'gym':
             rate = c.steer_rate or LowLevelConfig.GYM_STEER_RATE
             return math.copysign(rate, e) if abs(e) > 1e-4 else 0.0
-        dd = e / self.tau_d
+        dd = e / (c.steer_tau or self.tau_d)
         if c.steer_rate > 0:
             dd = min(max(dd, -c.steer_rate), c.steer_rate)
         return dd

@@ -228,6 +228,42 @@ def test_command_drop():
         assert 0.2 < frac < 0.6 and (not runs or np.mean(runs) > 1.5)
 
 
+def test_obs_vel():
+    """관측 속도 obs_vel: delay 는 설정만큼, kf 는 실차 mocap_bridge 처럼 vx·r 80~110 ms 늦고 원선회에서 가짜 vy,
+    gyro 는 r 이 자이로 지연만큼·vx 는 바퀴 속도. true 는 지금까지와 같다 (참값)."""
+    from mlcs_mpc.env.vec.race_env import RaceEnvConfig, VecRaceEnv
+    dt = 0.05
+    lag = {}
+    for mode in ('true', 'delay', 'kf', 'gyro'):
+        env = VecRaceEnv(RaceEnvConfig(num_envs=1, dr='none', obs_vel=mode, stuck_time=0), seed=0)
+        env.reset()
+        T, O = [], []
+        for k in range(160):
+            t = k * dt
+            env.step(torch.tensor([[0.6 * math.sin(2 * math.pi * t / 2.0), 0.6 if t < 3 else (-0.6 if t < 5 else 0.4)]]))
+            T.append(env.x[0, 3:6].tolist())
+            O.append(env.vo[0, :3].tolist())
+            assert torch.isfinite(env.vo).all()
+        T, O = np.array(T), np.array(O)
+        ts, ds = np.arange(len(T)) * dt, np.arange(0, 0.2, 0.005)
+        lag[mode] = [ds[int(np.argmin([np.mean((O[40:, j] - np.interp(ts[40:] - d, ts, T[:, j])) ** 2) for d in ds]))]
+                     for j in (0, 2)]
+    print('  ⑨ 관측 지연 (vx, r) ms: ' + ', '.join(f'{m} {a * 1e3:.0f}/{b * 1e3:.0f}' for m, (a, b) in lag.items()))
+    assert lag['true'] == [0.0, 0.0]
+    assert all(0.07 <= v <= 0.09 for v in lag['delay'])
+    assert all(0.075 <= v <= 0.12 for v in lag['kf'])
+    assert lag['gyro'][0] <= 0.01 and 0.015 <= lag['gyro'][1] <= 0.035
+    # 원선회: KF 는 늦은 전역 속도를 지금 yaw 로 돌려 vy 가 안쪽으로 치우친다 (≈ −v·r·지연)
+    env = VecRaceEnv(RaceEnvConfig(num_envs=1, dr='none', obs_vel='kf', stuck_time=0), seed=0)
+    env.reset()
+    for k in range(100):
+        env.step(torch.tensor([[0.4, 0.3 if k < 10 else 0.0]]))
+    x, v = env.x[0], env.vo[0]
+    fake = float(v[1] - x[4])
+    print(f'  ⑨ kf 원선회 vx {float(x[3]):.2f} r {float(x[5]):+.2f}: 가짜 vy {fake:+.3f} (−v·r·0.1 = {-float(x[3] * x[5]) * 0.1:+.3f})')
+    assert fake < -0.5 * float(x[3] * x[5]) * 0.08
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_') and callable(v)]
     n = 0

@@ -12,4 +12,5 @@
 | `run_J.sh` | PC | VESC 11-24 설정: I 재평가 + J (I → DR 1.0) |
 | `run_K.sh` | PC | GPU 4 프로세스 병렬. K_rl17_dr05 (DR 0.5). K_track1c/2a (rl17 정책을 대회 트랙에 이어 학습) 는 실패해 중단 |
 | `run_L.sh` | PC | 대회 트랙 track1c·track2a 처음부터: lag + DR 커리큘럼 60M → VESC + DR 0.5 80M → 평가 |
+| `run_M.sh` | PC (RTX 3080) | 연구실 mocap 트랙 1108_7 처음부터, 서보 τ 0.03·마찰 0.41 (11-25 재생 결과). `run_M.sh <태그> [true|kf|gyro]` = 관측 속도 모델 |
 | `render_final.sh` | PC | 최종 영상 (대회 트랙 2 개, rl17 J vs I) |

@@ -134,16 +134,25 @@ class Simulator:
         k4 = self._rhs(x + h * k3, d_cmd, w_cmd, drive)
         return x + h / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
 
+    def command(self, steer_cmd, speed_cmd):
+        """/drive 메시지 하나가 지금 (self.t) 도착 — 차의 vesc_driver 처럼 자르고 서보 맵을 거쳐 저수준에 넣는다.
+        vesc 바퀴 모델의 속도는 ackermann_to_vesc 가 erpm 으로 자른다 (vesc.speed 안 씀)."""
+        if self.vesc is not None:
+            steer_cmd = self.vesc.steer(steer_cmd)
+            if self.drivetrain is None:
+                speed_cmd = self.vesc.speed(speed_cmd)
+        d_ref = command_to_steer(steer_cmd, self.map_cmd, self.map_act, self.max_steer)
+        self.lowlevel.command(self.t, d_ref, speed_cmd)
+
     def step(self, steer_cmd, speed_cmd, dt=None):
-        """/drive 명령으로 dt 만큼. 반환: 상태 요약 dict (트랙이 있으면 s, n, 벽, 랩)."""
+        """/drive 명령으로 dt 만큼. 반환: 상태 요약 dict (트랙이 있으면 s, n, 벽, 랩).
+        steer_cmd 가 None 이면 새 명령 없이 적분만 (실시간 모드 — /drive 는 제어 주기에만 온다)."""
         dt = self.dt if dt is None else dt
         if self.drivetrain is not None:
             return self._step_vesc(steer_cmd, speed_cmd, dt)
-        if self.vesc is not None:   # 차의 vesc_driver 가 하는 것처럼
-            steer_cmd, speed_cmd = self.vesc.steer(steer_cmd), self.vesc.speed(speed_cmd)
-        d_ref = command_to_steer(steer_cmd, self.map_cmd, self.map_act, self.max_steer)
         ll = self.lowlevel
-        ll.command(self.t, d_ref, speed_cmd)
+        if steer_cmd is not None:
+            self.command(steer_cmd, speed_cmd)
         if self.integrator == 'rk4':
             n = max(1, int(math.ceil(dt / self.substep - 1e-9)))
             h = dt / n
@@ -164,10 +173,9 @@ class Simulator:
     def _step_vesc(self, steer_cmd, speed_cmd, dt):
         """wheel_model='vesc'. substep 마다: PID·전류 → 바퀴 힘 → ws (선형화 후진 오일러, 타이어 반력이 딱딱해서)
         → ws 를 고정하고 나머지 상태 RK4. 속도 명령은 ackermann_to_vesc 가 erpm 으로 자른다 (vesc.speed 안 씀)."""
-        steer_cmd = self.vesc.steer(steer_cmd)
-        d_ref = command_to_steer(steer_cmd, self.map_cmd, self.map_act, self.max_steer)
         dtr, ll = self.drivetrain, self.lowlevel
-        ll.command(self.t, d_ref, speed_cmd)
+        if steer_cmd is not None:
+            self.command(steer_cmd, speed_cmd)
         n = max(1, int(math.ceil(dt / self.substep - 1e-9)))
         h = dt / n
         x = self.x.copy()

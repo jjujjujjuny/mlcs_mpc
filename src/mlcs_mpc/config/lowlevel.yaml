@@ -6,9 +6,15 @@
 # ═══════════════════════════════════════════════════════════════════
 lowlevel:
   # ── 조향 (서보) ──────────────────────────────────────────────────
-  steer_model: lag      # lag = 1차 지연 (τ = mpcc.yaml steering_tau 0.13) | gym = f1tenth_gym 뱅뱅
-  steer_rate: 0.0       # rad/s 서보 최대 각속도 (0 = 없음). 실차 미측정
-  steer_delay: 0.0      # s 조향 명령 지연. 실차 미측정 (MPC 풀이 지연은 main.py --delay / ROS 에서 실제로)
+  steer_model: lag      # lag = 1차 지연 (τ = steer_tau) | gym = f1tenth_gym 뱅뱅
+  steer_tau: 0.03       # s 시뮬 차 서보 시정수 (2026-11-25). 0 이면 mpcc.yaml steering_tau (0.13, MPC 모델 값) 를 쓴다.
+                        #   개루프 재생 (실차 /drive 를 도착 시각대로 → 1 s 뒤 위치를 정답과 비교):
+                        #     연구실 mocap 11-10 (v1.5·2.0)  τ 0.13 → 10.3 cm, 0.03 → 5.1 cm (지연 15 ms 더해도 같음)
+                        #     대회장 라이다 11-15 (최고 6 m/s, f 0.7) τ 0.13 → 42 cm, 0.03 → 33 cm (모든 속도 구간)
+                        #   순수 지연 50 ms 이상은 두 곳 모두 나빠진다. ★ 거치대 서보 계단 응답으로 다시 확인할 것
+                        #   MPC 모델 steering_tau 를 같이 줄일지는 실차 확인 뒤 (재빌드 — 시뮬 차만 바꾸면 모델 불일치 시험이 된다)
+  steer_rate: 0.0       # rad/s 서보 최대 각속도 (0 = 없음). gym 3.2 + 20 ms 도 τ 0.03 과 거의 같다
+  steer_delay: 0.0      # s 조향 명령 지연 (MPC 풀이 지연은 main.py --realtime / --delay / ROS 에서 실제로)
 
   # ── 속도 (lag 바퀴) ──────────────────────────────────────────────
   speed_model: lag      # lag = 1차 지연 (τ = wheel_speed_tau 0.4, 실측 0.40~0.45) | gym = P 제어

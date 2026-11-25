@@ -18,6 +18,9 @@ main.py — MPC 튜닝용 메인. ROS 없이 한 프로세스에서 설정 → �
   솔버      env/mpc/mpcc.MPCC            — mpcc_node 의 워커가 쓰는 것과 같은 클래스
   차        env/simulator.Simulator      — env/vehicle_model (MPC 와 같은 식) + env/vesc (차의 VESC 값)
   주기      제어 control_rate (30 Hz), 적분 100 Hz. 풀이 시간만큼의 지연은 --delay 로 넣는다.
+  ★ --realtime: 실차 비동기 경로 (env/timing.py 사건 큐 + env/estimation.py 상태 추정). mocap 100 Hz ± 지터·전달 지연,
+            칼만 필터 (--estimator kf = 지금 실차, gyro = vx 바퀴 속도·r 자이로, true = 참값), 30 Hz 타이머 + 젯슨
+            풀이 시간 분포 + pending 건너뛰기, VESC 50 Hz. 분포는 data/timing/jetson_mocap_20261110.json (젯슨 실측).
 
   최종 확인은 ./sim.sh (ROS — 실제 토픽·타이밍·감시까지), 실차는 ./race.sh.
 """
@@ -87,6 +90,48 @@ def run(params, ctrl, sim, laps, time_max=120.0, delay=False, verbose=True):
             wall0 = sim.wall_hits
         rows.append((sim.t, *sim.pose(), info['vx'], info['vy'], info['r'], info['ws'], info['delta'],
                      cmd[0], cmd[1], info['s'], info['n'], int(info['on_wall'])))
+    return ticks, rows
+
+
+def run_realtime(params, ctrl, sim, laps, time_max, args, verbose=True):
+    """--realtime: 사건 큐 (env/timing.run_realtime). → (ticks, rows) — run() 과 같은 꼴 (rows 는 10 ms 마다)."""
+    from mlcs_mpc.env.estimation import EstimatorConfig, StateEstimator
+    from mlcs_mpc.env.timing import Timing, TimingConfig, run_realtime as loop, summary as tsum
+    rng = np.random.default_rng(args.seed)
+    est = StateEstimator(EstimatorConfig(mode=args.estimator, vy_mode=args.vy), rng=rng)
+    est.reset(sim)
+    tk = parse_kv(args.timing or [])
+    if 'skip_pending' in tk:
+        tk['skip_pending'] = bool(tk['skip_pending'])
+    tcfg = TimingConfig(**tk)
+    timing = Timing(tcfg, rng=np.random.default_rng(args.seed + 1))
+    ticks, rows, state = [], [], dict(laps=0, wall0=0, t_row=-1.0)
+
+    def control(pose, twist, ws, t):
+        c, tick = control_tick(ctrl, sim, (pose, twist, ws, t))
+        ticks.append(tick)
+        if tick['tripped'] and verbose:
+            print(f'  ✗ {sim.t:.2f} s: 비정상 해 {ctrl.max_bad}번 연속 — 실차라면 여기서 래치해 멈춘다')
+        return c, tick['ms'], tick
+
+    def on_step(info, cmd):
+        if info.get('new_hit') and verbose:
+            print(f'  ⚠ {sim.t:6.2f} s 벽 — s {info["s"]:.2f} n {info["n"]:+.3f}')
+        if len(sim.laps) > state['laps']:
+            state['laps'] = len(sim.laps)
+            if verbose:
+                print(f'  랩 {state["laps"]}: {sim.laps[-1]:.2f} s  (벽 {sim.wall_hits - state["wall0"]}회)')
+            state['wall0'] = sim.wall_hits
+        if sim.t >= state['t_row'] + 0.01 - 1e-9 and 's' in info:
+            state['t_row'] = sim.t
+            c = cmd or (0.0, 0.0)
+            rows.append((sim.t, *sim.pose(), info['vx'], info['vy'], info['r'], info['ws'], info['delta'],
+                         c[0], c[1], info['s'], info['n'], int(info['on_wall'])))
+
+    period = 1.0 / float(params['control_rate'])
+    st = loop(control, sim, est, timing, period, time_max, stop=lambda: len(sim.laps) >= laps, on_step=on_step)
+    if verbose:
+        print(f'■ 실시간 ({args.estimator}, vy {args.vy}): {tsum(st)}')
     return ticks, rows
 
 
@@ -167,6 +212,15 @@ def main():
     ap.add_argument('--laps', type=int, default=None, help='바퀴 수 (기본 3, 대화형은 1)')
     ap.add_argument('--time', type=float, default=120.0, help='최대 시뮬 시간 s (한 회)')
     ap.add_argument('--delay', action='store_true', help='명령을 풀이 시간만큼 늦게 적용 (실차처럼)')
+    ap.add_argument('--realtime', action='store_true',
+                    help='실차 비동기 경로: mocap 100 Hz·전달 지연·상태 추정·30 Hz 타이머·젯슨 풀이 시간·건너뛰기·VESC 50 Hz')
+    ap.add_argument('--estimator', default='kf', choices=('true', 'kf', 'gyro'),
+                    help='--realtime 상태 추정: kf 지금 실차 (mocap_bridge) | gyro vx 바퀴 속도·r 자이로 | true 참값')
+    ap.add_argument('--vy', default='kf', choices=('kf', 'rot'), help='--realtime vy: kf 지금 실차 | rot 지연 yaw 로 돌림')
+    ap.add_argument('--timing', nargs='*', metavar='KEY=VALUE',
+                    help='env/timing.TimingConfig: solve=jetson|measured|zero mocap=measured|fixed transport=measured|zero '
+                         'vesc=measured|fixed skip_pending=1|0 max_gap=0.05 source=<json>')
+    ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--log', help='주기별 기록 csv')
     ap.add_argument('--plot', help='그림 경로 (기본 <저장소>/logs/tune/<시각>.png — 매번 저장)')
     ap.add_argument('--show', action='store_true', help='그림을 창으로 띄운다')
@@ -175,7 +229,10 @@ def main():
         return interactive(args)
     params, track, ctrl, sim = setup(args)
     t_wall = time.perf_counter()
-    ticks, rows = run(params, ctrl, sim, args.laps or 3, args.time, args.delay)
+    if args.realtime:
+        ticks, rows = run_realtime(params, ctrl, sim, args.laps or 3, args.time, args)
+    else:
+        ticks, rows = run(params, ctrl, sim, args.laps or 3, args.time, args.delay)
     rows = summary(sim, ticks, rows, t_wall, params, ctrl)
     if args.log:
         np.savetxt(args.log, rows, delimiter=',', fmt='%.5f', comments='', header=','.join(COLS))

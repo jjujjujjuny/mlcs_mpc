@@ -117,6 +117,19 @@ class RaceEnvConfig:
     dr_nominal_frac: float = 0.0        #   리셋 때 이 비율은 랜덤화 없이 (망각·속도 손실 방지 — Rudin 2021 / ADR 식)
     v_lo: float = 0.2                   # 저속 운동학 섞기 (Simulator 와 같다)
     v_hi: float = 0.4
+    # ★ 관측 속도 (vx, vy, r) 를 어떻게 얻나 — 실차는 참값을 모른다 (2026-11-25, 메인 PC)
+    #   'true'  참값 + sensor 노이즈 (지금까지)
+    #   'delay' obs_delay 만큼 늦은 참값 + 노이즈 (vx·vy·r 따로)
+    #   'kf'    실차 mocap_bridge 그대로: mocap 100 Hz (앞축 점 + pos·yaw 노이즈 → 뒤축) 에 x·y·yaw 정속도 칼만 필터
+    #           (PoseKF, q_pos 0.01·q_vel 1.0·r 1e-4), 전역 속도를 KF yaw 로 돌린다 → vx·r 80~90 ms 늦고 코너에서 가짜 vy.
+    #           위치·헤딩 관측 (n, μ, 앞쪽 트랙) 도 KF 출력
+    #   'gyro'  제안된 실차 개선안: r = 자이로 (obs_delay gyro 만큼 늦음), vx = 바퀴 속도 (같은 지연), vy·위치는 'kf' 와 같다
+    obs_vel: str = 'true'
+    obs_vy: str = 'kf'                  #   kf·gyro 의 vy — 'kf' 지금 실차 | 'rot' KF 속도를 yaw − r·vy_lag 로 돌림 (가짜 vy 없앰)
+    vy_lag: float = 0.10                #   11-10 실제 로그: vy 오차 rms 0.18~0.26 → 0.03~0.04 (0.09~0.12)
+    obs_delay: dict = field(default_factory=lambda: dict(vx=0.085, vy=0.085, r=0.085, gyro=0.02))
+    mocap_dt: float = 0.01              #   센서 틱 (mocap 100 Hz). dt·substep 이 이 값의 배수·약수여야 정확하다
+    kf: dict = field(default_factory=lambda: dict(q_pos=0.01, q_vel=1.0, r_meas=1e-4))
     # 관측 정규화 최댓값 (배포 때 같은 값을 써야 한다 — 체크포인트에 같이 저장)
     obs_scale: dict = field(default_factory=lambda: dict(
         vx=5.0, vy=2.0, mu=1.0, n=0.5, r=6.0, ws=5.0, kappa=2.0, w=1.0))
@@ -183,6 +196,30 @@ class VecRaceEnv:
         self.meas_noise = z(self.B, 7)       # 마지막 측정 노이즈 (pos x, y, yaw, vx, vy, r, ws) — 그림용
         self.obs_dim = 10 + 3 * cfg.lookahead_n
         self.act_dim = 2
+        # 관측 속도 (obs_vel) — 센서 틱 버퍼와 칼만 필터
+        if cfg.obs_vel not in ('true', 'delay', 'kf', 'gyro'):
+            raise ValueError(f'obs_vel: {cfg.obs_vel}')
+        self.vo = z(self.B, 4)               # 관측에 넣는 (vx, vy, r, ws) — 노이즈 포함
+        self.allids = torch.arange(self.B, device=self.device)
+        if cfg.obs_vel != 'true':
+            dmax = max(float(v) for v in cfg.obs_delay.values())
+            self.n_hist = int(round(dmax / cfg.mocap_dt)) + 2
+            self.hist = z(self.n_hist, self.B, 4)      # 센서 틱마다 참값 (vx, vy, r, ws)
+            self.hist_i = 0
+            self.sense_acc = 0.0
+            self.kf_s = z(self.B, 3, 2)                # x, y, yaw 의 [위치, 속도] (뒤축 점)
+            self.kf_K = self._kf_gain(cfg.mocap_dt, **cfg.kf)
+
+    @staticmethod
+    def _kf_gain(dt, q_pos, q_vel, r_meas):
+        """PoseKF 정상상태 이득 (모든 환경·축이 같은 Q·R·dt 라 P 가 같다 — 실차도 1 s 안에 수렴)."""
+        import numpy as np
+        F = np.array([[1.0, dt], [0.0, 1.0]]); Q = np.diag([q_pos, q_vel]); P = np.eye(2)
+        for _ in range(5000):
+            P = F @ P @ F.T + Q * dt
+            K = P[:, 0] / (P[0, 0] + r_meas)
+            P = P - np.outer(K, P[0, :])
+        return tuple(float(k) for k in K)
 
     # ── 랜덤 ───────────────────────────────────────────────────────────
     def _rand(self, n, lo=0.0, hi=1.0):
@@ -286,6 +323,7 @@ class VecRaceEnv:
         self.idx[ids] = -1
         self.idx_m[ids] = -1
         self._frenet(ids)
+        self._sense_reset(ids)
         self._measure(ids)
         return self.observation()
 
@@ -299,6 +337,7 @@ class VecRaceEnv:
         if prev_a is not None:
             self.prev_a[ids] = torch.as_tensor(prev_a, device=self.device, dtype=self.dtype)
         self._frenet(ids)
+        self._sense_reset(ids)               # ★ obs_vel ≠ true 이어도 여기서는 지연·KF 가 없다 (센서 틱이 안 돈다)
         self._measure(ids)
 
     def _frenet(self, ids):
@@ -324,23 +363,107 @@ class VecRaceEnv:
             if s is not None:
                 noise[:, j] = s * self._randn(n)
         self.meas_noise[ids] = noise
-        yaw_m = x[:, 2] + noise[:, 2]
-        cx = fx + noise[:, 0] - lf * torch.cos(yaw_m)
-        cy = fy + noise[:, 1] - lf * torch.sin(yaw_m)
+        mode = self.cfg.obs_vel
+        if mode in ('kf', 'gyro'):
+            # 위치·헤딩도 실차처럼 KF 출력 (뒤축 점) → 무게중심
+            lr = self.P.p[ids, 1]
+            yaw_m = self.kf_s[ids, 2, 0]
+            cx = self.kf_s[ids, 0, 0] + lr * torch.cos(yaw_m)
+            cy = self.kf_s[ids, 1, 0] + lr * torch.sin(yaw_m)
+        else:
+            yaw_m = x[:, 2] + noise[:, 2]
+            cx = fx + noise[:, 0] - lf * torch.cos(yaw_m)
+            cy = fy + noise[:, 1] - lf * torch.sin(yaw_m)
         s, nn, mu, i = self.track.frenet(cx, cy, yaw_m, self.idx_m[ids])
         self.s_m[ids], self.n_m[ids], self.mu_m[ids], self.idx_m[ids] = s, nn, mu, i
+        self.vo[ids] = self._vel_obs(ids, noise)
+
+    # ── 관측 속도 (obs_vel) ─────────────────────────────────────────────
+    def _hist_back(self, ids, col, delay):
+        """delay s 전 센서 틱의 참값 (ids, ) — 마지막 틱 = 지금."""
+        k = min(int(round(float(delay) / self.cfg.mocap_dt)), self.n_hist - 1)
+        return self.hist[(self.hist_i - 1 - k) % self.n_hist, ids, col]
+
+    def _kf_body(self, ids):
+        """KF 출력 → 차체 (vx, vy_뒤축, r) — mocap_bridge 와 같은 식 (늦은 전역 속도를 KF yaw 로 돌린다)."""
+        s = self.kf_s[ids]
+        yaw, vxg, vyg = s[:, 2, 0], s[:, 0, 1], s[:, 1, 1]
+        c, sn = torch.cos(yaw), torch.sin(yaw)
+        return vxg * c + vyg * sn, -vxg * sn + vyg * c, s[:, 2, 1]
+
+    def _vel_obs(self, ids, noise):
+        x, mode, d = self.x[ids], self.cfg.obs_vel, self.cfg.obs_delay
+        if mode == 'true':
+            return x[:, 3:7] + noise[:, 3:7]
+        ws = x[:, 6] + noise[:, 6]
+        if mode == 'delay':
+            v = torch.stack([self._hist_back(ids, j, d[k]) for j, k in enumerate(('vx', 'vy', 'r'))], 1)
+            return torch.cat([v + noise[:, 3:6], ws[:, None]], 1)
+        vx, vy_rear, r = self._kf_body(ids)
+        lr = self.P.p[ids, 1]
+        if mode == 'gyro':
+            r = self._hist_back(ids, 2, d['gyro']) + noise[:, 5]
+            vx = self._hist_back(ids, 3, d['gyro']) + noise[:, 6]
+        if self.cfg.obs_vy == 'rot':
+            sk = self.kf_s[ids]
+            a = sk[:, 2, 0] - r * self.cfg.vy_lag
+            vy_rear = -sk[:, 0, 1] * torch.sin(a) + sk[:, 1, 1] * torch.cos(a)
+        return torch.stack([vx, vy_rear + lr * r, r, ws], 1)    # vy: 뒤축 → 무게중심
+
+    def _mocap_pose(self):
+        """센서 틱의 mocap 측정 — 앞축 점 + 노이즈, mocap_bridge offset 으로 뒤축 점 (전체 환경)."""
+        x, ids = self.x_sense, self.allids
+        L = self.P.wheelbase
+        lf = L - self.P.p[:, 1]
+        yaw = x[:, 2]
+        sp, sy = self._sig('pos', ids), self._sig('yaw', ids)
+        if sy is not None:
+            yaw = yaw + sy * self._randn(self.B)
+        fx, fy = x[:, 0] + lf * torch.cos(x[:, 2]), x[:, 1] + lf * torch.sin(x[:, 2])
+        if sp is not None:
+            fx, fy = fx + sp * self._randn(self.B), fy + sp * self._randn(self.B)
+        return torch.stack([fx - L * torch.cos(yaw), fy - L * torch.sin(yaw), yaw], 1)
+
+    def _sense_reset(self, ids):
+        """리셋 환경의 센서 버퍼를 지금 참값으로 채우고 KF 를 참 상태 (뒤축 점·속도) 에서 시작."""
+        if self.cfg.obs_vel == 'true':
+            return
+        x = self.x[ids]
+        self.hist[:, ids] = x[:, 3:7][None]
+        lr = self.P.p[ids, 1]
+        c, sn = torch.cos(x[:, 2]), torch.sin(x[:, 2])
+        vy_r = x[:, 4] - lr * x[:, 5]
+        s = torch.zeros(len(ids), 3, 2, device=self.device, dtype=self.dtype)
+        s[:, 0, 0], s[:, 1, 0], s[:, 2, 0] = x[:, 0] - lr * c, x[:, 1] - lr * sn, x[:, 2]
+        s[:, 0, 1], s[:, 1, 1], s[:, 2, 1] = x[:, 3] * c - vy_r * sn, x[:, 3] * sn + vy_r * c, x[:, 5]
+        self.kf_s[ids] = s
+
+    def _sense_tick(self, x):
+        """센서 틱 (mocap_dt) — 참값 버퍼 + KF 한 번 (전체 환경)."""
+        self.hist[self.hist_i % self.n_hist] = x[:, 3:7]
+        self.hist_i += 1
+        if self.cfg.obs_vel in ('kf', 'gyro'):
+            self.x_sense = x
+            zm = self._mocap_pose()
+            s = self.kf_s
+            dt = self.cfg.mocap_dt
+            p = s[..., 0] + dt * s[..., 1]
+            inn = zm - p
+            inn[:, 2] = torch.remainder(inn[:, 2] + math.pi, 2 * math.pi) - math.pi     # yaw unwrap (mocap_bridge 와 같다)
+            k0, k1 = self.kf_K
+            self.kf_s = torch.stack([p + k0 * inn, s[..., 1] + k1 * inn], -1)
 
     # ── 관측 ───────────────────────────────────────────────────────────
     def observation(self):
         k = self.cfg.obs_scale
-        x, e = self.x, self.meas_noise
+        x, v = self.x, self.vo
         kap, wl, wr = self.track.lookahead(self.s_m, self.offsets)
         delta_ref = self.prev_a[:, 0] * self.max_steer
         return torch.cat([
-            torch.stack([(x[:, 3] + e[:, 3]) / k['vx'], (x[:, 4] + e[:, 4]) / k['vy'], self.mu_m / k['mu'],
-                         self.n_m / k['n'], (x[:, 5] + e[:, 5]) / k['r'], x[:, 7] / self.max_steer,
+            torch.stack([v[:, 0] / k['vx'], v[:, 1] / k['vy'], self.mu_m / k['mu'],
+                         self.n_m / k['n'], v[:, 2] / k['r'], x[:, 7] / self.max_steer,
                          delta_ref / self.max_steer, self.prev_a[:, 1], self.ws_ref / k['ws'],
-                         (x[:, 6] + e[:, 6]) / k['ws']], dim=1),
+                         v[:, 3] / k['ws']], dim=1),
             kap / k['kappa'], wl / k['w'], wr / k['w']], dim=1)
 
     # ── 한 주기 ────────────────────────────────────────────────────────
@@ -417,6 +540,11 @@ class VecRaceEnv:
                 x = self.veh.euler(x, u, self.P, h, act)
             else:
                 x = self.veh.rk4(x, u, self.P, h, h, act, lim)
+            if cfg.obs_vel != 'true':
+                self.sense_acc += h
+                if self.sense_acc >= cfg.mocap_dt - 1e-9:
+                    self.sense_acc -= cfg.mocap_dt
+                    self._sense_tick(x)
         self.u_applied = u_new
         return x
 
@@ -459,6 +587,7 @@ class VecRaceEnv:
         self.lap_p0 = torch.where(lap, self.lap_p0 + L, self.lap_p0)
         if nonfinite.any():                 # 관측이 NaN 이 되지 않게 (리셋 전까지)
             self.x[nonfinite] = 0.0
+            self._sense_reset(nonfinite.nonzero().squeeze(1))
         self._measure(allids)
         info = dict(out=out, nonfinite=nonfinite, stuck=stuck, dropped=self.dropped.clone(), lap_time=lap_time, progress=ds, n=self.n.clone(),
                     off=torch.clamp(torch.maximum(self.n - wl, -self.n - wr), min=0.0))

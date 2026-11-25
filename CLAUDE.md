@@ -34,6 +34,7 @@ python3 test/test_ocp_kappa.py [track]  # OCP uses κ(s) correctly (casadi + aca
 python3 test/test_stage_params.py    # per-stage p[30] reaches the solver (acados build, ~4 s)
 python3 test/test_drivetrain.py      # env/drivetrain VESC low-level model (stop-brake patch, FW speed PID, currents)
 python3 test/test_vec_vehicle.py     # torch env/vec == casadi model / Simulator / Track.frenet; RL env API (needs torch)
+python3 test/test_realtime.py        # env/estimation (PoseKF == mocap_bridge, kf/gyro lag, fake vy) + env/timing event queue (state→cmd ≈ 34 ms)
 python3 test/test_mpcc_node.py [--only NAME]   # Jetson only: real node + acados worker on ROS_DOMAIN_ID=87
 ```
 
@@ -47,6 +48,7 @@ Generated code is cached per track in `~/mpcc_build/<tag>_trk<hash>/`. It rebuil
 ## Running
 
 - ROS-free tuning loop (acados python): `python3 src/mlcs_mpc/main.py [--track T] [--set v_max=1.2 q_n=0.05] [--car friction=0.35] [--laps N] [-i]` (`-i` = interactive, `--car` = plant-only mismatch). `main_sim.py` is the same in real time with RViz. Config priority: `config/mpcc.yaml` → `race.yaml` `mpcc:` → `--config` files → `--set`; unknown names are rejected.
+- `main.py --realtime [--estimator kf|gyro|true] [--vy kf|rot] [--timing solve=jetson ...]`: the real car's async path (`env/timing.py` event queue: mocap 100 Hz ± jitter + transport, 30 Hz timer with Jetson solve-time distribution and pending skip, VESC 50 Hz; distributions from `data/timing/jetson_mocap_20261110.json`) with `env/estimation.py` (the same PoseKF as `io/mocap_bridge`, or `gyro` = vx from wheel speed, r from gyro). The RL env has the same choices as `obs_vel`/`obs_vy` (`train.py --obs-vel`). `tools/analysis/sim_fidelity.py <drive logs>` replays real /drive commands open-loop and reports 1 s position error (servo sweep).
 - `./sim.sh build`, then `./sim.sh [race.yaml]`, `./sim.sh track <name> [v_max]`, `./sim.sh go|halt|status`. Runs `sim_node` + `mpcc_node` (`source:=sim`) + RViz, logs to `logs/sim/`. `main.py`/`main_sim.py` save reports/plots to `logs/tune/` (gitignored).
 - `./race.sh [race.yaml]` (Jetson): validates `race.yaml`'s `mpcc:` keys against `config/mpcc.yaml` (unknown keys are rejected; `hmpc:` is accepted as the old name), then runs `./drive.sh mpcc`. Map names must be quoted (`"1108_5"`).
 - `./drive.sh <mode>` (Jetson): the launcher for everything. It **kills f1tenth_stack's own `joy_teleop`**. `mpcc` (alias `hmpc`) uses env `MLCS_MPCC_*` (old `MLCS_HMPC_*` is still accepted). See its header for all modes.
