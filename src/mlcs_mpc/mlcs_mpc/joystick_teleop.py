@@ -223,7 +223,7 @@ class JoystickTeleop(Node):
                if self.ax_align >= 0 else '')
             + f'  START(버튼{self.btn_estop})   → 비상 정지\n'
             f'  max_speed={self.max_speed} m/s  max_steer={self.max_steer} rad\n'
-            '  ★ 트리거 자동 캘리 중 — RT 에서 손 떼고 가만히 두세요')
+            '  ★ 트리거 자동 캘리 중 — RT 에서 손 떼고 **왼쪽 스틱을 한 번 살짝 움직였다 놓으세요** (첫 입력이 와야 시작, 약 1 초)')
         if self.rally:
             self.get_logger().info(
                 '랠리 모드 — RT 끝까지 = 최대 속도, 스틱 끝까지 = 최대 조향\n'

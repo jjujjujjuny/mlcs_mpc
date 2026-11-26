@@ -370,7 +370,7 @@ joy_session () {
     fi
     echo "    START          비상 정지"
     echo
-    warn "기동 직후 RT 에서 손을 떼세요 — 트리거 휴지값을 자동으로 잽니다"
+    warn "기동 직후 RT 에서 손을 떼고 왼쪽 스틱을 한 번 살짝 움직였다 놓으세요 — 그 입력부터 트리거 휴지값을 잽니다 (약 1 초)"
     echo
     # joy:=false — bringup 이 joy_node 를 이미 띄웠다
     JOYARG="$(decide_joyarg)"
@@ -1505,7 +1505,7 @@ mocapcal)
         >"$(run_log mocapcal_joy)" 2>&1 &
     PIDS="$PIDS $!"
     sleep 2
-    log "조이스틱: RT 전진 (최대 ${MLCS_SPEED:-1.0} m/s), L스틱 조향, START 비상 정지 — 기동 직후 RT 에서 손을 떼세요"
+    log "조이스틱: RT 전진 (최대 ${MLCS_SPEED:-1.0} m/s), L스틱 조향, START 비상 정지 — 기동 직후 RT 에서 손 떼고 왼쪽 스틱을 한 번 살짝 움직였다 놓으세요"
     CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
     MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
          | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' \
