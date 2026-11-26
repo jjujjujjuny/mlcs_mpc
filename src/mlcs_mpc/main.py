@@ -216,7 +216,7 @@ def main():
                     help='실차 비동기 경로: mocap 100 Hz·전달 지연·상태 추정·30 Hz 타이머·젯슨 풀이 시간·건너뛰기·VESC 50 Hz')
     ap.add_argument('--estimator', default='kf', choices=('true', 'kf', 'gyro'),
                     help='--realtime 상태 추정: kf 지금 실차 (mocap_bridge) | gyro vx 바퀴 속도·r 자이로 | true 참값')
-    ap.add_argument('--vy', default='kf', choices=('kf', 'rot'), help='--realtime vy: kf 지금 실차 | rot 지연 yaw 로 돌림')
+    ap.add_argument('--vy', default='kf', choices=('kf', 'rot', 'zero'), help='--realtime vy: kf 지금 실차 | rot 지연 yaw 로 돌림 | zero 뒤축 옆 속도 0 (KF 안 씀)')
     ap.add_argument('--timing', nargs='*', metavar='KEY=VALUE',
                     help='env/timing.TimingConfig: solve=jetson|measured|zero mocap=measured|fixed transport=measured|zero '
                          'vesc=measured|fixed skip_pending=1|0 max_gap=0.05 source=<json>')

@@ -60,14 +60,16 @@ class EstimatorConfig:
     yaw_noise: float = 0.002        # rad
     vy_mode: str = 'kf'             # kf = 늦은 전역 속도를 지금 KF yaw 로 (지금 실차 — 코너에서 가짜 vy)
                                     # rot = 같은 속도를 지연만큼 되돌린 yaw (yaw − r·vy_lag) 로 — 시뮬에서 오차 rms 0.31 → 0.10
+                                    # zero = 뒤축 옆 속도 0 (기구학, KF 안 씀 → 지연 없음). MPC 무게중심 vy = lr·r (자이로)
+                                    #        11-10 실제 로그: 실제 뒤축 vy rms 0.04~0.08 → 이 방식의 오차가 그만큼
     vy_lag: float = 0.10            # s  KF 속도 지연. 11-10 실제 로그 4 주행: 0.09~0.12 에서 vy 오차 rms 0.18~0.26 → 0.03~0.04
     gyro_delay: float = 0.02        # s  gyro 모드: 자이로·바퀴 속도가 VESC 샘플 시각보다 늦는 정도
     gyro_noise: float = 0.02        # rad/s
     ws_noise: float = 0.01          # m/s
 
     def check(self):
-        if self.vy_mode not in ('kf', 'rot'):
-            raise ValueError(f'vy_mode: kf | rot ({self.vy_mode!r})')
+        if self.vy_mode not in ('kf', 'rot', 'zero'):
+            raise ValueError(f'vy_mode: kf | rot | zero ({self.vy_mode!r})')
         if self.mode not in ('true', 'kf', 'gyro'):
             raise ValueError(f'estimator mode: true | kf | gyro ({self.mode!r})')
 
@@ -139,6 +141,8 @@ class StateEstimator:
         if c.vy_mode == 'rot':
             a = fyaw - r * c.vy_lag
             vy = -sx[1] * math.sin(a) + sy[1] * math.cos(a)
+        elif c.vy_mode == 'zero':
+            vy = 0.0
         self.pose = (sx[0], sy[0], (fyaw + math.pi) % (2 * math.pi) - math.pi)
         self.twist = (vx, vy, r)
 

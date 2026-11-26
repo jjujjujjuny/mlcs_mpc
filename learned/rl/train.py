@@ -80,7 +80,7 @@ def parse(argv=None):
     ap.add_argument('--car', nargs='*', default=[], metavar='KEY=VALUE', help='차 값 덮어쓰기 (friction=0.35 …)')
     ap.add_argument('--obs-vel', default='true', choices=['true', 'delay', 'kf', 'gyro'],
                     help='관측 속도: true 참값 | delay 늦은 참값 | kf 실차 mocap_bridge 칼만 필터 (80~90 ms) | gyro r 자이로·vx 바퀴 속도')
-    ap.add_argument('--obs-vy', default='kf', choices=['kf', 'rot'], help='kf·gyro 의 vy: kf 지금 실차 | rot 지연 yaw 로 돌림')
+    ap.add_argument('--obs-vy', default='kf', choices=['kf', 'rot', 'zero'], help='kf·gyro 의 vy: kf 지금 실차 | rot 지연 yaw 로 돌림 | zero 뒤축 옆 속도 0 (KF 안 씀)')
     ap.add_argument('--obs-delay', nargs='*', default=[], metavar='KEY=VALUE', help='obs_vel 지연 s (vx vy r gyro, 예 gyro=0.02)')
     ap.add_argument('--device', default='cpu')
     ap.add_argument('--threads', type=int, default=0, help='torch CPU 스레드 (0 = 기본)')

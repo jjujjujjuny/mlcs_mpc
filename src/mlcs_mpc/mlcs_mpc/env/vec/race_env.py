@@ -125,7 +125,7 @@ class RaceEnvConfig:
     #           위치·헤딩 관측 (n, μ, 앞쪽 트랙) 도 KF 출력
     #   'gyro'  제안된 실차 개선안: r = 자이로 (obs_delay gyro 만큼 늦음), vx = 바퀴 속도 (같은 지연), vy·위치는 'kf' 와 같다
     obs_vel: str = 'true'
-    obs_vy: str = 'kf'                  #   kf·gyro 의 vy — 'kf' 지금 실차 | 'rot' KF 속도를 yaw − r·vy_lag 로 돌림 (가짜 vy 없앰)
+    obs_vy: str = 'kf'                  #   kf·gyro 의 vy — 'kf' 지금 실차 | 'rot' KF 속도를 yaw − r·vy_lag 로 돌림 (가짜 vy 없앰) | 'zero' 뒤축 옆 속도 0 (KF 안 씀)
     vy_lag: float = 0.10                #   11-10 실제 로그: vy 오차 rms 0.18~0.26 → 0.03~0.04 (0.09~0.12)
     obs_delay: dict = field(default_factory=lambda: dict(vx=0.085, vy=0.085, r=0.085, gyro=0.02))
     mocap_dt: float = 0.01              #   센서 틱 (mocap 100 Hz). dt·substep 이 이 값의 배수·약수여야 정확하다
@@ -408,6 +408,8 @@ class VecRaceEnv:
             sk = self.kf_s[ids]
             a = sk[:, 2, 0] - r * self.cfg.vy_lag
             vy_rear = -sk[:, 0, 1] * torch.sin(a) + sk[:, 1, 1] * torch.cos(a)
+        elif self.cfg.obs_vy == 'zero':
+            vy_rear = torch.zeros_like(vx)
         return torch.stack([vx, vy_rear + lr * r, r, ws], 1)    # vy: 뒤축 → 무게중심
 
     def _mocap_pose(self):
