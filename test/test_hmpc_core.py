@@ -179,3 +179,16 @@ def test_wall_bounds():
     t2, _ = circle()
     lo, hi = t2.bounds_at(np.array([1.0]), 0.1)
     assert not t2.has_walls and np.isclose(lo[0], -0.15) and np.isclose(hi[0], 0.15)
+
+
+def test_make_state_front_rear_same():
+    """11-26: 같은 차 상태를 뒤축 기준으로 주든 앞축 기준으로 주든 무게중심 상태가 같아야 한다."""
+    import math
+    t, R = circle()
+    L, lr = 0.33, 0.1537
+    yaw, r, vx = 0.4, 0.8, 2.0
+    xr, yr = R * 0.9, 0.3                               # 뒤축 (원 트랙 근처)
+    xf, yf = xr + L * math.cos(yaw), yr + L * math.sin(yaw)    # 앞축
+    a = make_state(t, (xr, yr, yaw), (vx, 0.0, r), vx, 0.1, lr, 0.25, 0.41)
+    b = make_state(t, (xf, yf, yaw), (vx, L * r, r), vx, 0.1, lr - L, 0.25, 0.41)
+    assert np.allclose(a, b, atol=1e-9)

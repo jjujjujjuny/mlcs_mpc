@@ -98,6 +98,12 @@
     erpm_gain: 4781.5
     erpm_offset: 0.0
 
+    # ★ 2026-11-26 기준점 = 앞바퀴 축 중간점 (서용화 연구원님: MPC 수식도 앞축). Motive 피벗도 앞축 중간점에 둠.
+    #   /mpc/state 의 위치·vy 가 앞축 값이고 hmpc 는 그대로 받는다 (race.sh 가 state_ref 를 이 값으로).
+    #   새 마커 강체 (11-26) — 아래 offset·yaw_offset 은 ./drive.sh mocapcal spin / straight 로 다시 재서 넣을 것.
+    ref_point: 'front'
+    wheelbase: 0.33
+
     offset_x: 0.0
     # ✅ 0 으로 확정 (2026-09-30) — 실험으로 배제했다.
     #
@@ -119,11 +125,11 @@
     #   그 뒤 Pivot 을 뒤축 위 마커로 다시 지정했다. 그 마커는 뒤축 중심보다 왼쪽 3.4 cm (줄자).
     #   ✅ 확인 주행(yawcal2): 보고 위치가 왼쪽 +0.029 / +0.032 m (0.6 / 1.0 m/s) 로 줄자와 맞다.
     #   뒤축 중심은 Pivot 의 오른쪽(-y)이므로 -0.034.
-    offset_y: -0.034
+    offset_y: 0.0             # 11-26 새 마커 — 다시 잴 것 (옛 마커 값 −0.034, 아래 기록은 옛 마커)
     # ✅ 2026-11-07 원선회 (yawcal, 0.6/1.0/1.4 m/s, 명령 ±0.30): 옆 미끄러짐 좌우 평균이
     #   +7.98 / +8.11 / +8.17°. 강체 Reset 때 차가 +x 에서 약 8° 틀어져 있었다.
     #   yaw = raw + yaw_offset 이므로 +0.141 rad. 이전 강체의 값은 -0.014 였다.
     #   ✅ 그 뒤 Motive 에서 Pivot 을 옮기자 강체 방향도 바뀌었다. +0.141 을 넣은 확인 주행
     #   (yawcal2) 에서 남은 편향이 -4.55 / -4.53° (0.6 / 1.0 m/s) → 0.141 - 0.0792 = 0.062.
     #   Motive 에서 Pivot 이나 Orientation 을 건드리면 다시 잴 것.
-    yaw_offset: 0.062
+    yaw_offset: 0.0           # 11-26 새 마커 — mocapcal straight 로 다시 잴 것 (옛 마커 값 0.062)

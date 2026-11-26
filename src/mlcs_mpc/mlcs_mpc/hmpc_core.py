@@ -3,7 +3,7 @@
 hmpc_core — hmpc_node 의 ROS 없는 계산. test/test_hmpc_core.py 로 시험한다.
 
   OCP 상태 x = [s, n, mu, vx, vy, r, friction, wheel_speed, delta]
-  모델은 무게중심 기준이고 /mpc/state 는 뒤축 기준이다.
+  모델은 무게중심 기준이고 /mpc/state 는 기준점 (state_ref: rear 뒤축 / front 앞축) 이다.
 """
 import math
 
@@ -114,18 +114,20 @@ class Track:
         self.s_cont = None
 
 
-def make_state(track, pose, twist, wheel_speed, delta, lr, v_floor, friction):
-    """/mpc/state (뒤축) → OCP x (무게중심).
+def make_state(track, pose, twist, wheel_speed, delta, d_cg, v_floor, friction):
+    """/mpc/state (기준점) → OCP x (무게중심). d_cg = 기준점에서 무게중심까지 차체 x 방향 거리 (앞이 +).
+    뒤축 기준이면 +lr, 앞축 기준 (11-26 mocap) 이면 lr − L (음수). 무게중심 = 기준점 + d_cg·(cosψ, sinψ),
+    vy_cog = vy_기준점 + d_cg·r (강체).
 
     v_x 는 v_floor 아래로 안 내린다. 저자 비용의 atan(vy/vx) 와 슬립 분모는 v_x = 0 에서
     발산한다. 서 있어도 조향은 계산되고, 출발 속도 명령은 ws_ref 하한이 아니라 비용이 정한다.
     """
     x, y, yaw = pose
     vx, vy, r = twist
-    cx = x + lr * math.cos(yaw)
-    cy = y + lr * math.sin(yaw)
+    cx = x + d_cg * math.cos(yaw)
+    cy = y + d_cg * math.sin(yaw)
     s, n, mu = track.frenet(cx, cy, yaw)
-    return np.array([s, n, mu, max(vx, v_floor), vy + lr * r, r, friction,
+    return np.array([s, n, mu, max(vx, v_floor), vy + d_cg * r, r, friction,
                      max(wheel_speed, v_floor), delta])
 
 

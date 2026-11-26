@@ -217,6 +217,8 @@ class HmpcNode(Node):
         d('slow_speed', 0.4)
         d('max_bad_solves', 3)
         d('v_max', 0.7)
+        d('state_ref', 'rear')      # /mpc/state 기준점: rear 뒤축 (lidar·예전 mocap) / front 앞축 (11-26 mocap). race.sh 가 정함
+        d('wheelbase', 0.33)
         d('max_steer', 0.40)
         d('steer_map_cmd', [0.0, 0.2, 0.3, 0.4])
         d('steer_map_act', [0.0, 0.2021, 0.2972, 0.3776])
@@ -255,6 +257,11 @@ class HmpcNode(Node):
         self.period = 1.0 / float(gp('control_rate'))
         self.max_dsteer = float(gp('max_steer_rate')) * self.period
         self.lr = list(gp('vehicle_params'))[1]
+        self.state_ref = str(gp('state_ref'))
+        if self.state_ref not in ('front', 'rear'):
+            raise SystemExit(f'state_ref 는 front 또는 rear: {self.state_ref}')
+        # 기준점 → 무게중심 (차체 x, 앞 +): 뒤축 +lr, 앞축 lr − L
+        self.d_cg = self.lr if self.state_ref == 'rear' else self.lr - float(gp('wheelbase'))
         self.v_floor = float(gp('v_floor'))
         self.delay_comp = bool(gp('delay_comp'))
         self.delay_extra = float(gp('delay_extra'))
@@ -652,7 +659,7 @@ class HmpcNode(Node):
                 return      # 지난 요청의 답을 기다린다. 제한 시간은 위에서 본다
 
             x = make_state(self.track, self.pose, self.twist, self.ws, self.delta,
-                           self.lr, self.v_floor, self.friction)
+                           self.d_cg, self.v_floor, self.friction)
             if self.recover_reverse and self._check_stuck(now, x):
                 return
             # 지연 보상: 워커가 x0 를 t_meas → t_tgt 로 당긴다. 경계·곡률을 읽는 s 도 그만큼 앞으로

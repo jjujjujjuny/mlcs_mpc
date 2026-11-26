@@ -83,6 +83,16 @@ if obs == 'lidar':
 # 지연 보상의 추가 지연: 라이다 주행이면 25 ms (Cartographer 가 스탬프를 외삽해 찍어 스탬프로는 안 보인다).
 #   맵 정렬 time_lag 는 재현이 안 돼서 (1109_3 정렬 51 ms vs 주행별 6~27, 1109_4 15 vs 24) 쓰지 않는다 —
 #   상관 높은 주행별 값이 17~27 ms (race_report, 11-10). race.yaml 에 delay_extra 를 쓰면 그 값
+# /mpc/state 기준점: lidar (Cartographer base_link) 는 뒤축, mocap 은 mocap.yaml ref_point (11-26 앞축)
+if 'state_ref' not in h:
+    ref = 'rear'
+    if source == 'mocap':
+        try:
+            mp_ = next(iter(yaml.safe_load(open(os.path.join(root, 'src/mlcs_mpc/config/mocap.yaml'))).values()))['ros__parameters']
+            ref = str(mp_.get('ref_point', 'rear'))
+        except Exception:
+            pass
+    h['state_ref'] = ref
 if source == 'lidar' and 'delay_extra' not in h:
     h['delay_extra'] = 0.025
 yaml.safe_dump({'/**': {'ros__parameters': h}}, open(out, 'w'), allow_unicode=True)

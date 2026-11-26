@@ -13,6 +13,8 @@
     max_steer: 0.40
     max_steer_rate: 3.2
     # 명령 → 실제 조향 (좌우 평균, 1 m/s 원선회 2026-11-05). ±0.40 은 offset 변경 전 측정이다.
+    state_ref: 'rear'       # /mpc/state 기준점 rear 뒤축 / front 앞축. race.sh 가 source 로 정함 (mocap → mocap.yaml ref_point)
+    wheelbase: 0.33
     steer_map_cmd: [0.0, 0.2, 0.3, 0.4]
     steer_map_act: [0.0, 0.2021, 0.2972, 0.3776]
 

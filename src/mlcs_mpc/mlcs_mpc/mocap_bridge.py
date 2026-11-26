@@ -136,7 +136,11 @@ class MocapBridge(Node):
         self.declare_parameter('q_pos', 0.01)
         self.declare_parameter('q_vel', 1.0)
         self.declare_parameter('r_meas', 1e-4)
-        # mocap 강체 원점이 차량 기준점(뒤축 중심)과 다를 때 보정.
+        # ★ 11-26 기준점: ref_point front = 앞바퀴 축 중간점 (서용화 연구원님 결정 — MPC 수식도 앞축).
+        #   Motive 강체 피벗을 앞축 중간점에 두면 offset 은 0 근처. rear 면 예전처럼 뒤축 중심.
+        self.declare_parameter('ref_point', 'rear')       # front | rear
+        self.declare_parameter('wheelbase', 0.33)
+        # mocap 강체 원점이 차량 기준점 (ref_point) 과 다를 때 보정.
         # Desktop/CLAUDE.md 의 mocap_to_model 캘리브레이션과 같은 개념.
         self.declare_parameter('offset_x', 0.0)
         self.declare_parameter('offset_y', 0.0)
@@ -145,10 +149,10 @@ class MocapBridge(Node):
         # ── 속도 상태 (11-26, 서용화 연구원님 결정) ───────────────────────
         # KF 로 위치를 거르고 미분한 속도는 위상 지연으로 80~90 ms 늦다 (11-10 로그, 메인 PC).
         # sensor: vx = 바퀴 (VESC erpm ÷ gain × wheel_scale), r = 자이로 (wheel_odom /odometry/filtered,
-        #         바이어스 뺀 값), 뒤축 vy = vy_mode. 센서가 sensor_timeout 넘게 끊기면 그 성분만 KF.
+        #         바이어스 뺀 값), vy = vy_mode (zero = 뒤축 미끄럼 0 의 기구학 값). 센서가 sensor_timeout 넘게 끊기면 그 성분만 KF.
         # kf: 예전 그대로 (위치 KF 미분). 위치·yaw 는 두 경우 모두 mocap KF.
         self.declare_parameter('vel_source', 'sensor')     # sensor | kf
-        self.declare_parameter('vy_mode', 'zero')          # zero (뒤축 옆미끄럼 0, 기구학) | rot (지연 yaw 회전) | kf
+        self.declare_parameter('vy_mode', 'zero')          # zero (뒤축 옆미끄럼 0 → 앞축이면 L·r, 기구학) | rot (지연 yaw 회전) | kf
         self.declare_parameter('sensor_timeout', 0.1)
         self.declare_parameter('wheel_scale', 1.044)       # 바퀴 → 실제 속도 (mocap 대비, 메인 PC 11-25)
         self.declare_parameter('erpm_gain', 4781.5)        # vesc.yaml speed_to_erpm_gain
@@ -171,6 +175,9 @@ class MocapBridge(Node):
         self.w_scale, self.erpm_gain, self.erpm_off = float(gp('wheel_scale')), float(gp('erpm_gain')), \
             float(gp('erpm_offset'))
         self.kf_lag = float(gp('kf_lag'))
+        self.ref_point, self.wb = str(gp('ref_point')), float(gp('wheelbase'))
+        if self.ref_point not in ('front', 'rear'):
+            raise SystemExit(f'ref_point 는 front 또는 rear: {self.ref_point}')
         self.v_wheel, self.v_wheel_t = 0.0, -1e9
         self.gyro_r, self.gyro_t = 0.0, -1e9
         self.n_sens = {'vx': 0, 'r': 0}
@@ -228,7 +235,8 @@ class MocapBridge(Node):
 
         self.get_logger().info(
             f'mocap_bridge: {self.mocap_topic} 구독, timeout={self.timeout}s, 속도 {self.vel_source}'
-            + (f' (vx 바퀴 ×{self.w_scale}, r 자이로, 뒤축 vy {self.vy_mode}, 끊기면 {self.sens_to}s 뒤 KF)'
+            + f', 기준점 {"앞축" if self.ref_point == "front" else "뒤축"}'
+            + (f' (vx 바퀴 ×{self.w_scale}, r 자이로, vy {self.vy_mode}, 끊기면 {self.sens_to}s 뒤 KF)'
                if self.vel_source == 'sensor' else ''))
 
     # ────────────────────────────────────────────────────────────────
@@ -314,7 +322,8 @@ class MocapBridge(Node):
             else:
                 self.n_fall['r'] += 1
         if self.vy_mode == 'zero':
-            lateral = 0.0       # 뒤축 옆 속도 0 (기구학). MPC 는 무게중심 vy = lr·r 로 쓴다 (make_state)
+            # 기구학: 뒤축 옆 미끄럼 0 → 기준점 옆 속도 = (뒤축에서 기준점까지) × r. 앞축이면 L·r, 뒤축이면 0
+            lateral = self.wb * yaw_rate if self.ref_point == 'front' else 0.0
         elif self.vy_mode == 'rot':
             a = fyaw - yaw_rate * self.kf_lag     # KF 전역 속도가 늦은 만큼 yaw 도 되돌려 돌린다
             lateral = -vx_g * math.sin(a) + vy_g * math.cos(a)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mocap_calibrate — 마커 강체 원점 → 차량 뒤축 중심 오프셋을 자동으로 잰다.
+mocap_calibrate — 마커 강체 원점 → 차량 기준점 (뒤축 / 11-26 부터 앞축) 오프셋을 자동으로 잰다.
 
   ros2 run mlcs_mpc mocap_calibrate --ros-args -p mode:=spin
 
@@ -212,8 +212,10 @@ class MocapCalibrate(Node):
         print('  연장선 위**에 있습니다. 즉 위 x 값은 "뒤축 → 마커" 의 전후')
         print('  거리와 같고, y 는 회전 반경 성분이 섞여 있습니다.')
         print()
-        print(f'  → config/mocap.yaml 에 넣을 값 (마커 → 뒤축):')
-        print(f'       offset_x: {-bx.mean():+.4f}')
+        L = 0.33
+        print(f'  → config/mocap.yaml 에 넣을 값 — ref_point 에 맞는 줄 (11-26 부터 front):')
+        print(f'       ref_point front (마커 → 앞축): offset_x: {-bx.mean() + L:+.4f}   (L {L} m — 피벗이 앞축이면 0 근처)')
+        print(f'       ref_point rear  (마커 → 뒤축): offset_x: {-bx.mean():+.4f}')
         print(f'       offset_y: 0.0      # 좌우 대칭으로 붙였다면 0')
         print()
         print('  ⚠ offset_y 는 좌/우 양쪽으로 각각 돌려서 비교하는 것이')
