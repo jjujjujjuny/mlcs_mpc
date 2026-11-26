@@ -1477,6 +1477,16 @@ mocapcal)
     #   고아로 남았다 — 다음 실행에서 브릿지가 중복되는 원인이 된다.
     arm_cleanup
     start_natnet
+    # 11-26: 조이스틱으로 몰며 잰다 (예전엔 손으로 밀었다 — 브링업·조이스틱을 안 띄웠음).
+    #   spin = 조향 끝 + 천천히 원, straight = 곧게 직진. 속도 상한 MLCS_SPEED (기본 1.0 m/s)
+    start_bringup
+    JOYARG="$(decide_joyarg)"
+    warn_if_no_joy
+    ros2 launch mlcs_mpc joystick.launch.py joy:="$JOYARG" max_speed:="${MLCS_SPEED:-1.0}" allow_toggle:=false \
+        >"$(run_log mocapcal_joy)" 2>&1 &
+    PIDS="$PIDS $!"
+    sleep 2
+    log "조이스틱: RT 전진 (최대 ${MLCS_SPEED:-1.0} m/s), L스틱 조향, START 비상 정지 — 기동 직후 RT 에서 손을 떼세요"
     CFG="$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml"
     MT=$(grep -E "^[[:space:]]*mocap_topic:" "$CFG" | head -1 \
          | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' \
