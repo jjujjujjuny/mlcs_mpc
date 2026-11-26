@@ -488,16 +488,17 @@ class Panel(QtWidgets.QWidget):
         self.sp_steer.setToolTip('조향 여유 (재빌드 없음). 1.0 = 끔, 0.9 = 3 단계 뒤 계획부터 조향 상한 90 %\n'
                                  '급코너에 조향 최대로 들어가 교착하면 낮춘다 (11-14 대회장)')
         self.sp_wall = QtWidgets.QDoubleSpinBox()
-        self.sp_wall.setRange(0.25, 0.60)
+        self.sp_wall.setRange(0.00, 0.60)       # 11-26 O자 트랙 (길 폭 0.50) 은 0.10
         self.sp_wall.setSingleStep(0.01)
         self.sp_wall.setDecimals(2)
         self.sp_wall.setToolTip('직선 벽 여유 m (재빌드 없음). 차 중심이 벽에서 이만큼 떨어져야 벌점 없음 (반폭 0.15 포함)\n'
                                 '급코너 (반경 1 m 보다 급함) 는 안쪽/바깥 여유만 써서 통로 폭이 안 바뀜. 11-15: 0.38 → 0.43 시험')
         self.sp_wall_in = QtWidgets.QDoubleSpinBox()
-        self.sp_wall_in.setRange(0.25, 0.60)
+        self.sp_wall_in.setRange(-1.00, 0.60)   # -1 = 끔 (직선 여유와 같게)
+        self.sp_wall_in.setSpecialValueText('끔')
         self.sp_wall_in.setSingleStep(0.01)
         self.sp_wall_in.setDecimals(2)
-        self.sp_wall_in.setToolTip('급코너 안쪽 벽 여유 m (재빌드 없음). 안쪽 벽에 닿으면 0.48 → 0.53')
+        self.sp_wall_in.setToolTip('급코너 안쪽 벽 여유 m (재빌드 없음). 맨 아래 (-1) = 끔. 대회장: 안쪽 벽에 닿으면 0.48 → 0.53')
         self.sp_sgain = QtWidgets.QDoubleSpinBox()
         self.sp_sgain.setRange(1.00, 3.00)
         self.sp_sgain.setSingleStep(0.05)

@@ -147,10 +147,12 @@ set)
                    if grep -qE "^  steer_map_act:" "$YAML"; then sed -i -E "s/^(  steer_map_act:[[:space:]]*)\[[^]]*\]/\1$act/" "$YAML"
                    else sed -i -E "0,/^hmpc:/s//hmpc:\n  steer_map_cmd: [0.0, 0.2, 0.3, 0.4]\n  steer_map_act: $act/" "$YAML"; fi ;;
         wall_margin|wall_margin_inner)
-                   [[ "$v" =~ ^0\.[0-9]+$ ]] || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
-                   awk -v x="$v" 'BEGIN{exit !(x >= 0.25 && x <= 0.60)}' || { echo "✗ $k (0.25~0.60): $v"; exit 1; }
+                   # wall_margin 0~0.60, wall_margin_inner 는 -1 (끔) 또는 0~0.60 (11-26 O자 트랙 0.10)
+                   [[ "$v" =~ ^-?[01](\.[0-9]+)?$ ]] || { echo "✗ $k: $v"; exit 1; }
+                   awk -v x="$v" -v k="$k" 'BEGIN{exit !((x >= 0 && x <= 0.60) || (k == "wall_margin_inner" && x == -1))}' \
+                       || { echo "✗ $k (0~0.60, 코너 안쪽은 -1 = 끔): $v"; exit 1; }
                    grep -qE "^  $k:" "$YAML" || { echo "✗ race.yaml 에 $k 줄이 없습니다"; exit 1; }
-                   sed -i -E "s/^(  $k:[[:space:]]*)[0-9.]+/\1$v/" "$YAML" ;;
+                   sed -i -E "s/^(  $k:[[:space:]]*)-?[0-9.]+/\1$v/" "$YAML" ;;
         steer_plan_frac)
                    [[ "$v" =~ ^(0\.[5-9][0-9]*|1(\.0+)?)$ ]] || { echo "✗ steer_plan_frac (0.5~1.0): $v"; exit 1; }
                    if grep -qE "^  steer_plan_frac:" "$YAML"; then sed -i -E "s/^(  steer_plan_frac:[[:space:]]*)[0-9.]+/\1$v/" "$YAML"
