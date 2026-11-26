@@ -96,6 +96,9 @@ class MocapCalibrate(Node):
         self.declare_parameter('mode', 'spin')      # spin | straight
         self.declare_parameter('duration', 20.0)
         self.declare_parameter('min_samples', 100)
+        # spin: 강체 x 축이 차 전방과 틀어져 있으면 차체 좌표 오프셋이 틀린다 (11-26 새 마커 +7.9°).
+        #   straight 로 잰 yaw_offset 을 먼저 mocap.yaml 에 넣으면 drive.sh 가 여기로 넘긴다
+        self.declare_parameter('yaw_offset', 0.0)
 
         self.topic = self.get_parameter('mocap_topic').value
         self.mode = self.get_parameter('mode').value
@@ -165,6 +168,10 @@ class MocapCalibrate(Node):
                   'mocap 이 끊기지 않았는지 확인하세요.\n')
             return
         _, xs, ys, yaws = a.T
+        if self.mode == 'spin':
+            yo = float(self.get_parameter('yaw_offset').value)
+            yaws = yaws + yo
+            print(f'  (spin: yaw_offset {yo:+.4f} rad 를 적용한 차체 좌표 — straight 로 먼저 잰 값이어야 맞다)')
 
         print('=' * 66)
         if self.mode == 'spin':

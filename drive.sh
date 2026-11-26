@@ -1497,8 +1497,9 @@ mocapcal)
         err "  docs/MOCAP_SETUP.md 참고"
         exit 1
     fi
+    YO=$(grep -E "^[[:space:]]*yaw_offset:" "$CFG" | head -1 | sed -e 's/#.*//' -e 's/^[^:]*:[[:space:]]*//' | tr -d '[:space:]')
     ros2 run mlcs_mpc mocap_calibrate --ros-args \
-        -p mocap_topic:="$MT" -p mode:="$CM"
+        -p mocap_topic:="$MT" -p mode:="$CM" -p yaw_offset:="${YO:-0.0}"
     ;;
 
 rviz)
