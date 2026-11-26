@@ -49,7 +49,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TransformStamped
+from geometry_msgs.msg import TwistStamped, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
@@ -64,6 +64,12 @@ def yaw_from_quat(q):
 
 def quat_from_yaw(yaw):
     return (0.0, 0.0, math.sin(yaw * 0.5), math.cos(yaw * 0.5))
+
+
+try:
+    from vesc_msgs.msg import VescStateStamped
+except ImportError:          # 메인 PC·맥 (vesc_msgs 없음) — 바퀴 속도는 못 받고 KF 로 간다
+    VescStateStamped = None
 
 
 class PoseKF:
@@ -136,6 +142,19 @@ class MocapBridge(Node):
         self.declare_parameter('offset_y', 0.0)
         self.declare_parameter('yaw_offset', 0.0)
 
+        # ── 속도 상태 (11-26, 서용화 연구원님 결정) ───────────────────────
+        # KF 로 위치를 거르고 미분한 속도는 위상 지연으로 80~90 ms 늦다 (11-10 로그, 메인 PC).
+        # sensor: vx = 바퀴 (VESC erpm ÷ gain × wheel_scale), r = 자이로 (wheel_odom /odometry/filtered,
+        #         바이어스 뺀 값), 뒤축 vy = vy_mode. 센서가 sensor_timeout 넘게 끊기면 그 성분만 KF.
+        # kf: 예전 그대로 (위치 KF 미분). 위치·yaw 는 두 경우 모두 mocap KF.
+        self.declare_parameter('vel_source', 'sensor')     # sensor | kf
+        self.declare_parameter('vy_mode', 'zero')          # zero (뒤축 옆미끄럼 0, 기구학) | rot (지연 yaw 회전) | kf
+        self.declare_parameter('sensor_timeout', 0.1)
+        self.declare_parameter('wheel_scale', 1.044)       # 바퀴 → 실제 속도 (mocap 대비, 메인 PC 11-25)
+        self.declare_parameter('erpm_gain', 4781.5)        # vesc.yaml speed_to_erpm_gain
+        self.declare_parameter('erpm_offset', 0.0)
+        self.declare_parameter('kf_lag', 0.10)             # vy_mode rot: KF 속도가 늦은 만큼 yaw 를 되돌림 s
+
         self.mocap_topic = self.get_parameter('mocap_topic').value
         self.map_frame = self.get_parameter('map_frame').value
         self.base_frame = self.get_parameter('base_frame').value
@@ -143,6 +162,19 @@ class MocapBridge(Node):
         self.off_x = float(self.get_parameter('offset_x').value)
         self.off_y = float(self.get_parameter('offset_y').value)
         self.yaw_off = float(self.get_parameter('yaw_offset').value)
+        gp = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.vel_source, self.vy_mode = str(gp('vel_source')), str(gp('vy_mode'))
+        if self.vel_source not in ('sensor', 'kf') or self.vy_mode not in ('zero', 'rot', 'kf'):
+            raise SystemExit(f'vel_source (sensor|kf) / vy_mode (zero|rot|kf) 값이 이상합니다: '
+                             f'{self.vel_source} / {self.vy_mode}')
+        self.sens_to = float(gp('sensor_timeout'))
+        self.w_scale, self.erpm_gain, self.erpm_off = float(gp('wheel_scale')), float(gp('erpm_gain')), \
+            float(gp('erpm_offset'))
+        self.kf_lag = float(gp('kf_lag'))
+        self.v_wheel, self.v_wheel_t = 0.0, -1e9
+        self.gyro_r, self.gyro_t = 0.0, -1e9
+        self.n_sens = {'vx': 0, 'r': 0}
+        self.n_fall = {'vx': 0, 'r': 0}
 
         q_pos = float(self.get_parameter('q_pos').value)
         q_vel = float(self.get_parameter('q_vel').value)
@@ -180,6 +212,13 @@ class MocapBridge(Node):
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/amcl_pose', 10)   # 기존 도구 호환
         self.valid_pub = self.create_publisher(Bool, '/mocap/valid', 10)
+        # 비교용: KF 가 낸 속도 (vx, vy, r) — data_logger 가 kf_vx·kf_vy·kf_r 열로 남긴다
+        self.kf_pub = self.create_publisher(TwistStamped, '/mocap/kf_twist', 10)
+        if self.vel_source == 'sensor':
+            if VescStateStamped is not None:
+                self.create_subscription(VescStateStamped, '/sensors/core', self._core_cb, 10)
+            self.create_subscription(Odometry, '/odometry/filtered', self._gyro_cb, 10)
+            self.create_timer(5.0, self._vel_report)
 
         self.tf_bc = TransformBroadcaster(self) if \
             self.get_parameter('publish_tf').value else None
@@ -188,7 +227,9 @@ class MocapBridge(Node):
         self.create_timer(0.05, self._watchdog)
 
         self.get_logger().info(
-            f'mocap_bridge: {self.mocap_topic} 구독, timeout={self.timeout}s')
+            f'mocap_bridge: {self.mocap_topic} 구독, timeout={self.timeout}s, 속도 {self.vel_source}'
+            + (f' (vx 바퀴 ×{self.w_scale}, r 자이로, 뒤축 vy {self.vy_mode}, 끊기면 {self.sens_to}s 뒤 KF)'
+               if self.vel_source == 'sensor' else ''))
 
     # ────────────────────────────────────────────────────────────────
     def _pose_cb(self, msg: PoseStamped):
@@ -255,11 +296,54 @@ class MocapBridge(Node):
         # 전역 속도 → 차체 전진속도. MPC 의 v 는 차체 x 방향 속도다.
         speed = vx_g * math.cos(fyaw) + vy_g * math.sin(fyaw)
         lateral = -vx_g * math.sin(fyaw) + vy_g * math.cos(fyaw)
+        kt = TwistStamped()
+        kt.header.stamp = msg.header.stamp
+        kt.header.frame_id = self.base_frame
+        kt.twist.linear.x, kt.twist.linear.y, kt.twist.angular.z = speed, lateral, yaw_rate
+        self.kf_pub.publish(kt)
+
+        if self.vel_source == 'sensor':
+            if now - self.v_wheel_t < self.sens_to:
+                speed = self.v_wheel
+                self.n_sens['vx'] += 1
+            else:
+                self.n_fall['vx'] += 1
+            if now - self.gyro_t < self.sens_to:
+                yaw_rate = self.gyro_r
+                self.n_sens['r'] += 1
+            else:
+                self.n_fall['r'] += 1
+        if self.vy_mode == 'zero':
+            lateral = 0.0       # 뒤축 옆 속도 0 (기구학). MPC 는 무게중심 vy = lr·r 로 쓴다 (make_state)
+        elif self.vy_mode == 'rot':
+            a = fyaw - yaw_rate * self.kf_lag     # KF 전역 속도가 늦은 만큼 yaw 도 되돌려 돌린다
+            lateral = -vx_g * math.sin(a) + vy_g * math.cos(a)
 
         self._publish(msg.header.stamp, fx, fy, fyaw,
                       speed, lateral, yaw_rate)
         self.valid_pub.publish(Bool(data=good))
         self.warned = False
+
+    def _core_cb(self, m):
+        self.v_wheel = (m.state.speed - self.erpm_off) / self.erpm_gain * self.w_scale
+        self.v_wheel_t = self.get_clock().now().nanoseconds * 1e-9
+
+    def _gyro_cb(self, m):
+        self.gyro_r = m.twist.twist.angular.z
+        self.gyro_t = self.get_clock().now().nanoseconds * 1e-9
+
+    def _vel_report(self):
+        tot = sum(self.n_sens.values()) + sum(self.n_fall.values())
+        if not tot:
+            return
+        if self.n_fall['vx'] or self.n_fall['r']:
+            self.get_logger().warn(f'속도: 바퀴 {self.n_sens["vx"]} / KF {self.n_fall["vx"]}, 자이로 {self.n_sens["r"]} / '
+                                   f'KF {self.n_fall["r"]} (센서 끊김 — VESC·wheel_odom 확인)')
+        elif not getattr(self, '_vel_said', False):
+            self.get_logger().info('속도: 바퀴 vx · 자이로 r 사용 중')
+            self._vel_said = True
+        self.n_sens = {'vx': 0, 'r': 0}
+        self.n_fall = {'vx': 0, 'r': 0}
 
     # ────────────────────────────────────────────────────────────────
     def _watchdog(self):

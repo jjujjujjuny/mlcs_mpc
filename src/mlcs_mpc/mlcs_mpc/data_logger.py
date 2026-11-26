@@ -92,6 +92,7 @@ COLUMNS = [
     'odom_x', 'odom_y', 'odom_yaw',   # odom 프레임 적분 위치 (시작점 0)
     'odom_vx',                        # 슬립을 묶은 추정 속도 (바퀴 ×1.042)
     'odom_clamped',                   # 가감속 묶음이 걸린 순간 1 (바퀴가 잠기거나 헛돎)
+    'kf_vx', 'kf_vy', 'kf_r',   # mocap_bridge KF 속도 (/mocap/kf_twist) — 속도 상태를 센서로 바꾼 뒤 비교용
 ]
 
 
@@ -177,6 +178,11 @@ class DataLogger(Node):
 
         self.create_subscription(Float32, '/mpc/solve_time', self._solve_cb, 10)
         self.create_subscription(Odometry, '/odometry/filtered', self._wodom_cb, 10)
+        self.kf = None
+        from geometry_msgs.msg import TwistStamped
+        self.create_subscription(TwistStamped, '/mocap/kf_twist',
+                                 lambda m: setattr(self, 'kf', (m.twist.linear.x, m.twist.linear.y,
+                                                                m.twist.angular.z, time.monotonic())), 10)
 
         # 서보 지령은 Float64 — f1tenth_stack 이 /commands/servo/position 으로 낸다
         try:
@@ -270,7 +276,9 @@ class DataLogger(Node):
             '' if self.cmd_t is None else f'{self.cmd_t:.4f}',
         ] + (['', '', '', '', ''] if self.wodom is None or time.monotonic() - self.wodom[5] > 0.2 else
              [f'{self.wodom[0]:.4f}', f'{self.wodom[1]:.4f}', f'{self.wodom[2]:.5f}',
-              f'{self.wodom[3]:.4f}', str(self.wodom[4])]))
+              f'{self.wodom[3]:.4f}', str(self.wodom[4])])
+            + (['', '', ''] if self.kf is None or time.monotonic() - self.kf[3] > 0.2 else
+               [f'{self.kf[0]:.4f}', f'{self.kf[1]:.4f}', f'{self.kf[2]:.4f}']))
         self.rows += 1
 
     def _status(self):

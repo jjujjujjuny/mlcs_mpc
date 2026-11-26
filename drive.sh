@@ -11,6 +11,7 @@
 #                                    (기록 포함, 태그 기본값 rally)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
+#     ./drive.sh servostep [/wheel/pose]  거치대 서보 계단 응답 (지연·최대 각속도, 앞바퀴 강체로 실제 각)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
 #     ./drive.sh stanley [경로.csv]  Stanley 자율주행 (배관 검증용, 게인 2개)
 #                                    인자 없으면 config/track.yaml 을 따른다
@@ -625,6 +626,12 @@ start_mocap_bridge () {
         log "mocap 브릿지가 이미 떠 있습니다 — 그대로 씁니다"
         return
     fi
+    # 속도 상태 (mocap.yaml vel_source: sensor) 의 자이로 r 은 wheel_odom 의 /odometry/filtered 에서 온다
+    if ! pgrep -f '/lib/mlcs_mpc/wheel_odom' >/dev/null 2>&1; then
+        log "wheel_odom (바퀴 속도·자이로 → /odometry/filtered)..."
+        ros2 run mlcs_mpc wheel_odom >"$(run_log wheel_odom)" 2>&1 &
+        PIDS="$PIDS $!"
+    fi
     log "mocap 브릿지..."
     ros2 run mlcs_mpc mocap_bridge --ros-args \
         --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml" \
@@ -1075,6 +1082,16 @@ servo)
     warn "거치대 위에서. 바퀴가 더 안 돌거나 서보가 '지잉' 거리면 거기가 한계 — 바로 되돌리세요."
     python3 "$SCRIPT_DIR/tools/servo_sweep.py" \
         "$WS/src/f1tenth_system/f1tenth_stack/config/vesc.yaml"
+    ;;
+
+servostep)
+    # 서보 계단 응답 (거치대) — tools/servo_step.py. 인자 = 앞바퀴 강체 토픽 (예: /wheel/pose, 없으면 명령만)
+    load_ros
+    arm_cleanup
+    start_bringup
+    [ -n "${1:-}" ] && start_natnet
+    log "${YLW}서보 계단 응답${RST} — 거치대 위에서. 속도 명령 없음, 조향만 0 → ±0.2 → ±0.4 rad"
+    python3 "$SCRIPT_DIR/tools/servo_step.py" "${1:-}"
     ;;
 
 stanley)

@@ -90,6 +90,14 @@
     #   그 뒤 Motive 에서 Pivot 을 뒤축 중심 위 마커로 다시 지정했다 (Set Pivot Point to
     #   Selected Marker). 그래서 0 으로 되돌렸다.
     #   ✅ 확인 주행(yawcal2): 앞뒤 +0.009 / -0.003 m (0.6 / 1.0 m/s). 0 이 맞다.
+    # ── 속도 상태 (11-26): sensor = vx 바퀴·r 자이로·뒤축 vy 0 (KF 지연 80~90 ms 없앰), kf = 예전 ──
+    vel_source: 'sensor'      # sensor | kf
+    vy_mode: 'zero'           # zero | rot (지연 yaw 회전) | kf
+    sensor_timeout: 0.1       # 바퀴·자이로가 이만큼 끊기면 그 성분만 KF
+    wheel_scale: 1.044        # 바퀴 → 실제 속도 (메인 PC 11-25, mocap 대비)
+    erpm_gain: 4781.5
+    erpm_offset: 0.0
+
     offset_x: 0.0
     # ✅ 0 으로 확정 (2026-09-30) — 실험으로 배제했다.
     #
