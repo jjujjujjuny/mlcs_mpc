@@ -11,6 +11,7 @@
 #                                    (기록 포함, 태그 기본값 rally)
 #     ./drive.sh bench               거치대 위 조향 확인 (속도 0 고정)
 #     ./drive.sh servo               거치대 위 조향 기계 한계 측정 (키보드)
+#     ./drive.sh speedstep           거치대 바퀴 속도 계단 응답 (0→1.5→3→1.5→0 m/s, τ·가감속 상한 맞춤)
 #     ./drive.sh servostep [/wheel/pose]  거치대 서보 계단 응답 (지연·최대 각속도, 앞바퀴 강체로 실제 각)
 #     ./drive.sh mpc <경로.csv>      MPC 자율주행 (조이스틱 병행 — LB 로 전환)
 #     ./drive.sh stanley [경로.csv]  Stanley 자율주행 (배관 검증용, 게인 2개)
@@ -1082,6 +1083,15 @@ servo)
     warn "거치대 위에서. 바퀴가 더 안 돌거나 서보가 '지잉' 거리면 거기가 한계 — 바로 되돌리세요."
     python3 "$SCRIPT_DIR/tools/servo_sweep.py" \
         "$WS/src/f1tenth_system/f1tenth_stack/config/vesc.yaml"
+    ;;
+
+speedstep)
+    # 바퀴 속도 계단 응답 (거치대) — tools/speed_step.py. /drive 로 (실제 주행 경로·제동 패치 그대로)
+    load_ros
+    arm_cleanup
+    start_bringup
+    warn "거치대 위에서만 — 바퀴가 최대 3 m/s 로 돕니다. 손·선이 닿지 않게"
+    python3 "$SCRIPT_DIR/tools/speed_step.py"
     ;;
 
 servostep)
