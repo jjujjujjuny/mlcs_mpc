@@ -1212,6 +1212,13 @@ hmpc)
         start_natnet
         start_bringup
         log "위치: mocap"
+        # mocap_bridge 는 hmpc.launch.py 가 띄운다 — 그 속도 상태 (vel_source: sensor) 의 자이로 r 은
+        #   wheel_odom (/odometry/filtered) 에서 오므로 여기서 띄운다 (11-26: 안 떠서 r 이 전부 KF 로 갔다)
+        if ! pgrep -f '/lib/mlcs_mpc/wheel_odom' >/dev/null 2>&1; then
+            log "wheel_odom (바퀴 속도·자이로 → /odometry/filtered)..."
+            ros2 run mlcs_mpc wheel_odom >"$(run_log wheel_odom)" 2>&1 &
+            PIDS="$PIDS $!"
+        fi
     fi
     start_bridge
     HM_BENCH=true
@@ -1234,6 +1241,7 @@ hmpc)
     if [ -n "${MLCS_HMPC_PARAMS:-}" ]; then
         HM_ARGS+=(extra_params:="$MLCS_HMPC_PARAMS")
     fi
+    [ -n "${MLCS_VEL_SOURCE:-}" ] && HM_ARGS+=(vel_source:="$MLCS_VEL_SOURCE")
     if [ "${MLCS_OBSTACLES:-0}" = "1" ] && [ "$STATE_SOURCE" = lidar ]; then
         log "장애물: ${GRN}라이다${RST} (lidar_obstacles, 맵 ${MLCS_HMPC_MAP})"
         HM_ARGS+=(obstacles:=true map_yaml:="$MAP_DIR/${MLCS_HMPC_MAP}.yaml")

@@ -38,8 +38,10 @@ def generate_launch_description():
                                                         'stop_on_jump': False,
                                                         'map_pin': pin}])
         else:
+            vs = LaunchConfiguration('vel_source').perform(context)     # race.yaml vel_source (비우면 mocap.yaml)
             bridge = Node(package='mlcs_mpc', executable='mocap_bridge', name='mocap_bridge',
-                          output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')])
+                          output='screen', parameters=[os.path.join(pkg, 'config', 'mocap.yaml')]
+                          + ([{'vel_source': vs}] if vs else []))
         nodes = [bridge]
         obs_on = LaunchConfiguration('obstacles').perform(context).lower() in ('1', 'true')
         # 맵 고정 (map_pin) 도 lidar_obstacles 의 스캔 맞춤 (/loc/correction) 을 쓴다 — 장애물을 꺼도 띄운다
@@ -70,6 +72,8 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacles', default_value='false',
                               description='source lidar 에서 true 면 lidar_obstacles 를 띄운다'),
         DeclareLaunchArgument('map_yaml', default_value='', description='lidar_obstacles 가 쓸 맵 yaml'),
+        DeclareLaunchArgument('vel_source', default_value='',
+                              description='source mocap: sensor | kf (비우면 mocap.yaml)'),
         DeclareLaunchArgument('map_pin', default_value='false',
                               description='source lidar 에서 true 면 위치를 저장한 맵에 고정 (lidar_bridge + lidar_obstacles)'),
         DeclareLaunchArgument('track_csv', default_value='',
