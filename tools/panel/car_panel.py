@@ -469,6 +469,9 @@ class Panel(QtWidgets.QWidget):
         self.cb_odom = nofocus(QtWidgets.QComboBox())
         self.cb_odom.addItems(['off', 'ekf', 'strict'])
         self.cb_odom.setToolTip('ekf = 바퀴 속도 + 자이로로 Cartographer 예측 (직선 미끄러짐 대책), strict = ekf + 오도메트리 강하게 믿고 먼 곳 맞춤 끔 (위치 튐 대책)')
+        self.cb_vel = nofocus(QtWidgets.QComboBox())
+        self.cb_vel.addItems(['sensor', 'kf'])
+        self.cb_vel.setToolTip('mocap 속도 상태: sensor = vx 바퀴·r 자이로 (KF 지연 없음, 11-26) / kf = 위치 KF 미분 (예전)')
         self.cb_pin = nofocus(QtWidgets.QComboBox())
         self.cb_pin.addItems(['true', 'false'])
         self.cb_pin.setToolTip('true = 매 스캔을 저장한 맵에 맞춰 위치 보정 (랩이 쌓여도 맵이 안 변함)')
@@ -505,6 +508,7 @@ class Panel(QtWidgets.QWidget):
         self.le_log.setPlaceholderText('비우면 기록 안 함')
         rows = [('맵', self.cb_map), ('트랙', self.cb_track), ('최고 속도 [m/s]', self.sp_vmax),
                 ('장애물', self.cb_obs), ('오도메트리', self.cb_odom), ('맵 고정', self.cb_pin),
+                ('mocap 속도', self.cb_vel),
                 ('마찰 계수', self.sp_fric), ('조향 여유', self.sp_steer),
                 ('직선 벽 여유 [m]', self.sp_wall), ('코너 안쪽 여유 [m]', self.sp_wall_in),
                 ('조향 맵 배율', self.sp_sgain),
@@ -862,6 +866,7 @@ class Panel(QtWidgets.QWidget):
             self.cb_obs.setCurrentText(s.get('obstacles', 'off'))
             self.cb_odom.setCurrentText(s.get('loc_odom', 'off'))
             self.cb_pin.setCurrentText(s.get('map_pin', 'true'))
+            self.cb_vel.setCurrentText(s.get('vel_source', 'sensor') or 'sensor')
             try:
                 self.sp_fric.setValue(float(s.get('friction', '0.41')))
             except ValueError:
@@ -903,6 +908,7 @@ class Panel(QtWidgets.QWidget):
         want = {'map': self.cb_map.currentText(), 'track': self.cb_track.currentText(),
                 'v_max': f'{self.sp_vmax.value():.1f}', 'obstacles': self.cb_obs.currentText(),
                 'loc_odom': self.cb_odom.currentText(), 'map_pin': self.cb_pin.currentText(),
+                'vel_source': self.cb_vel.currentText(),
                 'friction': f'{self.sp_fric.value():.2f}', 'steer_plan_frac': f'{self.sp_steer.value():.2f}',
                 'wall_margin': f'{self.sp_wall.value():.2f}', 'wall_margin_inner': f'{self.sp_wall_in.value():.2f}',
                 'steer_gain': f'{self.sp_sgain.value():.2f}',

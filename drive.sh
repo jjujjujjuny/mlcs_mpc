@@ -636,6 +636,7 @@ start_mocap_bridge () {
     log "mocap 브릿지..."
     ros2 run mlcs_mpc mocap_bridge --ros-args \
         --params-file "$SCRIPT_DIR/src/mlcs_mpc/config/mocap.yaml" \
+        ${MLCS_VEL_SOURCE:+-p vel_source:=$MLCS_VEL_SOURCE} \
         >/tmp/mlcs_mocap.log 2>&1 &
     PIDS="$PIDS $!"
     sleep 2

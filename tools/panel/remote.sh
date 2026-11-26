@@ -19,7 +19,7 @@
 #     lists               맵·트랙 목록 (필요할 때만)
 #     screen              tmux 'race' 화면 마지막 80줄 (그 탭을 볼 때만)
 #     logs                로그 파일들 tail -F (연결 하나로 계속)
-#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin friction steer_plan_frac wall_margin wall_margin_inner steer_gain delay_comp act_delay)
+#     set <키> <값>       race.yaml 값 바꾸기 (map track v_max obstacles log loc_odom map_pin vel_source friction steer_plan_frac wall_margin wall_margin_inner steer_gain delay_comp act_delay)
 #     start bench|race|mapping
 #     int                 tmux 'race' 에 Ctrl+C (drive.sh 가 정리하며 내린다)
 #     stop                drive.sh stop + tmux 세션 정리 (강제)
@@ -68,7 +68,7 @@ status)
     c=""; [ -r /tmp/mlcs_carto_mode ] && read -r c < /tmp/mlcs_carto_mode; echo "carto_mode=$c"
     read -r l _ < /proc/loadavg; echo "load=$l"
     awk '
-        /^(map|track|obstacles|log|drive|loc_odom|map_pin):/ {
+        /^(map|track|obstacles|log|drive|loc_odom|map_pin|source|vel_source):/ {
             k=$1; sub(":","",k); v=$0; sub(/^[^:]*:[ \t]*/,"",v); sub(/[ \t]*#.*/,"",v); gsub(/"/,"",v)
             if (!(k in seen)) { print k "=" v; seen[k]=1 } }
         /^  v_max:/ && !vm { v=$2; print "v_max=" v; vm=1 }
@@ -126,6 +126,9 @@ set)
         loc_odom)  [[ "$v" =~ ^(off|ekf|strict)$ ]] || { echo "✗ loc_odom: $v"; exit 1; }
                    if grep -q '^loc_odom:' "$YAML"; then sed -i -E "s/^(loc_odom:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
                    else printf '\nloc_odom: %s\n' "$v" >> "$YAML"; fi ;;
+        vel_source) [[ "$v" =~ ^(sensor|kf)$ ]] || { echo "✗ vel_source: $v"; exit 1; }
+                   if grep -q '^vel_source:' "$YAML"; then sed -i -E "s/^(vel_source:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
+                   else printf '\nvel_source: %s\n' "$v" >> "$YAML"; fi ;;
         map_pin)   [[ "$v" =~ ^(true|false)$ ]] || { echo "✗ map_pin: $v"; exit 1; }
                    if grep -q '^map_pin:' "$YAML"; then sed -i -E "s/^(map_pin:[[:space:]]*)[a-z]+/\1$v/" "$YAML"
                    else printf '\nmap_pin: %s\n' "$v" >> "$YAML"; fi ;;

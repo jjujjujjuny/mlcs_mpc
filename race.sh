@@ -116,6 +116,11 @@ print(f'export MLCS_HMPC_DRIVE={1 if drive else 0}')
 print(f'export MLCS_HMPC_SOURCE={source}')
 print(f'export MLCS_HMPC_MAP={shlex.quote(mp)}')
 print(f'export MLCS_OBSTACLES={0 if obs == "off" else 1}')
+# mocap 속도 상태 (11-26): sensor = vx 바퀴·r 자이로·vy 기구학 / kf = 위치 KF 미분 (예전). 비우면 mocap.yaml 값
+vs = str(c.get('vel_source') or '')
+if vs and vs not in ('sensor', 'kf'):
+    err(f'vel_source 는 sensor 또는 kf: {vs}')
+print(f'export MLCS_VEL_SOURCE={vs}')
 print(f'export MLCS_OBS_LEARN={1 if obs == "learn" else 0}')
 # 맵 고정: Cartographer 위치를 저장한 맵에 붙든다 (lidar_obstacles 스캔 맞춤 → lidar_bridge). 기본 켬
 pin = bool(c.get('map_pin', True))
