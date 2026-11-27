@@ -11,6 +11,7 @@ sim_fidelity — 시뮬레이터 (env/simulator.Simulator) 가 실차와 얼마�
   python3 tools/analysis/sim_fidelity.py <대회장 로그> --lidar --friction 0.52 0.7 --sweep servo
 
   --sweep servo   서보 τ 0.13 / 0.06 / 0.03 / +15 ms / +50 ms / gym 3.2 rad/s + 20 ms
+  --sweep rate    11-26 서보 계단의 '지연 + 각속도 상한' 격자 (지연 0~60 ms × 2.0~3.2 rad/s)
   --sweep none    config/lowlevel.yaml 그대로 하나
   --lidar         정답이 Cartographer 위치 (대회장): SG 창을 넓히고, 위치 미분 속도와 바퀴 속도가 1 m/s 넘게 어긋나는
                   창 (위치 튐) 은 뺀다. ★ 라이다 정답은 자체 잡음·지연이 커서 절대 오차보다 설정 간 비교로 볼 것
@@ -48,10 +49,21 @@ def wrap(a):
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
-def load(path, lidar=False):
-    """drive 로그 → 정답 vx·vy·r (SG 미분), 위치 튐 표시."""
+def load(path, lidar=False, front=None):
+    """drive 로그 → 정답 vx·vy·r (SG 미분), 위치 튐 표시.
+
+    front: 로그 x·y 가 앞바퀴 축 (2026-11-26 부터 mocap) 이면 뒤축으로 옮긴다. None 이면 파일 날짜로 (≥ 20261126)."""
     d = pd.read_csv(path)
     d = d[np.isfinite(d.stamp)].reset_index(drop=True)
+    if front is None:
+        import re
+        m = re.search(r'(\d{8})_\d{6}', os.path.basename(path))
+        front = bool(m) and int(m.group(1)) >= 20261126 and not lidar
+    if front:
+        mdl = VehicleModel.from_yaml(CFG)
+        wb = mdl.L
+        d['x'] = d.x - wb * np.cos(d.yaw)
+        d['y'] = d.y - wb * np.sin(d.yaw)
     t = d.stamp.values
     tg = np.arange(t[0], t[-1], 0.01)
     X, Y, P = np.interp(tg, t, d.x), np.interp(tg, t, d.y), np.interp(tg, t, np.unwrap(d.yaw))
@@ -150,6 +162,20 @@ def sweep(name, frictions):
     return S
 
 
+def sweep_rate(frictions):
+    """11-26 거치대 서보 계단 (data/timing/servo_step_20261126.json): 지연 40~60 ms + 각속도 상한 2.0~2.5 rad/s."""
+    S = {}
+    for f in frictions:
+        base = {'friction': f}
+        S[f'f{f} τ0.03'] = dict(base, ll=dict(steer_tau=0.03))
+        S[f'f{f} τ0.13'] = dict(base, ll=dict(steer_tau=0.13))
+        for dl in (0.0, 0.02, 0.04, 0.06):
+            for rt in (2.0, 2.2, 2.5, 3.2):
+                S[f'f{f} {dl*1e3:.0f}ms {rt}r/s'] = dict(base, ll=dict(steer_tau=0.005, steer_rate=rt, steer_delay=dl))
+        S[f'f{f} 60ms τ0.08'] = dict(base, ll=dict(steer_tau=0.08, steer_delay=0.06))
+    return S
+
+
 def _job(a):
     path, idx = a
     if path not in G['logs']:
@@ -166,12 +192,12 @@ def main():
     ap = argparse.ArgumentParser(description='시뮬레이터 ↔ 실차 개루프 재생 (1 s 위치 오차)')
     ap.add_argument('logs', nargs='+')
     ap.add_argument('--friction', nargs='+', type=float, default=[PRM['friction']])
-    ap.add_argument('--sweep', default='servo', choices=['servo', 'none'])
+    ap.add_argument('--sweep', default='servo', choices=['servo', 'rate', 'none'])
     ap.add_argument('--lidar', action='store_true', help='정답이 라이다 위치 (대회장)')
     ap.add_argument('--every', type=float, default=0.3, help='창 시작 간격 s')
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) - 2))
     a = ap.parse_args()
-    V = sweep(a.sweep, a.friction)
+    V = sweep_rate(a.friction) if a.sweep == 'rate' else sweep(a.sweep, a.friction)
     jobs = []
     for p in a.logs:
         idx = starts(load(p, a.lidar), a.every, a.lidar)
