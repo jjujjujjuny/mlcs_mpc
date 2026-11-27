@@ -1,5 +1,7 @@
-# 젯슨 main hmpc.yaml (11-27) 의 타이어·q_delta — v2 mpcc.yaml 과 다른 값만. main.py --config 로 덮어쓴다 (O자 비교, 2026-11-27)
-#   v2 mpcc.yaml: Dx ×0.45 만 (Bx 그대로 → 원점 기울기도 ×0.45). 젯슨: Dx ×0.45 + Bx ×1/0.45 (원점 기울기 유지)
+# 젯슨 실차 MPC (main hmpc.yaml·race.yaml·hypermpc/offline_ocp.make_cfg, 11-27) 와 v2 기본값이 다른 것. main.py --config 로 덮어쓴다
+#   q_n·q_mu: 젯슨은 논문 값 (MPCC 가 벽 안에서 라인을 고른다). v2 mpcc.yaml 은 11-09 부터 5.0·1.0 (센터라인 추종)
+#   friction: v2 race.yaml (대회장 0.52) 이 main.py 기본으로 섞이므로 연구실 0.41 로 되돌린다
+#   tire Bx: 젯슨은 Dx ×0.45 + Bx ×1/0.45 (원점 기울기 유지), v2 는 Dx ×0.45 만. q_delta 젯슨 3.0
 /**:
   ros__parameters:
     q_delta: 3.0
@@ -25,3 +27,6 @@
     - 1.0
     - 1.5952
     - 0.1508
+    q_n: 0.02
+    q_mu: 0.002
+    friction: 0.41

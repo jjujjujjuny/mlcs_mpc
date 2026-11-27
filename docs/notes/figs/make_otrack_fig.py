@@ -1,7 +1,7 @@
 # O자 트랙 실차 ↔ 시뮬 궤적 비교 (2026-11-27). 위치는 모두 앞바퀴 축 (실차 11-26 로그 기준점).
 #   실차: 11-26 연구실 mocap, sensor 속도 상태 (바퀴·자이로), 끊김 없는 깨끗한 랩만
 #   시뮬: for v in 1.0 1.5 2.0 2.5 3.0; do main.py --track o_track --laps 4 --set v_max=$v wall_margin=0.10 --car friction=0.41
-#           --config tools/analysis/jetson_hmpc_params.yaml --realtime --estimator gyro --vy zero --log SIM/sensor_$v.csv; done
+#           --config tools/analysis/jetson_hmpc_params.yaml --lowlevel speed_scale=1.01 --realtime --estimator gyro --vy zero --log SIM/sensor_$v.csv; done
 #   python3 docs/notes/figs/make_otrack_fig.py RUNS SIM docs/notes/figs/otrack_real_vs_sim.png docs/notes/figs/otrack_v2.0.gif
 import sys, numpy as np, pandas as pd, matplotlib
 matplotlib.use('Agg'); import matplotlib.pyplot as plt
@@ -113,7 +113,7 @@ for col, (key, lab, sc) in enumerate((('v', '속도 [m/s] (위치 미분)', 1), 
     ax2 = ax.twinx(); ax2.fill_between(sg, 0, TR.kappa_at(sg), color='tab:orange', alpha=0.12); ax2.set_ylabel('곡률 κ (주황)', color='tab:orange')
     ax.set_xlabel('트랙 위치 s [m]'); ax.set_ylabel(lab); ax.set_xlim(0, LEN); ax.legend(loc='lower left', fontsize=9)
     ax.set_title(['② v2.0 트랙 위치별 속도', '③ v2.0 트랙 위치별 횡오차'][col], fontsize=10.5)
-fig.suptitle('O자 트랙 (12.3 m, 폭 0.5 m) — 실차 11-26 (속도 상태 = 바퀴·자이로) vs 시뮬 (같은 MPC·트랙·여유 0.10, 서보 지연 20 ms + 2.5 rad/s, 바퀴 τ 0.4, 마찰 0.41, 실차 비동기 타이밍)', fontsize=11.5)
+fig.suptitle('O자 트랙 (12.3 m, 폭 0.5 m) — 실차 11-26 (속도 상태 = 바퀴·자이로) vs 시뮬 (젯슨 MPC 설정 그대로·여유 0.10, 서보 20 ms + 2.5 rad/s, 바퀴 τ 0.4·실제/명령 1.01, 마찰 0.41, 실차 비동기 타이밍)', fontsize=11.5)
 fig.tight_layout(rect=(0, 0, 1, 0.97)); fig.savefig(PNG, dpi=120)
 for r in rows: print(r)
 
