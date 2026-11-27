@@ -16,6 +16,10 @@ track_from_sketch.py — 연구실 지도 그림 위에 손으로 그린 레이�
   ④ draw_track.write_track 으로 저장 (make_o_track 과 같은 형식: centerline / 벽 / 저자 형식 / prep 검산 / track.json)
      + 그림과 결과를 겹친 비교 그림 sketch_fit.png
 
+  ★ 그 다음 prep 은 반드시  python3 tools/prep_track.py <이름> --reverse
+    (저자 TrackReader 가 기본으로 진행 방향을 뒤집는다 — 안 주면 반시계로 만든 트랙이 prep 에서 시계가 된다.
+     biglab 첫 prep (11-27) 이 그랬다)
+
   방향은 기본 시계 (o_track 과 같음), --ccw 면 반시계. 출발점은 --start 에 가장 가까운 점 (기본: 가장 긴 직선 가운데).
 """
 import argparse
@@ -326,6 +330,7 @@ def main():
                         wheelbase=a.wheelbase, max_steer=a.max_steer, kappa_lim=kappa_lim, max_bad_run=a.max_bad_run),
                    spacing=a.spacing, raw_spacing=a.raw_spacing)
     fig2.savefig(os.path.join(out_dir, 'sketch_fit.png'), dpi=DPI)
+    print(f'    ★ prep: python3 tools/prep_track.py {a.name} --reverse   (--reverse 없으면 방향이 뒤집힌다)')
     print(f'    비교 그림 {os.path.relpath(os.path.join(out_dir, "sketch_fit.png"), dt.REPO)}')
 
 
